@@ -12,6 +12,7 @@ setup(
         ('share/part5_bed_exit', ['USAGE.md', 'requirements.txt']),
     ],
     install_requires=['setuptools'],
+    extras_require={'test': ['pytest']},
     zip_safe=True,
     maintainer='Project contributors',
     maintainer_email='maintainer@example.com',
