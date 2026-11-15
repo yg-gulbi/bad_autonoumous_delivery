@@ -13,10 +13,11 @@ import pytest
 from part5_bed_exit.bed_exit_method import load_bed_exit_method
 from part5_bed_exit.bed_exit_state import BedExitState
 from part5_bed_exit.methods.bed_exit_core import (
-    Candidate, DetectionROI, EventGate, JudgmentUnavailable, PolygonROI, State,
+    Candidate, DetectionROI, JudgmentUnavailable, PolygonROI,
 )
 from part5_bed_exit.pretrained import read_config
-from part5_bed_exit.downloads import extract_zip
+from research.datasets.downloads import extract_zip
+from research.evaluation.monitoring import EventGate, State
 
 
 def test_offline_gate_matches_ros_state_for_all_windows_and_expiration():
@@ -116,7 +117,7 @@ def test_ros_boundary_skips_camera_exceptions_and_bad_returns_then_rewarms(monke
 
 
 def test_notebook_cells_compile_after_interactive_execution():
-    path = Path(__file__).parents[1] / 'notebooks' / 'part5_bed_exit.ipynb'
+    path = Path(__file__).parents[1] / 'research' / 'notebooks' / 'part5_bed_exit.ipynb'
     notebook = json.loads(path.read_text())
     assert notebook['nbformat'] == 4
     for index, cell in enumerate(notebook['cells']):
@@ -139,7 +140,7 @@ def test_dataset_zip_extraction_rejects_escape_paths_and_size_overrun(tmp_path):
 
 
 def test_benchmark_errors_are_empty_decisions_and_reset_the_five_frame_window(tmp_path, monkeypatch):
-    import part5_bed_exit.evaluation as evaluation
+    import research.evaluation.evaluation as evaluation
     class Method:
         def reset(self):
             self.last = SimpleNamespace(valid=False, score=None, reason='not_observed')

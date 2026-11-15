@@ -6,15 +6,28 @@ import io
 import json
 import os
 import re
+import shutil
 import time
 import zipfile
+from fnmatch import fnmatch
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote, urlparse
 
 import requests
 
 SLP_ARCHIVE="https://coe.northeastern.edu/Research/AClab/SLP/SLP2022.zip"
-FALLVISION_API="https://dataverse.harvard.edu/api/datasets/:persistentId/?persistentId=doi:10.7910/DVN/75QPKK"
+FALLVISION_API=(
+    "https://dataverse.harvard.edu/api/datasets/export"
+    "?exporter=dataverse_json&persistentId=doi:10.7910/DVN/75QPKK"
+)
+HF_REPO="xyz1901901/patientcare"
+HF_API="https://huggingface.co/api/datasets"
+ROBOFLOW_PREVIEW_URLS=(
+    "https://source.roboflow.com/8WwkR5B0rZUWRmkeXpaFrnEVKFg2/03Fbb7vK4CXsAkZqUllT/thumb.jpg",
+    "https://source.roboflow.com/8WwkR5B0rZUWRmkeXpaFrnEVKFg2/0480OxCgDrVJj48lcdUR/thumb.jpg",
+    "https://source.roboflow.com/8WwkR5B0rZUWRmkeXpaFrnEVKFg2/07YeQYxnul6POLYEorHI/thumb.jpg",
+    "https://source.roboflow.com/8WwkR5B0rZUWRmkeXpaFrnEVKFg2/0AL78HkdOetnQH9uKrSE/thumb.jpg",
+)
 MODEL_URLS={
     "yolo11n.pt":"https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt",
     "yolo11n-seg.pt":"https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n-seg.pt",
@@ -81,6 +94,56 @@ def download_file(url,destination,max_bytes=100*1024**2,checksum=None,checksum_t
         return dest
     finally:
         part.unlink(missing_ok=True)
+
+
+def download_file_resumable(url,destination,max_bytes,headers=None,checksum=None,checksum_type="sha256"):
+    """Download a large public file with HTTP Range resume and a receipt."""
+    if urlparse(url).scheme!="https":
+        raise ValueError("HTTPS required")
+    dest=Path(destination)
+    dest.parent.mkdir(parents=True,exist_ok=True)
+    receipt=dest.with_name(dest.name+".source.json")
+    if dest.is_file() and receipt.is_file():
+        old=json.loads(receipt.read_text(encoding="utf-8"))
+        provider_ok=not checksum or _digest(dest,checksum_type)==checksum.lower()
+        if dest.stat().st_size==old.get("bytes") and sha256(dest)==old.get("sha256") and provider_ok:
+            return dest
+
+    part=dest.with_name(dest.name+".part")
+    offset=part.stat().st_size if part.is_file() else 0
+    request_headers=dict(headers or {})
+    if offset:
+        request_headers["Range"]=f"bytes={offset}-"
+    with requests.get(url,stream=True,timeout=(20,120),headers=request_headers) as r:
+        r.raise_for_status()
+        if "text/html" in r.headers.get("Content-Type",""):
+            raise RuntimeError("Server returned HTML/login page, not data")
+        if offset and r.status_code!=206:
+            offset=0
+        length=int(r.headers.get("Content-Length",0))
+        expected=offset+length if length else None
+        if expected and expected>max_bytes:
+            raise ValueError(f"Download exceeds {max_bytes} byte limit")
+        mode="ab" if offset else "wb"
+        written=offset
+        with part.open(mode) as f:
+            for block in r.iter_content(1024*1024):
+                if not block:
+                    continue
+                written+=len(block)
+                if written>max_bytes:
+                    raise ValueError("Download exceeded size limit")
+                f.write(block)
+    if not written or (expected and written!=expected):
+        raise IOError("Incomplete/empty download")
+    if checksum and _digest(part,checksum_type)!=checksum.lower():
+        raise IOError("Provider checksum mismatch")
+    part.replace(dest)
+    save_json(receipt,{"url":url.split("?")[0],"downloaded_unix_s":time.time(),
+                       "bytes":written,"sha256":sha256(dest),
+                       "provider_checksum":checksum,
+                       "provider_checksum_type":checksum_type if checksum else None})
+    return dest
 
 
 def _digest(path,algorithm):
@@ -217,6 +280,12 @@ def download_slp_samples(output_dir,count_per_cover=2):
     return records
 
 
+def download_slp_archive(output_dir,max_bytes=18*1024**3):
+    """Download the official SLP2022 archive without extracting encrypted data."""
+    return download_file_resumable(
+        SLP_ARCHIVE,Path(output_dir)/"SLP2022.zip",max_bytes=max_bytes)
+
+
 def fallvision_inventory(output_dir):
     headers={}
     if os.getenv("DATAVERSE_TOKEN"):
@@ -225,7 +294,11 @@ def fallvision_inventory(output_dir):
     r.raise_for_status()
     if "json" not in r.headers.get("Content-Type",""):
         raise RuntimeError("Dataverse returned an anti-bot/login page; use Files tab manually")
-    version=r.json()["data"]["latestVersion"]
+    payload=r.json()
+    # The regular dataset endpoint is sometimes blocked by Harvard's anti-bot
+    # layer.  The official Dataverse JSON export exposes the same released file
+    # metadata without downloading the multi-gigabyte archives.
+    version=payload.get("datasetVersion") or payload["data"]["latestVersion"]
     files=[]
     for f in version["files"]:
         d=f["dataFile"]
@@ -239,7 +312,7 @@ def fallvision_inventory(output_dir):
 
 
 def download_fallvision_files(inventory,file_ids,output_dir,max_bytes=300*1024**2):
-    """Choose exact unrestricted original RGB MP4 IDs after reviewing inventory."""
+    """Download exact unrestricted FallVision archive IDs after inventory review."""
     selected=[f for f in inventory if f["id"] in file_ids]
     if len(selected)!=len(set(file_ids)) or not selected:
         raise ValueError("Select existing file IDs from the inventory")
@@ -253,9 +326,10 @@ def download_fallvision_files(inventory,file_ids,output_dir,max_bytes=300*1024**
         # Do not trust filenames supplied by a remote catalog as local paths.
         name=Path(f["name"]).name
         checksum=f.get("checksum") or {}
-        path=download_file(f"https://dataverse.harvard.edu/api/access/datafile/{f['id']}",
-                           Path(output_dir)/"raw"/f"{f['id']}_{name}",max_bytes,
-                           checksum.get("value"),checksum.get("type","sha256"),headers)
+        path=download_file_resumable(
+            f"https://dataverse.harvard.edu/api/access/datafile/{f['id']}",
+            Path(output_dir)/"raw"/f"{f['id']}_{name}",max_bytes,headers,
+            checksum.get("value"),checksum.get("type","sha256"))
         paths.append(path)
     return paths
 
@@ -268,6 +342,100 @@ def download_roboflow(output_dir):
         raise RuntimeError("Set ROBOFLOW_API_KEY outside the notebook, or use the official Download UI")
     return Roboflow(api_key=key).workspace("helppai").project("bed-exit").version(4).download(
         "yolov8",location=str(output_dir),overwrite=False)
+
+
+def download_roboflow_previews(output_dir):
+    """Download the four public thumbnails linked by the official project page."""
+    output_dir=Path(output_dir)
+    paths=[]
+    for index,url in enumerate(ROBOFLOW_PREVIEW_URLS,1):
+        paths.append(download_file(url,output_dir/f"official_preview_{index:02d}.jpg",
+                                   max_bytes=10*1024**2))
+    save_json(output_dir/"preview_manifest.json",{
+        "project":"https://universe.roboflow.com/helppai/bed-exit",
+        "files":[str(path.name) for path in paths],
+        "note":"Official project-page thumbnails only; annotations and all 848 images require export access.",
+    })
+    return paths
+
+
+def huggingface_inventory(output_dir,repo=HF_REPO,revision="main"):
+    """List every file in a public Hugging Face dataset repository."""
+    headers={"Accept":"application/json"}
+    if os.getenv("HF_TOKEN"):
+        headers["Authorization"]=f"Bearer {os.environ['HF_TOKEN']}"
+    url=f"{HF_API}/{repo}/tree/{quote(revision,safe='')}"
+    params={"recursive":"true","expand":"true","limit":1000}
+    files=[]
+    while url:
+        r=requests.get(url,params=params,headers=headers,timeout=(15,90))
+        r.raise_for_status()
+        if "json" not in r.headers.get("Content-Type",""):
+            raise RuntimeError("Hugging Face returned a login/HTML page")
+        for item in r.json():
+            if item.get("type")!="file":
+                continue
+            size=item.get("size")
+            if not size and item.get("lfs"):
+                size=item["lfs"].get("size")
+            files.append({"path":item["path"],"bytes":size,"oid":item.get("oid")})
+        link=r.headers.get("Link","")
+        match=re.search(r'<([^>]+)>;\s*rel="next"',link)
+        url=match.group(1) if match else None
+        params=None
+    save_json(Path(output_dir)/"inventory.json",{
+        "repository":repo,"revision":revision,"files":files,
+        "known_total_bytes":sum(f["bytes"] or 0 for f in files)})
+    return files
+
+
+def download_huggingface_dataset(output_dir,patterns=None,max_total_bytes=10*1024**3,
+                                 max_files=None,repo=HF_REPO,revision="main"):
+    """Download selected or all files from a Hugging Face dataset repository."""
+    output_dir=Path(output_dir)
+    files=huggingface_inventory(output_dir,repo,revision)
+    if patterns:
+        files=[f for f in files if any(fnmatch(f["path"],p) for p in patterns)]
+    if max_files is not None:
+        files=files[:max_files]
+    unknown=[f["path"] for f in files if f["bytes"] is None]
+    if unknown:
+        raise RuntimeError(f"Cannot preflight {len(unknown)} files with unknown sizes")
+    total=sum(f["bytes"] for f in files)
+    if total>max_total_bytes:
+        raise ValueError(f"Selected Hugging Face files require {total} bytes; limit is {max_total_bytes}")
+    free=shutil.disk_usage(output_dir.parent if output_dir.parent.exists() else Path.cwd()).free
+    if total>max(0,free-10*1024**3):
+        raise OSError(f"Need {total} bytes while preserving a 10 GiB free-space reserve")
+    headers={}
+    if os.getenv("HF_TOKEN"):
+        headers["Authorization"]=f"Bearer {os.environ['HF_TOKEN']}"
+    downloaded=[]
+    for item in files:
+        rel=PurePosixPath(item["path"])
+        if rel.is_absolute() or ".." in rel.parts:
+            raise ValueError("Unsafe repository path")
+        url=(f"https://huggingface.co/datasets/{repo}/resolve/"
+             f"{quote(revision,safe='')}/{quote(item['path'],safe='/')}?download=true")
+        destination=output_dir/"raw"/Path(*rel.parts)
+        downloaded.append(download_file_resumable(
+            url,destination,max_bytes=max(item["bytes"],1),headers=headers))
+    save_json(output_dir/"download_manifest.json",{
+        "repository":repo,"revision":revision,"files":[str(p.relative_to(output_dir)) for p in downloaded],
+        "bytes":total,"license_note":"Synthetic subset is CC BY 4.0; real clips retain source terms."})
+    return downloaded
+
+
+def ensure_free_space(path,required_bytes,reserve_bytes=10*1024**3):
+    """Fail before a bulk download if it would consume the safety reserve."""
+    path=Path(path)
+    path.mkdir(parents=True,exist_ok=True)
+    free=shutil.disk_usage(path).free
+    if required_bytes>max(0,free-reserve_bytes):
+        raise OSError(
+            f"Need {required_bytes} bytes, but only {free} bytes are free and "
+            f"{reserve_bytes} bytes must remain")
+    return free
 
 
 def extract_zip(archive, output_dir, max_bytes=1024**3):

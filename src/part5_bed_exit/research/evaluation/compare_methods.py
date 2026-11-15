@@ -9,14 +9,14 @@ import time
 
 import cv2
 
-# ROS 2 setup.bash나 PYTHONPATH 없이도 part5_bed_exit 모듈을 바로 import할 수 있게 경로 추가
-PACKAGE_ROOT = Path(__file__).resolve().parent
+# ROS 2 setup.bash나 PYTHONPATH 없이도 런타임/연구 모듈을 바로 import할 수 있게 경로 추가
+PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 if str(PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_ROOT))
 
 from part5_bed_exit.bed_exit_method import validate_bed_exit_method
 from part5_bed_exit.bed_exit_state import BedExitState
-from part5_bed_exit.method_template import BedExitMethodTemplate
+from research.templates.method_template import BedExitMethodTemplate
 
 # ==============================================================================
 # [사용자 설정 영역] 나와 팀원의 메서드 클래스/객체를 여기에 등록하고 선택한다.

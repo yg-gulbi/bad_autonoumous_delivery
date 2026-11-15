@@ -4,13 +4,12 @@ from glob import glob
 setup(
     name='part5_bed_exit',
     version='0.1.0',
-    packages=find_packages(exclude=['test']),
+    packages=find_packages(exclude=['test', 'test.*', 'research', 'research.*']),
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/part5_bed_exit']),
         ('share/part5_bed_exit', ['package.xml']),
         ('share/part5_bed_exit/examples', glob('examples/*.template.json')),
-        ('share/part5_bed_exit/notebooks', glob('notebooks/*.ipynb')),
-        ('share/part5_bed_exit', ['USAGE.md', 'requirements.txt', 'dataset_catalog.json']),
+        ('share/part5_bed_exit', ['USAGE.md', 'requirements.txt']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

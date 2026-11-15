@@ -13,9 +13,10 @@ from pathlib import Path
 import numpy as np
 
 from part5_bed_exit.methods.bed_exit_core import (
-    EventGate, JudgmentUnavailable, PolygonROI, make_method,
+    JudgmentUnavailable, PolygonROI, make_method,
 )
-from part5_bed_exit.downloads import save_json, sha256
+from research.datasets.downloads import save_json, sha256
+from research.evaluation.monitoring import EventGate
 
 
 def video_frames(path):
