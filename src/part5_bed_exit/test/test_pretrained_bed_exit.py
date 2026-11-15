@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from part5_bed_exit.methods.bed_exit_core import (BedExitMethod,Candidate,COCO_COMMON,
+                          COMMON_LANDMARKS,MP_COMMON,
                           DetectionROI,PatientSelector,PolygonROI,
                           SegmentationROI,YoloPoseROI,pose_decision,JudgmentUnavailable)
 from research.evaluation.monitoring import (
@@ -111,6 +112,17 @@ def test_any_body_policy_catches_arm_and_does_not_hide_missing_limbs(roi):
     points[9,2]=.1
     assert pose_decision(points,*args)[0] is None
     assert pose_decision(points,*args,policy="torso")[0] is False
+
+
+def test_common_pose_landmark_indices_stay_name_aligned():
+    assert len(COMMON_LANDMARKS)==len(COCO_COMMON)==len(MP_COMMON)==13
+    assert [name for name,_,_ in COMMON_LANDMARKS]==[
+        "nose","left_shoulder","right_shoulder","left_elbow","right_elbow",
+        "left_wrist","right_wrist","left_hip","right_hip","left_knee",
+        "right_knee","left_ankle","right_ankle",
+    ]
+    assert tuple(coco for _,coco,_ in COMMON_LANDMARKS)==COCO_COMMON
+    assert tuple(mp for _,_,mp in COMMON_LANDMARKS)==MP_COMMON
 
 
 class PixelMethod(BedExitMethod):
