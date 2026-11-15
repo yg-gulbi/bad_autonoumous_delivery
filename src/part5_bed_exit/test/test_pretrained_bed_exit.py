@@ -7,11 +7,12 @@ import cv2
 import numpy as np
 import pytest
 
-from part5_bed_exit.methods.bed_exit_core import (BedExitMethod,BedExitMonitor,Candidate,COCO_COMMON,
-                          DetectionROI,EventGate,PatientSelector,PolygonROI,
-                          SegmentationROI,State,YoloPoseROI,pose_decision,JudgmentUnavailable)
-from part5_bed_exit.downloads import download_file,save_json,sha256
-from part5_bed_exit.evaluation import (benchmark_clip,event_metrics,run_benchmark,target_checks,
+from part5_bed_exit.methods.bed_exit_core import (BedExitMethod,Candidate,COCO_COMMON,
+                          DetectionROI,PatientSelector,PolygonROI,
+                          SegmentationROI,YoloPoseROI,pose_decision,JudgmentUnavailable)
+from research.evaluation.monitoring import BedExitMonitor, EventGate, State
+from research.datasets.downloads import download_file,save_json,sha256
+from research.evaluation.evaluation import (benchmark_clip,event_metrics,run_benchmark,target_checks,
                         tracking_durations,validate_manifest,video_frames)
 
 
@@ -217,7 +218,7 @@ def test_html_download_is_rejected_and_partial_file_removed(tmp_path,monkeypatch
         def __enter__(self): return self
         def __exit__(self,*args): pass
         def raise_for_status(self): pass
-    import part5_bed_exit.downloads as downloads
+    import research.datasets.downloads as downloads
     monkeypatch.setattr(downloads.requests,"get",lambda *args,**kwargs:Response())
     with pytest.raises(RuntimeError,match="HTML"):
         download_file("https://example.com/data.zip",tmp_path/"data.zip")

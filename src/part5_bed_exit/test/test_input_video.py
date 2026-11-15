@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 import pytest
 
-from part5_bed_exit import input_video as media
+from research.evaluation import input_video as media
 
 
 def test_auto_connects_downloaded_original_and_ignores_processed_media(tmp_path, monkeypatch):

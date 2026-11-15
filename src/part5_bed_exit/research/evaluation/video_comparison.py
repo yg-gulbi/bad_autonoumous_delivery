@@ -12,10 +12,11 @@ import av
 import cv2
 import numpy as np
 
-from part5_bed_exit.downloads import save_json, sha256
-from part5_bed_exit.evaluation import video_frames
-from part5_bed_exit.methods.bed_exit_core import EventGate, MODEL_FILES
+from research.datasets.downloads import save_json, sha256
+from research.evaluation.evaluation import video_frames
+from part5_bed_exit.methods.bed_exit_core import MODEL_FILES
 from part5_bed_exit.pretrained import create_method, read_config
+from research.evaluation.monitoring import EventGate
 
 
 def inspect_mp4(path):
