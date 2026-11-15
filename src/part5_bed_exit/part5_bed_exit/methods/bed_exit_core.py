@@ -249,10 +249,19 @@ class SegmentationROI(YoloMethod):
         return score>self.outside_fraction,score,"mask_outside_fraction"
 
 
-# Shared anatomical landmarks: nose, shoulders, elbows, wrists, hips, knees,
-# ankles. MediaPipe-only fingers/toes/ears are excluded for a fair comparison.
-COCO_COMMON=(0,5,6,7,8,9,10,11,12,13,14,15,16)
-MP_COMMON=(0,11,12,13,14,15,16,23,24,25,26,27,28)
+# Shared anatomical landmarks: MediaPipe-only fingers, feet and extra face
+# points are excluded so both pose methods apply the same 13-point policy.
+COMMON_LANDMARKS = (
+    ("nose", 0, 0),
+    ("left_shoulder", 5, 11), ("right_shoulder", 6, 12),
+    ("left_elbow", 7, 13), ("right_elbow", 8, 14),
+    ("left_wrist", 9, 15), ("right_wrist", 10, 16),
+    ("left_hip", 11, 23), ("right_hip", 12, 24),
+    ("left_knee", 13, 25), ("right_knee", 14, 26),
+    ("left_ankle", 15, 27), ("right_ankle", 16, 28),
+)
+COCO_COMMON=tuple(coco for _,coco,_ in COMMON_LANDMARKS)
+MP_COMMON=tuple(mediapipe for _,_,mediapipe in COMMON_LANDMARKS)
 
 
 def pose_decision(points, roi, shape, common, torso, point_conf=0.5,
