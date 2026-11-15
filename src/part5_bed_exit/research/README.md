@@ -12,6 +12,13 @@
 
 이 노트북의 ROI·환자 선택 박스는 해당 샘플의 연결 확인용 예시다. 한 이미지의 다수결 전 bool만 비교하며 영상 시간 지표나 5프레임 성공으로 보고하지 않는다. 현재 커널에 MediaPipe가 없으면 노트북 첫 안내의 설치 명령을 실행하고 커널을 재시작한다.
 
+Roboflow v4 export가 로컬에 있으면 고정 20장에 YOLO Pose와 MediaPipe Pose를 실제 실행해 프레임 원판정, 시간, 실패 이유를 CSV로 남길 수 있다. `hospital_bed` 박스는 이 정적 POC의 이미지별 ROI일 뿐 배포 카메라의 검수 완료 ROI가 아니다.
+
+```bash
+PYTHONPATH=src/part5_bed_exit .venv/bin/python -m research.poc.run_static_pose_poc \
+  --output-dir src/part5_bed_exit/results/pose_mediapipe_roboflow20_v1
+```
+
 [notebooks/part5_bed_exit.ipynb](notebooks/part5_bed_exit.ipynb)를 실행하면 모델 다운로드부터 데이터셋 접근·다운로드, ROI 확인, 영상/웹캠 실행, 이벤트 정량평가까지 진행할 수 있다. 학습은 하지 않는다.
 
 ```bash
