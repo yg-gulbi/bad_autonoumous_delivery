@@ -1,0 +1,72 @@
+{
+  "checked_on": "2026-11-15",
+  "datasets": [
+    {
+      "name": "Roboflow Bed Exit v4",
+      "url": "https://universe.roboflow.com/helppai/bed-exit/dataset/4",
+      "modality": "RGB static images",
+      "labels": "bed_exit, hospital_bed, in_bed bounding boxes; 848 images",
+      "use": "Static ROI debugging; original class boxes are not generic COCO person labels",
+      "access": "Download UI confirmed; programmatic export requires ROBOFLOW_API_KEY; direct page returned anti-bot 403 in this environment",
+      "download_function": "download_roboflow",
+      "license": "CC BY 4.0 shown on dataset card",
+      "event_gt": false
+    },
+    {
+      "name": "FallVision",
+      "url": "https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/75QPKK",
+      "modality": "Original RGB MP4, processed MP4, pose CSV",
+      "labels": "Clip-level fall/no-fall, bed/chair/standing; pose CSV",
+      "use": "Select original bed RGB MP4; annotate Bed/Safe ROI and event times",
+      "access": "Public search API confirmed V2 and 60 archive files; dataset/file metadata endpoint returned 403 here; Files UI/manual download may be needed",
+      "download_function": "fallvision_inventory + download_fallvision_files",
+      "license": "Inspect dataset/file terms; article states academic/research/instructional use",
+      "event_gt": false
+    },
+    {
+      "name": "SLP2022",
+      "url": "https://github.com/ostadabbas/SLP-Dataset-and-Code",
+      "modality": "Static RGB, LWIR, depth, pressure; uncover/cover1/cover2",
+      "labels": "14-joint LSP pose labels; no bed-exit events",
+      "use": "Occlusion/lying-pose robustness and invalid-observation analysis",
+      "access": "Official ZIP Range access verified: 17,534,988,296 bytes, 134,062 members. RGB members are encrypted: obtain ACLab access and set SLP_ZIP_PASSWORD. danaLab.zip was inspected and contains model artifacts, not sample RGB data",
+      "download_function": "download_slp_samples (bounded Range extraction after approved password)",
+      "license": "Non-commercial research/teaching; dataset terms differ from code license",
+      "event_gt": false
+    },
+    {
+      "name": "BlanketSet",
+      "url": "https://rdm.inesctec.pt/dataset/nis-2022-004",
+      "modality": "RGB/IR/depth in-bed action videos",
+      "labels": "8 movement sequences and blanket/lighting conditions",
+      "use": "Normal blanket movement/occlusion false alarms after access is granted",
+      "access": "Official CKAN package_show API returned 200; notes explicitly say video access is currently restricted due to legal considerations",
+      "download_function": "Provider-approved files only; no unrestricted video URL assumed",
+      "license": "Catalog metadata says CC BY-SA; this does not override restricted video access",
+      "event_gt": false
+    },
+    {
+      "name": "In-Bed Patient Segmentation",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/40544806/",
+      "modality": "1,487 RGB frames",
+      "labels": "Person/bed instance masks",
+      "use": "Segmentation geometry evaluation after obtaining original files",
+      "access": "Author request according to source Notion; no public raw ZIP verified",
+      "download_function": "Provider-approved files only",
+      "license": "Confirm with data provider",
+      "event_gt": false
+    },
+    {
+      "name": "TIP / PIMesh",
+      "url": "https://github.com/USTCWzy/PIMesh",
+      "modality": "RGB/depth/pressure sequences",
+      "labels": "COCO17 joints, SMPL, posture; no exit-event times",
+      "use": "Pose robustness; RGB input only for this comparison",
+      "access": "Official code README provides data request route; no unrestricted data download assumed",
+      "download_function": "Provider-approved files only",
+      "license": "Confirm dataset permission separately from code",
+      "event_gt": false
+    }
+  ],
+  "provenance": "Reused from rokey_ws/vision/bed_exit/dataset_catalog.json. Prior access observations are retained, not evidence of a new download in this repository."
+}
