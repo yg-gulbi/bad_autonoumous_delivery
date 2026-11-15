@@ -29,15 +29,8 @@ def validate_bed_exit_method(detector):
     return detector
 
 
-def load_bed_exit_method(method_path: str, config_path: str = ''):
+def load_bed_exit_method(method_path: str):
     """Load a detector object from 'module:ClassName' or 'module:object_name'."""
-    if method_path in ('detection', 'segmentation', 'yolo_pose', 'mediapipe_pose'):
-        from part5_bed_exit.pretrained import create_method
-        if not config_path:
-            raise ValueError('Built-in methods require method_config pointing to reviewed ROI JSON')
-        return create_method(method_path, config_path)
-    if config_path:
-        raise ValueError('method_config applies only to the four built-in method names')
     # '패키지.모듈:이름' 형식을 분리해 대상 심볼을 동적으로 가져온다.
     module_name, separator, symbol_name = method_path.partition(':')
     if not separator or not module_name or not symbol_name:
