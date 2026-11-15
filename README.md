@@ -29,11 +29,11 @@ source install/setup.bash
 
 ### 2) 핵심 실행 (Run `part5_bed_exit`)
 
-`your_package.your_method:judge`는 BGR 이미지를 입력받아 Python `bool`(`True`=이탈 감지, `False`=정상)을 반환하는 추론 함수로 교체합니다.
+`your_package.your_method:YourBedExitMethod`는 `BedExitMethod` 규약(`judge(self, frame) -> bool`)을 구현한 클래스(`module:ClassName`, 노드에서 객체 생성) 또는 생성 완료된 객체(`module:object_name`) 경로로 교체합니다. 팀원 구현용 단일 양식은 [method_template.py](src/part5_bed_exit/part5_bed_exit/method_template.py)에 있습니다.
 
 ```bash
 ros2 run part5_bed_exit bed_exit --ros-args \
-  -p method:=your_package.your_method:judge \
+  -p method:=your_package.your_method:YourBedExitMethod \
   -p output_topic:=/patient/bed_exit \
   -p camera_index:=0 \
   -p capture_fps:=30.0
@@ -57,7 +57,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    CAM["웹캠 BGR 프레임"] --> JUDGE["외부 판단 함수 judge(frame)"]
+    CAM["웹캠 BGR 프레임"] --> JUDGE["선택한 메서드 객체의 judge(frame)"]
     JUDGE --> VOTE["최근 5프레임 다수결 (3회 이상 True)"]
     VOTE --> PUB["/patient/bed_exit (std_msgs/msg/Bool) 발행"]
 ```
@@ -81,11 +81,14 @@ bad_ws/
     └── part5_bed_exit/             # PART 05: 침대 이탈 감지 (구현·확정)
         ├── part5_bed_exit/
         │   ├── __init__.py
+        │   ├── bed_exit_method.py  # BedExitMethod 인터페이스 및 객체 로더
         │   ├── bed_exit_node.py
-        │   └── bed_exit_state.py
+        │   ├── bed_exit_state.py
+        │   └── method_template.py  # 팀원 구현용 단일 클래스 양식
         ├── resource/
         ├── test/
         ├── USAGE.md
+        ├── compare_methods.py      # ROS 2 없이 메서드 객체 비교·평가 스크립트
         ├── package.xml
         ├── setup.py
         └── setup.cfg
@@ -99,10 +102,11 @@ bad_ws/
 | `part2_qr_verifier` | 손목·물품·인계 QR 검증 노드 골격 | `[미확정]` ROS 2 패키지 뼈대 (`colcon build` 가능) |
 | `part3_fleet_manager` | 배차·도로점유 송신·예외 제어 골격 | `[미확정]` ROS 2 패키지 뼈대 (`colcon build` 가능) |
 | `part4_amr_nav` | Nav2 주행·공용도로 대기/통과 판정 골격 | `[미확정]` ROS 2 패키지 뼈대 (`colcon build` 가능) |
-| `part5_bed_exit` 메서드 교체 | 프레임별 `bool` 판단 (`True`=이탈) | `-p method:=module:function` 지정 필수 |
+| `part5_bed_exit` 메서드 교체 | 클래스/객체의 `judge(frame) -> bool` 호출 | `-p method:=module:ClassOrObject` (또는 `BedExitNode(detector=...)`) |
 | `part5_bed_exit` 상태 집계 | 최근 5프레임 중 3회 이상 시 `True` | 초기 4프레임 `False`, 비-`bool` 반환 시 `TypeError` |
 | `part5_bed_exit` ROS 발행 | 정상 프레임마다 `std_msgs/msg/Bool` 발행 | 기본 토픽 `/patient/bed_exit` `[확정]` |
 | `part5_bed_exit` 오류 Fail-Safe | 이력(`history`) 초기화 및 해당 프레임 미발행 | 카메라 단선·판단 예외 시 거짓 정상 발행 차단 |
+| `part5_bed_exit` 메서드 비교기 | ROS 2 없이 웹캠/영상으로 클래스별 판정·FPS 비교 | `python3 src/part5_bed_exit/compare_methods.py` |
 
 ## Verification & Evidence
 
@@ -110,7 +114,7 @@ bad_ws/
 | --- | --- | --- |
 | 전체 워크스페이스 빌드 | `colcon build --symlink-install` (ROS 2 Jazzy) | 5개 패키지(`part1_*`~`part5_*`) 빌드 통과 |
 | 패키지 등록 확인 | `source install/setup.bash && ros2 pkg list` | 5개 패키지 모두 `ament_python` 인식 확인 |
-| Part 5 상태 로직 테스트 | `pytest src/part5_bed_exit/test -v` | 6개 테스트(5프레임 32가지 조합 포함) 통과 |
+| Part 5 단위 테스트 | `pytest src/part5_bed_exit/test -v` | 17개 테스트(상태·로더·비교 스크립트 포함) 통과 |
 | 실웹캠·외부 추론·Part 1~4 | 실제 하드웨어/YOLO/구독 노드 연동 | 미검증 (팀원 구현 및 실기 연동 대기) |
 
 ## Reference
@@ -119,7 +123,7 @@ bad_ws/
 
 | 파라미터명 | 기본값 | 설명 |
 | --- | --- | --- |
-| `method` | `""` (필수 입력) | 판단 함수 경로 (`package.module:function`, 반환형 Python `bool`) |
+| `method` | `""` (`detector` 미주입 시 필수) | 판단 클래스/객체 경로 (`module:ClassName` 또는 `module:object_name`, `judge(frame) -> bool`) |
 | `output_topic` | `/patient/bed_exit` | 침대 이탈 상태 발행 토픽 (`std_msgs/msg/Bool`) |
 | `camera_index` | `0` | OpenCV `VideoCapture` 카메라 인덱스 |
 | `capture_fps` | `30.0` | 타이머 기반 프레임 수집 시도 주기 (`> 0`) |
