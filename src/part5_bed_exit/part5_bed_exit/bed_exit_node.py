@@ -1,5 +1,7 @@
 """Webcam capture, replaceable detector object, and per-frame ROS output."""
 
+import math
+
 import cv2
 import rclpy
 from rclpy.node import Node
@@ -23,6 +25,7 @@ class BedExitNode(Node):
 
         # ROS 2 실행 파라미터 선언 (output_topic은 ICD 확정안 /patient/bed_exit 사용)
         self.declare_parameter('method', '')
+        self.declare_parameter('method_config', '')
         self.declare_parameter('output_topic', '/patient/bed_exit')
         self.declare_parameter('camera_index', 0)
         self.declare_parameter('capture_fps', 30.0)
@@ -31,14 +34,14 @@ class BedExitNode(Node):
         fps = self.get_parameter('capture_fps').value
 
         # 직접 detector 객체를 전달받지 않은 경우에만 method 파라미터 경로를 필수로 요구한다.
-        if not topic or fps <= 0 or (detector is None and not method_path):
+        if not topic or not math.isfinite(fps) or fps <= 0 or (detector is None and not method_path):
             raise ValueError(
                 'Set method=module:ClassOrObject, output_topic, and capture_fps > 0'
             )
 
         # 클래스/객체 경로 로딩 또는 코드 직접 주입 객체를 검증해 self.detector로 고정한다.
         self.detector = (
-            load_bed_exit_method(method_path)
+            load_bed_exit_method(method_path, self.get_parameter('method_config').value)
             if detector is None
             else validate_bed_exit_method(detector)
         )
@@ -58,9 +61,12 @@ class BedExitNode(Node):
 
     def process_frame(self):
         # 프레임 수신 실패 시 거짓 정상(False) 발행을 막기 위해 이력을 초기화하고 발행을 건너뛴다.
-        ok, frame = self.capture.read()
-        if not ok:
-            self.get_logger().error('Webcam read failed; no frame decision published')
+        try:
+            ok, frame = self.capture.read()
+            if not ok or frame is None:
+                raise RuntimeError('Webcam read failed')
+        except Exception as exc:
+            self.get_logger().error(f'Webcam read failed; no frame decision published: {exc}')
             self.state = BedExitState()
             return
         try:
