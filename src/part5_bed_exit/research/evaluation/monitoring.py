@@ -56,6 +56,28 @@ class EventGate:
         return GateResult(self.state, event, True)
 
 
+class ConsecutiveExitAnalysis:
+    """Analysis-only 3-consecutive raw-True indicator; never used by ROS."""
+
+    def __init__(self, required=3):
+        if required != 3:
+            raise ValueError("The comparison plan fixes three consecutive frames")
+        self.required = required
+        self.reset()
+
+    def reset(self):
+        self.count = 0
+
+    def update(self, exit_detected, valid=True):
+        if not valid:
+            self.reset()
+            return None
+        if type(exit_detected) is not bool:
+            raise TypeError("exit_detected must be a Python bool")
+        self.count = self.count + 1 if exit_detected else 0
+        return self.count >= self.required
+
+
 class BedExitMonitor:
     """Compose one raw method with the offline gate for previews and tests."""
 
@@ -96,9 +118,9 @@ class BedExitMonitor:
 
 def draw_overlay(frame, method, gate_result):
     out = frame.copy()
-    for roi, color in ((method.bed_roi, (255, 180, 0)), (method.safe_roi, (0, 220, 0))):
-        cv2.polylines(
-            out, [np.rint(roi.pixels(frame.shape)).astype(np.int32)], True, color, 2)
+    cv2.polylines(
+        out, [np.rint(method.roi.pixels(frame.shape)).astype(np.int32)],
+        True, (0, 220, 0), 2)
     if method.last.bbox is not None:
         x1, y1, x2, y2 = map(int, method.last.bbox)
         cv2.rectangle(out, (x1, y1), (x2, y2), (255, 200, 50), 2)

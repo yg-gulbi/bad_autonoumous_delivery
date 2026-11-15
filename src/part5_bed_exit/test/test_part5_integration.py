@@ -42,7 +42,7 @@ def test_invalid_observation_resets_vote_but_cannot_rearm_an_event():
 
 def test_no_person_is_unavailable_instead_of_safe():
     roi = PolygonROI([[0, 0], [1, 0], [1, 1], [0, 1]])
-    method = DetectionROI(roi, roi, 'unused', model=object())
+    method = DetectionROI(roi, 'unused', model=object())
     method.candidates = lambda frame: []
     with pytest.raises(JudgmentUnavailable, match='no_person'):
         method.judge(np.zeros((32, 32, 3), np.uint8))
@@ -51,17 +51,16 @@ def test_no_person_is_unavailable_instead_of_safe():
 
 def test_factory_uses_config_relative_model_paths_and_existing_loader(tmp_path, monkeypatch):
     config = {'roi_reviewed': True, 'roi_version': 'test', 'model_dir': '../models',
-              'bed_roi': [[0, 0], [1, 0], [1, 1], [0, 1]],
-              'safe_roi': [[.1, .1], [.9, .1], [.9, .9], [.1, .9]]}
+              'roi': [[.1, .1], [.9, .1], [.9, .9], [.1, .9]]}
     path = tmp_path / 'config' / 'methods.json'
     path.parent.mkdir()
     path.write_text(json.dumps(config))
-    assert read_config(path)[3] == tmp_path / 'models'
+    assert read_config(path)[2] == tmp_path / 'models'
     import part5_bed_exit.pretrained as pretrained
     calls = []
-    def factory(name, bed, safe, models, **kwargs):
+    def factory(name, roi, models, **kwargs):
         calls.append((name, models))
-        return DetectionROI(bed, safe, 'unused', model=object())
+        return DetectionROI(roi, 'unused', model=object())
     monkeypatch.setattr(pretrained, 'make_method', factory)
     for name in ('detection', 'segmentation', 'yolo_pose', 'mediapipe_pose'):
         assert callable(load_bed_exit_method(name, str(path)).judge)
@@ -72,6 +71,10 @@ def test_factory_uses_config_relative_model_paths_and_existing_loader(tmp_path, 
         read_config(path)
     with pytest.raises(ValueError, match='method_config'):
         load_bed_exit_method('detection')
+    config.update({'roi_reviewed': True, 'bed_roi': config.pop('roi')})
+    path.write_text(json.dumps(config))
+    with pytest.raises(ValueError, match='one roi'):
+        read_config(path)
 
 
 def test_ros_boundary_skips_camera_exceptions_and_bad_returns_then_rewarms(monkeypatch):
