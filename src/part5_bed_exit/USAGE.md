@@ -6,6 +6,8 @@
 
 ## 네 사전학습 클래스와 로컬 노트북
 
+두 노트북의 첫 실행 코드 셀은 현재 커널의 의존성을 점검하고 필요한 패키지를 설치한다. 설치가 발생하면 `Kernel → Restart Kernel`로 재시작한 뒤 첫 셀부터 다시 실행한다. Matplotlib 3.6.3과 matplotlib-inline 0.2.x가 섞이면 `RcParams._get` 오류가 발생하므로 Matplotlib은 3.10 이상을 사용한다. 디스크의 패키지를 업데이트해도 이미 실행 중인 커널에는 이전 모듈이 남아 있어 재시작이 필요하다.
+
 **이미지 한 장으로 먼저 실행하려면 [part5_single_image.ipynb](notebooks/part5_single_image.ipynb)를 연다.** 공개 Bed Exit 예시 이미지를 `data/sample/bed_exit_sample.jpg`로 자동 다운로드하고 같은 BGR 프레임을 네 클래스에 전달한다. 이 파일은 이 환경에 실제 다운로드되어 있다. 원본 크기는 1920×1080이며 출처는 [helppai / Bed Exit](https://universe.roboflow.com/helppai/bed-exit), 제공자가 표시한 라이선스는 CC BY 4.0이다. 이 공개 예시의 v4 split 소속은 확인하지 않았다.
 
 이 노트북의 ROI·환자 선택 박스는 해당 샘플의 연결 확인용 예시다. 한 이미지의 다수결 전 bool만 비교하며 영상 시간 지표나 5프레임 성공으로 보고하지 않는다. 현재 커널에 MediaPipe가 없으면 노트북 첫 안내의 설치 명령을 실행하고 커널을 재시작한다.
