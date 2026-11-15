@@ -16,7 +16,7 @@ from research.datasets.downloads import save_json, sha256
 from research.evaluation.evaluation import video_frames
 from part5_bed_exit.methods.bed_exit_core import MODEL_FILES
 from part5_bed_exit.pretrained import create_method, read_config
-from research.evaluation.monitoring import EventGate
+from research.evaluation.monitoring import ConsecutiveExitAnalysis, EventGate
 
 
 def inspect_mp4(path):
@@ -43,11 +43,11 @@ def inspect_mp4(path):
         return info, first.to_ndarray(format='bgr24')
 
 
-def _panel(frame, detector, row, bed, safe, width):
+def _panel(frame, detector, row, roi, width):
     height = max(2, round(frame.shape[0] * width / frame.shape[1]))
     image = cv2.resize(frame, (width, height))
-    for roi, color in ((bed, (255, 180, 0)), (safe, (0, 220, 0))):
-        cv2.polylines(image, [np.rint(roi.pixels(image.shape)).astype(np.int32)], True, color, 2)
+    cv2.polylines(image, [np.rint(roi.pixels(image.shape)).astype(np.int32)],
+                  True, (0, 220, 0), 2)
     last = getattr(detector, 'last', None)
     if row['valid'] and last is not None:
         scale = np.array([width / frame.shape[1], height / frame.shape[0]])
@@ -87,7 +87,8 @@ def _grid(panels):
 
 
 CSV_FIELDS = ['frame_index', 'media_s', 'method', 'valid', 'raw_bool', 'output_bool',
-              'state', 'warmup', 'history_size', 'event', 'judge_ms', 'score', 'reason', 'error']
+              'state', 'warmup', 'history_size', 'event', 'three_consecutive_exit',
+              'judge_ms', 'score', 'reason', 'error']
 
 
 def run_video_comparison(video_path, config_path, output_dir, methods=None,
@@ -106,7 +107,7 @@ def run_video_comparison(video_path, config_path, output_dir, methods=None,
     if not methods or len(set(methods)) != len(methods) or any(n not in MODEL_FILES for n in methods):
         raise ValueError('네 메서드 중 중복 없이 하나 이상 선택하세요.')
     info, _ = inspect_mp4(video_path)
-    config, bed, safe, _ = read_config(config_path)
+    config, roi, _ = read_config(config_path)
     out = Path(output_dir).expanduser().resolve()
     # Refuse reuse so an interrupted run cannot overwrite a prior result.
     out.mkdir(parents=True, exist_ok=False)
@@ -115,7 +116,7 @@ def run_video_comparison(video_path, config_path, output_dir, methods=None,
               'timing': 'original source PTS, every decoded frame; shared sequential compute',
               'audio': 'result video has no audio; input is unchanged', 'frames': 0}
     save_json(out / 'run.json', record)
-    detectors, gates, counts = {}, {}, {}
+    detectors, gates, analyses, counts = {}, {}, {}, {}
     writer = encoder = iterator = None
     frames = 0
     status = 'complete'
@@ -125,6 +126,7 @@ def run_video_comparison(video_path, config_path, output_dir, methods=None,
         for name in methods:
             detectors[name] = (factory or create_method)(name, config_path)
             gates[name] = EventGate()
+            analyses[name] = ConsecutiveExitAnalysis()
             counts[name] = {'valid_frames': 0, 'invalid_frames': 0, 'raw_true': 0,
                             'voted_exit_frames': 0, 'events': 0, 'judge_ms': []}
         writer = av.open(str(out / 'comparison.mp4'), mode='w')
@@ -140,7 +142,7 @@ def run_video_comparison(video_path, config_path, output_dir, methods=None,
                     break
                 panels = []
                 for name in methods:
-                    detector, gate = detectors[name], gates[name]
+                    detector, gate, analysis = detectors[name], gates[name], analyses[name]
                     before = time.perf_counter()
                     raw = score = error = None
                     try:
@@ -152,11 +154,13 @@ def run_video_comparison(video_path, config_path, output_dir, methods=None,
                         if last is not None and not last.valid:
                             raise RuntimeError(last.reason)
                         voted = gate.update(raw)
+                        three_consecutive = analysis.update(raw)
                         reason = getattr(last, 'reason', 'ok')
                         score = getattr(last, 'score', None)
                     except Exception as exc:
                         raw = None
                         voted = gate.update(None, valid=False)
+                        three_consecutive = analysis.update(None, valid=False)
                         reason = str(exc)
                         error = f'{type(exc).__name__}: {exc}'
                     elapsed = (time.perf_counter() - before) * 1000
@@ -166,7 +170,8 @@ def run_video_comparison(video_path, config_path, output_dir, methods=None,
                            'output_bool': (voted.state.value == 'EXIT') if voted.valid else None,
                            'state': voted.state.value if voted.valid else None,
                            'warmup': voted.valid and history < 5, 'history_size': history,
-                           'event': voted.event, 'judge_ms': elapsed, 'score': score,
+                           'event': voted.event, 'three_consecutive_exit': three_consecutive,
+                           'judge_ms': elapsed, 'score': score,
                            'reason': reason, 'error': error}
                     csv_writer.writerow(row)
                     count = counts[name]
@@ -176,7 +181,7 @@ def run_video_comparison(video_path, config_path, output_dir, methods=None,
                     count['voted_exit_frames'] += int(row['output_bool'] is True)
                     count['events'] += int(voted.event)
                     count['judge_ms'].append(elapsed)
-                    panels.append(_panel(frame, detector, row, bed, safe, panel_width))
+                    panels.append(_panel(frame, detector, row, roi, panel_width))
                 canvas = _grid(panels)
                 if encoder is None:
                     encoder = writer.add_stream('libx264', rate=Fraction(info['rate']))

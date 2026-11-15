@@ -16,7 +16,7 @@ from part5_bed_exit.methods.bed_exit_core import (
     JudgmentUnavailable, PolygonROI, make_method,
 )
 from research.datasets.downloads import save_json, sha256
-from research.evaluation.monitoring import EventGate
+from research.evaluation.monitoring import ConsecutiveExitAnalysis, EventGate
 
 
 def video_frames(path):
@@ -98,10 +98,9 @@ def validate_manifest(manifest,base_dir,split="test"):
         duration=_finite(c["duration_s"],"duration_s")
         if duration<=0:
             raise ValueError("duration_s must be positive")
-        bed,safe=PolygonROI(c["bed_roi"]),PolygonROI(c["safe_roi"])
-        # Raster inclusion also catches safe polygon edges crossing a concave bed.
-        if np.any(safe.mask((1000,1000)) & ~bed.mask((1000,1000))):
-            raise ValueError("Safe ROI must be inside Bed ROI")
+        if "bed_roi" in c or "safe_roi" in c:
+            raise ValueError("MVP testbed uses one roi")
+        PolygonROI(c["roi"])
         if not c.get("roi_version"):
             raise ValueError("roi_version required")
         if "events" not in c:
@@ -219,6 +218,7 @@ def benchmark_clip(method,clip,base_dir,output_dir,warmup=3,gate_kwargs=None):
         _sync(method)
     method.reset()
     gate=EventGate(**(gate_kwargs or {}))
+    analysis=ConsecutiveExitAnalysis()
     rows=[]
     alarms=[]
     finish_s=0.0
@@ -247,6 +247,7 @@ def benchmark_clip(method,clip,base_dir,output_dir,warmup=3,gate_kwargs=None):
         _sync(method)
         inference_end=time.perf_counter()
         result=gate.update(raw,valid)
+        three_consecutive=analysis.update(raw,valid)
         gate_end=time.perf_counter()
         judge_ms=(inference_end-before)*1000
         gate_ms=(gate_end-inference_end)*1000
@@ -258,6 +259,7 @@ def benchmark_clip(method,clip,base_dir,output_dir,warmup=3,gate_kwargs=None):
             alarms.append({"media_s":t,"available_s":finish_s,"frame_index":index})
         rows.append({"frame_index":index,"media_s":t,"raw_exit":raw,
                      "state":result.state.value if valid else None,"event":result.event,
+                     "three_consecutive_exit":three_consecutive,
                      "valid":valid,"reason":reason,"error":error,
                      "score":method.last.score if valid else None,"judge_ms":judge_ms,"gate_ms":gate_ms,
                      "step_ms":step_s*1000,"fifo_available_s":finish_s})
@@ -378,8 +380,8 @@ def run_benchmark(manifest_path,model_dir,output_dir,methods=None,device="cpu",s
         for name in methods:
             summaries,all_rows=[],[]
             for clip in clips:
-                method=factory(name,PolygonROI(clip["bed_roi"]),PolygonROI(clip["safe_roi"]),
-                               model_dir,device=device,initial_bbox=clip.get("initial_patient_bbox"),**settings)
+                method=factory(name,PolygonROI(clip["roi"]),model_dir,device=device,
+                               initial_bbox=clip.get("initial_patient_bbox"),**settings)
                 try:
                     summary,rows=benchmark_clip(method,clip,manifest_path.parent,
                                                output_dir/name/clip["clip_id"],gate_kwargs=gate_kwargs)

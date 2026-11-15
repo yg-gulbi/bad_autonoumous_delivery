@@ -30,10 +30,10 @@ jupyter lab src/part5_bed_exit/research/notebooks/part5_bed_exit.ipynb
 
 | `method` 선택값 | 클래스 | 사전학습 인식 → 원판정 |
 | --- | --- | --- |
-| `detection` | `DetectionROI` | YOLO11n 사람 박스 → Safe ROI 밖 박스 면적 비율 |
-| `segmentation` | `SegmentationROI` | YOLO11n-seg 사람 마스크 → Safe ROI 밖 신체 면적 비율 |
-| `yolo_pose` | `YoloPoseROI` | YOLO11n-pose COCO 관절 → Safe ROI 밖 공통 관절 |
-| `mediapipe_pose` | `MediaPipePoseROI` | MediaPipe Full 33 관절 → Safe ROI 밖 대응 관절 |
+| `detection` | `DetectionROI` | YOLO11n 사람 박스 → 단일 ROI 밖 박스 면적 비율 |
+| `segmentation` | `SegmentationROI` | YOLO11n-seg 사람 마스크 → 단일 ROI 밖 신체 면적 비율 |
+| `yolo_pose` | `YoloPoseROI` | YOLO11n-pose COCO 관절 → 단일 ROI 밖 공통 관절 |
+| `mediapipe_pose` | `MediaPipePoseROI` | MediaPipe Full 33 관절 → 단일 ROI 밖 대응 관절 |
 
 네 클래스는 [methods/bed_exit_core.py](../part5_bed_exit/methods/bed_exit_core.py)에 있으며 모두 기존 `BedExitMethod` 인터페이스를 상속한다. 공통 호출부는 클래스별 분기 없이 `judge(frame)`을 사용한다.
 
@@ -50,7 +50,7 @@ finally:
 
 정상 출력은 `SAFE=False`, `EXIT=True` 두 가지다. 사람/관절 미검출, 모호한 환자 선택, 잘못된 프레임은 `JudgmentUnavailable` 예외다. ROS가 이를 잡아 이력을 초기화하고 발행을 생략한다. 모델은 무인 이탈 허가 여부를 판단하지 않는다.
 
-ROI는 카메라별로 지정해야 한다. [examples/methods.template.json](../examples/methods.template.json)을 `methods.local.json`으로 복사해 실제 화면에서 검수한다. 좌표는 정규화 다각형이며 Safe ROI는 Bed ROI 안에 있어야 한다. 검수 전 `roi_reviewed=false`인 예제는 실행을 거부한다. `model_dir` 상대 경로는 JSON 파일 위치를 기준으로 해석한다.
+단일 ROI는 카메라별로 지정해야 한다. [examples/methods.template.json](../examples/methods.template.json)을 `methods.local.json`으로 복사해 실제 화면에서 검수한다. 좌표는 정규화 다각형이다. 검수 전 `roi_reviewed=false`인 예제는 실행을 거부한다. `bed_roi`와 `safe_roi`가 남은 구형 설정은 실행을 거부한다. `model_dir` 상대 경로는 JSON 파일 위치를 기준으로 해석한다.
 
 기본 `any_body`는 신체 일부의 이탈을 보는 실험 정책이다. Detection/Segmentation/Pose가 보는 신체 표현은 다르므로 팔만 나옴·이불 가림·몸통 이탈을 각각 평가한다. `outside_fraction=0.05`, `point_conf=0.5`, `tolerance_px=3.0`은 미검증 초기값이다. 추가 상태나 행동 분류기는 넣지 않았다.
 
@@ -78,7 +78,7 @@ ros2 run part5_bed_exit bed_exit --ros-args \
 
 정적 이미지에는 이벤트 시각 정답이 없다. 실제 평가는 [templates/testbed.template.json](templates/testbed.template.json)을 복사해 원본 영상 해시·ROI·참가자/세션 분리·위험 시작/경계 이탈/종료·환자 존재 구간을 검수한 뒤 실행한다. `events=[]`는 검수된 정상 영상에만 사용한다.
 
-평가 결과는 `results/<run>/comparison.csv`, `comparison.json`, 메서드/클립별 `frames.csv`, `summary.json`, 조건별 `conditions.json`에 저장된다. 모델별로 순차 실행하며 Event Precision/Recall, Early Warning Recall, FA/10m·FA/h, Lead Time, Delay P95, FPS, 추론 P95, 시간 가중 Tracking Lost Rate를 계산한다. 연속 경보는 한 이벤트로 집계하고 유효 원판정 SAFE 5회 연속 후 재무장한다. 이 이벤트 래치는 프레임별 ROS Bool에 영향을 주지 않는다.
+평가 결과는 `results/<run>/comparison.csv`, `comparison.json`, 메서드/클립별 `frames.csv`, `summary.json`, 조건별 `conditions.json`에 저장된다. 모델별로 순차 실행하며 Event Precision/Recall, Early Warning Recall, FA/10m·FA/h, Lead Time, Delay P95, FPS, 추론 P95, 시간 가중 Tracking Lost Rate를 계산한다. 연속 경보는 한 이벤트로 집계하고 유효 원판정 SAFE 5회 연속 후 재무장한다. `three_consecutive_exit`은 원판정 3회 연속 여부를 비교하기 위한 분석 열일 뿐이며, ROS 공개 Bool은 항상 최근 5프레임 중 3회 규칙을 사용한다.
 
 `signal_only`는 영상 시각 기준, 기본 지표는 처리 시간이 누적되는 FIFO 시뮬레이션 기준이다. 실제 ROS 웹캠 프레임 유실·정지 명령 지연을 실측한 결과는 아니다. 분모가 없으면 지표/목표 통과는 `null`이다. Notion 목표값은 제안이며 실측 성능으로 취급하지 않는다. 5 FPS에서는 시작 후 5프레임 수집만 약 0.8초여서 Delay P95 0.1초 목표와 양립하기 어렵다.
 

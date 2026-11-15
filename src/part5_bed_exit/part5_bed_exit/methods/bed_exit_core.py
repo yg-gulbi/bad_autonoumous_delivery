@@ -104,8 +104,8 @@ class PatientSelector:
     Acquire only a person overlapping the bed; then require overlap with the
     previous patient box. Ambiguous associations remain invalid until resolved.
     """
-    def __init__(self, bed_roi, initial_bbox=None, min_iou=0.15):
-        self.bed_roi = bed_roi
+    def __init__(self, roi, initial_bbox=None, min_iou=0.15):
+        self.roi = roi
         self.initial_bbox = initial_bbox  # optional normalized patient box
         if initial_bbox is not None:
             b = np.asarray(initial_bbox, float)
@@ -129,7 +129,7 @@ class PatientSelector:
         scored = []
         for c in candidates:
             if reference is None:
-                overlap = 1-self.bed_roi.box_outside(c.bbox,shape)
+                overlap = 1-self.roi.box_outside(c.bbox,shape)
                 if overlap >= 0.5:
                     scored.append((overlap,c))
             else:
@@ -148,9 +148,9 @@ class PatientSelector:
 
 class BedExitMethod(FrameMethod):
     """Strategy base: every concrete method inherits the same judge(frame)."""
-    def __init__(self, bed_roi, safe_roi, initial_bbox=None):
-        self.bed_roi, self.safe_roi = bed_roi, safe_roi
-        self.selector = PatientSelector(bed_roi, initial_bbox)
+    def __init__(self, roi, initial_bbox=None):
+        self.roi = roi
+        self.selector = PatientSelector(roi, initial_bbox)
         self.reset()
 
     def reset(self):
@@ -188,9 +188,9 @@ class BedExitMethod(FrameMethod):
 
 
 class YoloMethod(BedExitMethod):
-    def __init__(self, bed_roi, safe_roi, weights, task, device="cpu",
+    def __init__(self, roi, weights, task, device="cpu",
                  confidence=0.25, imgsz=640, initial_bbox=None, model=None):
-        super().__init__(bed_roi,safe_roi,initial_bbox)
+        super().__init__(roi,initial_bbox)
         if model is None:
             if not Path(weights).is_file():
                 raise FileNotFoundError(f"Run the model-download cell first: {weights}")
@@ -220,20 +220,20 @@ class YoloMethod(BedExitMethod):
 
 
 class DetectionROI(YoloMethod):
-    def __init__(self, bed_roi, safe_roi, weights, outside_fraction=0.05, **kwargs):
-        super().__init__(bed_roi,safe_roi,weights,"detect",**kwargs)
+    def __init__(self, roi, weights, outside_fraction=0.05, **kwargs):
+        super().__init__(roi,weights,"detect",**kwargs)
         if not 0<=outside_fraction<=1:
             raise ValueError("outside_fraction must be in [0,1]")
         self.outside_fraction=outside_fraction
 
     def decide(self,candidate,shape):
-        score=self.safe_roi.box_outside(candidate.bbox,shape)
+        score=self.roi.box_outside(candidate.bbox,shape)
         return score>self.outside_fraction,score,"box_outside_fraction"
 
 
 class SegmentationROI(YoloMethod):
-    def __init__(self, bed_roi, safe_roi, weights, outside_fraction=0.05, **kwargs):
-        super().__init__(bed_roi,safe_roi,weights,"segment",**kwargs)
+    def __init__(self, roi, weights, outside_fraction=0.05, **kwargs):
+        super().__init__(roi,weights,"segment",**kwargs)
         if not 0<=outside_fraction<=1:
             raise ValueError("outside_fraction must be in [0,1]")
         self.outside_fraction=outside_fraction
@@ -245,7 +245,7 @@ class SegmentationROI(YoloMethod):
         area=int(m.sum())
         if not area:
             return None,None,"empty_mask"
-        score=float(np.count_nonzero(m & ~self.safe_roi.mask(shape))/area)
+        score=float(np.count_nonzero(m & ~self.roi.mask(shape))/area)
         return score>self.outside_fraction,score,"mask_outside_fraction"
 
 
@@ -285,20 +285,20 @@ def pose_decision(points, roi, shape, common, torso, point_conf=0.5,
 
 
 class YoloPoseROI(YoloMethod):
-    def __init__(self,bed_roi,safe_roi,weights,policy="any_body",point_conf=0.5,
+    def __init__(self,roi,weights,policy="any_body",point_conf=0.5,
                  tolerance_px=3.0,**kwargs):
-        super().__init__(bed_roi,safe_roi,weights,"pose",**kwargs)
+        super().__init__(roi,weights,"pose",**kwargs)
         self.policy,self.point_conf,self.tolerance_px=policy,point_conf,tolerance_px
 
     def decide(self,candidate,shape):
-        return pose_decision(candidate.points,self.safe_roi,shape,COCO_COMMON,
+        return pose_decision(candidate.points,self.roi,shape,COCO_COMMON,
                              (5,6,11,12),self.point_conf,self.tolerance_px,self.policy)
 
 
 class MediaPipePoseROI(BedExitMethod):
-    def __init__(self,bed_roi,safe_roi,weights,policy="any_body",point_conf=0.5,
+    def __init__(self,roi,weights,policy="any_body",point_conf=0.5,
                  tolerance_px=3.0,initial_bbox=None):
-        super().__init__(bed_roi,safe_roi,initial_bbox)
+        super().__init__(roi,initial_bbox)
         import mediapipe as mp
         from mediapipe.tasks import python
         from mediapipe.tasks.python import vision
@@ -327,7 +327,7 @@ class MediaPipePoseROI(BedExitMethod):
         return out
 
     def decide(self,candidate,shape):
-        return pose_decision(candidate.points,self.safe_roi,shape,MP_COMMON,
+        return pose_decision(candidate.points,self.roi,shape,MP_COMMON,
                              (11,12,23,24),self.point_conf,self.tolerance_px,self.policy)
 
     def close(self):
@@ -338,10 +338,10 @@ MODEL_FILES={"detection":"yolo11n.pt","segmentation":"yolo11n-seg.pt",
              "yolo_pose":"yolo11n-pose.pt","mediapipe_pose":"pose_landmarker_full.task"}
 
 
-def make_method(name,bed_roi,safe_roi,model_dir,device="cpu",initial_bbox=None,
+def make_method(name,roi,model_dir,device="cpu",initial_bbox=None,
                 outside_fraction=0.05,policy="any_body",point_conf=0.5,tolerance_px=3.0):
     weights=Path(model_dir)/MODEL_FILES[name]
-    base=dict(bed_roi=bed_roi,safe_roi=safe_roi,weights=weights,initial_bbox=initial_bbox)
+    base=dict(roi=roi,weights=weights,initial_bbox=initial_bbox)
     if name=="mediapipe_pose":
         return MediaPipePoseROI(**base,policy=policy,point_conf=point_conf,tolerance_px=tolerance_px)
     if name=="yolo_pose":

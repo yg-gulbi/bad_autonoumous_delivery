@@ -4,8 +4,6 @@ import json
 import math
 from pathlib import Path
 
-import numpy as np
-
 from part5_bed_exit.methods.bed_exit_core import MODEL_FILES, PolygonROI, make_method
 
 
@@ -17,9 +15,9 @@ def read_config(path):
         raise ValueError('Review the camera ROI and set roi_reviewed=true before inference')
     if not config.get('roi_version'):
         raise ValueError('roi_version is required')
-    bed, safe = PolygonROI(config['bed_roi']), PolygonROI(config['safe_roi'])
-    if np.any(safe.mask((1000, 1000)) & ~bed.mask((1000, 1000))):
-        raise ValueError('Safe ROI must be inside Bed ROI')
+    if 'bed_roi' in config or 'safe_roi' in config:
+        raise ValueError('MVP uses one roi; replace bed_roi/safe_roi with roi')
+    roi = PolygonROI(config['roi'])
     settings = config.get('method_settings', {})
     if settings.get('policy', 'any_body') not in ('any_body', 'torso'):
         raise ValueError('policy must be any_body or torso')
@@ -33,15 +31,15 @@ def read_config(path):
     model_dir = Path(config['model_dir']).expanduser()
     if not model_dir.is_absolute():
         model_dir = path.parent / model_dir
-    return config, bed, safe, model_dir.resolve()
+    return config, roi, model_dir.resolve()
 
 
 def create_method(name, config_path):
     """Create one raw-frame strategy; voting remains in the caller."""
     if name not in MODEL_FILES:
         raise ValueError(f'Unknown method {name!r}; choose from {tuple(MODEL_FILES)}')
-    config, bed, safe, model_dir = read_config(config_path)
-    return make_method(name, bed, safe, model_dir,
+    config, roi, model_dir = read_config(config_path)
+    return make_method(name, roi, model_dir,
                        device=config.get('device', 'cpu'),
                        initial_bbox=config.get('initial_patient_bbox'),
                        **config.get('method_settings', {}))

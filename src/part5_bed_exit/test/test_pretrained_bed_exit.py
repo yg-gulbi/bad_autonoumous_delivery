@@ -10,7 +10,9 @@ import pytest
 from part5_bed_exit.methods.bed_exit_core import (BedExitMethod,Candidate,COCO_COMMON,
                           DetectionROI,PatientSelector,PolygonROI,
                           SegmentationROI,YoloPoseROI,pose_decision,JudgmentUnavailable)
-from research.evaluation.monitoring import BedExitMonitor, EventGate, State
+from research.evaluation.monitoring import (
+    BedExitMonitor, ConsecutiveExitAnalysis, EventGate, State,
+)
 from research.datasets.downloads import download_file,save_json,sha256
 from research.evaluation.evaluation import (benchmark_clip,event_metrics,run_benchmark,target_checks,
                         tracking_durations,validate_manifest,video_frames)
@@ -48,6 +50,17 @@ def test_three_of_five_and_exactly_one_event_until_safe_recovery():
     assert gate.update(True).event  # Complete rolling window already available.
 
 
+def test_three_consecutive_analysis_is_separate_from_runtime_vote():
+    analysis=ConsecutiveExitAnalysis()
+    state=EventGate()
+    sequence=[True,True,False,True,True]
+    assert [analysis.update(value) for value in sequence]==[False]*5
+    assert [state.update(value).state for value in sequence][-1]==State.EXIT
+    assert analysis.update(True) is True
+    assert analysis.update(None,valid=False) is None
+    assert analysis.update(True) is False
+
+
 def test_invalid_frames_cannot_rearm_or_bridge_separated_risk_votes():
     gate=EventGate()
     gate.update(True); gate.update(True)
@@ -78,13 +91,12 @@ def test_ambiguous_people_do_not_create_false_patient_identity(roi):
 
 
 def test_detection_mask_and_pose_are_distinct_geometry_proxies(roi):
-    full=PolygonROI([[0,0],[1,0],[1,1],[0,1]])
     candidate=Candidate(np.array([10,30,60,70]),.9)
-    detection=DetectionROI(full,roi,"unused.pt",model=object())
+    detection=DetectionROI(roi,"unused.pt",model=object())
     assert detection.decide(candidate,(100,100))[0]
     mask=np.zeros((100,100)); mask[30:70,30:60]=1
     candidate.mask=mask
-    seg=SegmentationROI(full,roi,"unused.pt",model=object())
+    seg=SegmentationROI(roi,"unused.pt",model=object())
     assert seg.decide(candidate,(100,100))[0] is False
     candidate.mask[:]=0
     assert seg.decide(candidate,(100,100))[0] is None
@@ -112,7 +124,7 @@ class PixelMethod(BedExitMethod):
 
 def test_bool_contract_raises_on_input_failure_instead_of_holding_a_decision():
     roi=PolygonROI([[0,0],[1,0],[1,1],[0,1]])
-    method=PixelMethod(roi,roi)
+    method=PixelMethod(roi)
     assert method.judge(np.full((32,32,3),255,np.uint8)) is True
     with pytest.raises(JudgmentUnavailable):
         method.judge(None)
@@ -123,7 +135,7 @@ def test_bool_contract_raises_on_input_failure_instead_of_holding_a_decision():
 
 def test_composed_monitor_keeps_bool_api_and_separate_event_pulse():
     roi=PolygonROI([[0,0],[1,0],[1,1],[0,1]])
-    monitor=BedExitMonitor(PixelMethod(roi,roi))
+    monitor=BedExitMonitor(PixelMethod(roi))
     frame=np.full((32,32,3),255,np.uint8)
     assert [monitor.judge(frame) for _ in range(5)]==[False,False,False,False,True]
     assert monitor.event
@@ -199,12 +211,12 @@ def test_end_to_end_original_pts_to_episode_report(tmp_path):
     clip={"clip_id":"logic_only","subject_id":"p1","session_id":"s1","split":"test",
           "video":"clip.mp4","video_sha256":sha256(video),"duration_s":3.0,
           "labels_reviewed":True,"roi_reviewed":True,"roi_version":"logic_v1",
-          "bed_roi":roi,"safe_roi":roi,"patient_present_intervals_s":[[0,3]],
+          "roi":roi,"patient_present_intervals_s":[[0,3]],
           "events":[event("a",.5,.9,1.1),event("b",2.,2.4,2.6)],
           "conditions":{"case_id":"synthetic_logic_only"}}
     manifest=tmp_path/"testbed.json"
     save_json(manifest,{"schema_version":1,"policy":"any_body","clips":[clip]})
-    factory=lambda name,bed,safe,models,**kwargs:PixelMethod(bed,safe)
+    factory=lambda name,roi,models,**kwargs:PixelMethod(roi)
     result=run_benchmark(manifest,tmp_path,tmp_path/"results",methods=["detection"],factory=factory)
     assert result[0]["tp"]==2 and result[0]["fp"]==0 and result[0]["fn"]==0
     assert result[0]["signal_only"]["early_warning_recall"]==1
