@@ -1,6 +1,7 @@
 """Webcam capture, replaceable detector object, and per-frame ROS output."""
 
 import math
+import os
 
 import cv2
 import rclpy
@@ -12,6 +13,12 @@ from part5_bed_exit.bed_exit_method import (
     validate_bed_exit_method,
 )
 from part5_bed_exit.bed_exit_state import BedExitState
+from part5_bed_exit.methods.common import default_camera_index
+
+DEFAULT_METHOD = (
+    'part5_bed_exit.methods.segmentation_method:SegmentationBedExitMethod'
+)
+WINDOW_TITLE = 'Part 5 Bed Exit (/patient/bed_exit)'
 
 
 class BedExitNode(Node):
@@ -22,16 +29,23 @@ class BedExitNode(Node):
         # 초기화 도중 예외가 나더라도 destroy_node()/예외 정리가 안전하도록 먼저 None으로 둔다.
         self.capture = None
         self.detector = None
+        self.show = False
 
-        # ROS 2 실행 파라미터 선언 (output_topic은 ICD 확정안 /patient/bed_exit 사용)
-        self.declare_parameter('method', '')
+        # 기본 Segmentation 실행을 제공하면서 다른 클래스/내장 프리셋도 선택할 수 있게 한다.
+        self.declare_parameter('method', DEFAULT_METHOD)
         self.declare_parameter('method_config', '')
         self.declare_parameter('output_topic', '/patient/bed_exit')
-        self.declare_parameter('camera_index', 0)
+        self.declare_parameter('camera_index', default_camera_index())
         self.declare_parameter('capture_fps', 30.0)
+        self.declare_parameter(
+            'show',
+            bool(os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')),
+        )
         method_path = self.get_parameter('method').value
         topic = self.get_parameter('output_topic').value
+        camera_index = self.get_parameter('camera_index').value
         fps = self.get_parameter('capture_fps').value
+        self.show = bool(self.get_parameter('show').value)
 
         # 직접 detector 객체를 전달받지 않은 경우에만 method 파라미터 경로를 필수로 요구한다.
         if not topic or not math.isfinite(fps) or fps <= 0 or (detector is None and not method_path):
@@ -50,14 +64,52 @@ class BedExitNode(Node):
         try:
             self.state = BedExitState()
             self.publisher = self.create_publisher(Bool, topic, 10)
-            self.capture = cv2.VideoCapture(self.get_parameter('camera_index').value)
+            self.capture = cv2.VideoCapture(camera_index)
             if not self.capture.isOpened():
-                raise RuntimeError('Cannot open webcam')
+                raise RuntimeError(f'Cannot open webcam (camera_index={camera_index})')
             self.timer = self.create_timer(1.0 / fps, self.process_frame)
+            self.get_logger().info(
+                f'BedExitNode started: camera_index={camera_index}, topic={topic}, '
+                f'method={method_path}, show={self.show}'
+            )
         except Exception:
             self._release_capture()
             self._close_detector()
             raise
+
+    def _render_preview(self, frame, voted_unsafe):
+        if not self.show:
+            return
+        render = getattr(self.detector, 'render', None)
+        canvas = render(frame) if callable(render) else frame.copy()
+        h, w = canvas.shape[:2]
+        true_count = sum(self.state.history)
+        win_len = len(self.state.history)
+        if voted_unsafe is None:
+            vote_text = f'5-frame vote: RESET ({true_count}/{win_len})'
+            color = (0, 165, 255)
+        elif voted_unsafe:
+            vote_text = f'5-frame vote: UNSAFE ({true_count}/{win_len}) -> True'
+            color = (0, 0, 255)
+        else:
+            vote_text = f'5-frame vote: SAFE ({true_count}/{win_len}) -> False'
+            color = (0, 220, 0)
+        cv2.rectangle(canvas, (0, h - 36), (min(w, 460), h), (20, 20, 20), -1)
+        cv2.putText(
+            canvas,
+            vote_text,
+            (10, h - 10),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            color,
+            2,
+            cv2.LINE_AA,
+        )
+        try:
+            cv2.imshow(WINDOW_TITLE, canvas)
+            cv2.waitKey(1)
+        except cv2.error:
+            self.show = False
 
     def process_frame(self):
         # 프레임 수신 실패 시 거짓 정상(False) 발행을 막기 위해 이력을 초기화하고 발행을 건너뛴다.
@@ -76,13 +128,24 @@ class BedExitNode(Node):
             # 판단 메서드 예외 또는 비-bool 반환 시에도 동일하게 5프레임 이력을 초기화한다.
             self.state = BedExitState()
             self.get_logger().error(f'Judgment failed; history reset: {exc}')
+            render_preview = getattr(self, '_render_preview', None)
+            if callable(render_preview):
+                render_preview(frame, None)
             return
         self.publisher.publish(Bool(data=unsafe))
+        render_preview = getattr(self, '_render_preview', None)
+        if callable(render_preview):
+            render_preview(frame, unsafe)
 
     def _release_capture(self):
         if self.capture is not None:
             self.capture.release()
             self.capture = None
+        if self.show:
+            try:
+                cv2.destroyAllWindows()
+            except cv2.error:
+                pass
 
     def _close_detector(self):
         # close()는 선택 규약이므로 메서드가 존재할 때만 호출한다.

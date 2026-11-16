@@ -1,4 +1,4 @@
-"""Shared ROI, patient tracking, rendering, and YOLO base utilities for Part 5 methods."""
+"""Shared ROI, tracking, rendering, device, and YOLO utilities for Part 5."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+import sys
 
 import cv2
 import numpy as np
@@ -15,7 +16,36 @@ from part5_bed_exit.bed_exit_method import BedExitMethod
 
 DEFAULT_ROI_PATH = Path(__file__).resolve().parent / 'bed_roi.json'
 DEFAULT_MODELS_DIR = Path(__file__).resolve().parents[2] / 'models'
+DEFAULT_VENV_SITE = Path('/home/mu-02/venvs/rokey_venv/lib/python3.12/site-packages')
 ROI_ENV_VAR = 'BED_EXIT_ROI_CONFIG'
+DEVICE_ENV_VAR = 'BED_EXIT_DEVICE'
+
+
+def _ensure_venv_site_packages() -> None:
+    """Append local rokey_venv site-packages when running under system Python."""
+    if DEFAULT_VENV_SITE.is_dir():
+        site_str = str(DEFAULT_VENV_SITE)
+        if site_str not in sys.path:
+            sys.path.append(site_str)
+
+
+def default_camera_index(v4l_root: Path = Path('/sys/class/video4linux')) -> int:
+    """Prefer an external USB webcam capture node over the built-in camera when available."""
+    if v4l_root.is_dir():
+        candidates: list[tuple[int, str]] = []
+        for dev_dir in v4l_root.glob('video*'):
+            try:
+                idx = int(dev_dir.name.removeprefix('video'))
+                node_idx = (dev_dir / 'index').read_text(encoding='utf-8').strip()
+                dev_name = (dev_dir / 'name').read_text(encoding='utf-8').strip().lower()
+            except (OSError, ValueError):
+                continue
+            if node_idx == '0':
+                candidates.append((idx, dev_name))
+        for idx, dev_name in sorted(candidates):
+            if 'usb' in dev_name and 'integrated' not in dev_name:
+                return idx
+    return 0
 
 
 @dataclass
@@ -122,6 +152,21 @@ def resolve_weights_path(weights: str | Path) -> str:
     return str(weights)
 
 
+def resolve_device(device: str | None = 'auto') -> str:
+    """Resolve inference device, preferring CUDA GPU when device is None or 'auto'."""
+    if device is not None and device != 'auto':
+        return str(device)
+    env_device = os.environ.get(DEVICE_ENV_VAR)
+    if env_device and env_device != 'auto':
+        return env_device
+    _ensure_venv_site_packages()
+    try:
+        import torch
+    except ImportError:
+        return 'cpu'
+    return 'cuda:0' if torch.cuda.is_available() else 'cpu'
+
+
 def validate_bgr_frame(frame) -> tuple[int, int]:
     """Validate HxWx3 uint8 BGR numpy image and return (height, width)."""
     if (
@@ -145,6 +190,20 @@ def box_iou(box_a: np.ndarray, box_b: np.ndarray) -> float:
     return inter / max(area_a + area_b - inter, 1e-9)
 
 
+def _normalized_center_distance(
+    box_a: np.ndarray, box_b: np.ndarray, shape: tuple[int, int]
+) -> float:
+    """Return Euclidean bbox center distance normalized by frame diagonal."""
+    diag = float(np.hypot(shape[0], shape[1]))
+    if diag <= 0.0:
+        return float('inf')
+    cx_a = 0.5 * (float(box_a[0]) + float(box_a[2]))
+    cy_a = 0.5 * (float(box_a[1]) + float(box_a[3]))
+    cx_b = 0.5 * (float(box_b[0]) + float(box_b[2]))
+    cy_b = 0.5 * (float(box_b[1]) + float(box_b[3]))
+    return float(np.hypot(cx_a - cx_b, cy_a - cy_b)) / diag
+
+
 class PatientTracker:
     """Select and track the bed occupant without drifting onto entering visitors."""
 
@@ -154,6 +213,7 @@ class PatientTracker:
         min_bed_overlap: float = 0.2,
         min_track_iou: float = 0.15,
         max_lost_frames: int = 5,
+        max_center_jump: float = 0.25,
     ):
         if not 0.0 <= min_bed_overlap <= 1.0:
             raise ValueError('min_bed_overlap must be in [0, 1]')
@@ -161,14 +221,18 @@ class PatientTracker:
             raise ValueError('min_track_iou must be in [0, 1]')
         if max_lost_frames < 1:
             raise ValueError('max_lost_frames must be >= 1')
+        if not 0.0 <= max_center_jump <= 1.0:
+            raise ValueError('max_center_jump must be in [0, 1]')
         self.bed_roi = bed_roi
         self.min_bed_overlap = min_bed_overlap
         self.min_track_iou = min_track_iou
         self.max_lost_frames = max_lost_frames
+        self.max_center_jump = max_center_jump
         self.previous_box: np.ndarray | None = None
         self.lost_frames = 0
 
     def reset(self) -> None:
+        """Reset tracked bounding box and loss counter."""
         self.previous_box = None
         self.lost_frames = 0
 
@@ -180,6 +244,36 @@ class PatientTracker:
             if self.lost_frames >= self.max_lost_frames:
                 self.reset()
         raise RuntimeError(reason)
+
+    def _select_on_bed(
+        self, boxes: np.ndarray, valid_indices: list[int], shape: tuple[int, int]
+    ) -> int | None:
+        best_score, best_idx = max(
+            (1.0 - self.bed_roi.box_outside_fraction(boxes[idx], shape), idx)
+            for idx in valid_indices
+        )
+        return best_idx if best_score >= self.min_bed_overlap else None
+
+    def _match_previous(
+        self, boxes: np.ndarray, valid_indices: list[int], shape: tuple[int, int]
+    ) -> int | None:
+        best_iou, best_idx = max(
+            (box_iou(self.previous_box, boxes[idx]), idx) for idx in valid_indices
+        )
+        if best_iou >= self.min_track_iou:
+            return best_idx
+
+        # Rapid posture or scale changes can push IoU below min_track_iou on the same person.
+        if self.max_center_jump > 0.0:
+            best_dist, near_idx = min(
+                (_normalized_center_distance(self.previous_box, boxes[idx], shape), idx)
+                for idx in valid_indices
+            )
+            if best_dist <= self.max_center_jump:
+                return near_idx
+
+        # Re-acquire an occupant on the bed immediately instead of failing against a stale box.
+        return self._select_on_bed(boxes, valid_indices, shape)
 
     def select(self, boxes: np.ndarray, shape: tuple[int, int]) -> int:
         """Return index of the tracked patient box, or raise RuntimeError when unavailable."""
@@ -195,20 +289,12 @@ class PatientTracker:
             self._register_loss('No valid person bounding box detected')
 
         if self.previous_box is not None:
-            scored = [
-                (box_iou(self.previous_box, boxes[idx]), idx)
-                for idx in valid_indices
-            ]
-            best_score, best_idx = max(scored, key=lambda item: item[0])
-            if best_score < self.min_track_iou:
+            best_idx = self._match_previous(boxes, valid_indices, shape)
+            if best_idx is None:
                 self._register_loss('Tracked patient lost')
         else:
-            scored = [
-                (1.0 - self.bed_roi.box_outside_fraction(boxes[idx], shape), idx)
-                for idx in valid_indices
-            ]
-            best_score, best_idx = max(scored, key=lambda item: item[0])
-            if best_score < self.min_bed_overlap:
+            best_idx = self._select_on_bed(boxes, valid_indices, shape)
+            if best_idx is None:
                 raise RuntimeError('No person overlapping bed ROI')
 
         self.previous_box = np.asarray(boxes[best_idx], dtype=np.float32).copy()
@@ -242,7 +328,13 @@ def draw_roi_and_banner(
         label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness
     )
     pad = 10
-    cv2.rectangle(canvas, (0, 0), (min(w, text_w + pad * 2), text_h + baseline + pad * 2), (20, 20, 20), -1)
+    cv2.rectangle(
+        canvas,
+        (0, 0),
+        (min(w, text_w + pad * 2), text_h + baseline + pad * 2),
+        (20, 20, 20),
+        -1,
+    )
     cv2.putText(
         canvas,
         label,
@@ -266,11 +358,12 @@ class BaseYoloBedExitMethod(BedExitMethod):
         task: str,
         outside_threshold: float,
         roi_config=None,
-        conf: float = 0.35,
-        imgsz: int = 480,
-        device: str = 'cpu',
+        conf: float = 0.25,
+        imgsz: int = 640,
+        device: str | None = 'auto',
         min_bed_overlap: float = 0.2,
         min_track_iou: float = 0.15,
+        max_center_jump: float = 0.25,
         model=None,
     ) -> None:
         if not 0.0 <= outside_threshold <= 1.0:
@@ -285,14 +378,16 @@ class BaseYoloBedExitMethod(BedExitMethod):
             self.bed_roi,
             min_bed_overlap=min_bed_overlap,
             min_track_iou=min_track_iou,
+            max_center_jump=max_center_jump,
         )
         self.outside_threshold = outside_threshold
         self.conf = conf
         self.imgsz = imgsz
-        self.device = device
+        self.device = resolve_device(device)
         self.last_result: MethodDiagnostics | None = None
 
         if model is None:
+            _ensure_venv_site_packages()
             from ultralytics import YOLO
 
             model = YOLO(resolve_weights_path(weights), task=task)

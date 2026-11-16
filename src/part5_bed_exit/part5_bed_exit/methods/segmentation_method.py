@@ -1,4 +1,4 @@
-"""Instance segmentation + ROI bed-exit method (yolo11n-seg.pt)."""
+"""GPU instance segmentation + bed-boundary ROI bed-exit method (yolo11n-seg.pt)."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ def _crop_letterbox_mask(mask: np.ndarray, orig_shape: tuple[int, int]) -> np.nd
 
 
 class SegmentationBedExitMethod(BaseYoloBedExitMethod):
-    """RGB -> person mask -> outside safe-ROI pixel ratio -> warning."""
+    """RGB -> person instance mask -> unsafe when mask crosses outside the bed ROI."""
 
     method_label = 'segmentation'
 
@@ -39,12 +39,13 @@ class SegmentationBedExitMethod(BaseYoloBedExitMethod):
         self,
         weights: str = 'yolo11n-seg.pt',
         roi_config=None,
-        outside_threshold: float = 0.10,
-        conf: float = 0.35,
-        imgsz: int = 480,
-        device: str = 'cpu',
+        outside_threshold: float = 0.05,
+        conf: float = 0.25,
+        imgsz: int = 640,
+        device: str | None = 'auto',
         min_bed_overlap: float = 0.2,
         min_track_iou: float = 0.15,
+        max_center_jump: float = 0.25,
         mask_max_dim: int | None = 160,
         model=None,
     ) -> None:
@@ -60,6 +61,7 @@ class SegmentationBedExitMethod(BaseYoloBedExitMethod):
             device=device,
             min_bed_overlap=min_bed_overlap,
             min_track_iou=min_track_iou,
+            max_center_jump=max_center_jump,
             model=model,
         )
         self.mask_max_dim = mask_max_dim
@@ -148,7 +150,7 @@ class SegmentationBedExitMethod(BaseYoloBedExitMethod):
         cv2.drawContours(canvas, contours, -1, (255, 255, 255), 2)
 
         color = (0, 0, 255) if diag.unsafe else (0, 200, 0)
-        verdict = 'EXIT(True)' if diag.unsafe else 'SAFE(False)'
+        verdict = 'UNSAFE(True)' if diag.unsafe else 'SAFE(False)'
         conf_part = '' if diag.confidence is None else f' | conf={diag.confidence:.2f}'
         label = (
             f'SEG | {verdict} | outside={diag.outside_ratio * 100:.1f}% '

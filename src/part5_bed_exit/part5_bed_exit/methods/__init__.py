@@ -1,4 +1,4 @@
-"""Pretrained strategies reused from rokey_ws/vision/bed_exit and local YOLO ROI methods.
+"""Detection and segmentation strategies for the Part 5 bed-exit runtime.
 
 The core contains inference/geometry only; BedExitState owns the ROS vote.
 """
