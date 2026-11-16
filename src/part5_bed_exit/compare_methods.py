@@ -3,6 +3,7 @@
 import argparse
 from dataclasses import dataclass, field
 import inspect
+import os
 from pathlib import Path
 import sys
 import time
@@ -16,7 +17,8 @@ if str(PACKAGE_ROOT) not in sys.path:
 
 from part5_bed_exit.bed_exit_method import validate_bed_exit_method
 from part5_bed_exit.bed_exit_state import BedExitState
-from part5_bed_exit.method_template import BedExitMethodTemplate
+from part5_bed_exit.methods.common import ROI_ENV_VAR, default_camera_index
+from part5_bed_exit.methods.segmentation_method import SegmentationBedExitMethod
 
 # ==============================================================================
 # [사용자 설정 영역] 나와 팀원의 메서드 클래스/객체를 여기에 등록하고 선택한다.
@@ -24,16 +26,15 @@ from part5_bed_exit.method_template import BedExitMethodTemplate
 # 각 클래스는 judge(self, frame) -> bool 메서드를 가져야 한다.
 # 클래스를 그대로 넣어도 되고(MethodClass), 미리 생성한 객체를 넣어도 된다(MethodClass()).
 METHODS = {
-    'template_sample': BedExitMethodTemplate(),
-    # 'mine': MyBedExitMethod(),
+    'segmentation': SegmentationBedExitMethod,
     # 'teammate': TeammateBedExitMethod(),
 }
 
 # 이번 실행에서 비교할 메서드 키 목록 (None이면 METHODS에 등록된 전체 메서드 실행)
 SELECTED_METHODS = None
 
-# 기본 입력 소스: 0(기본 웹캠) 또는 'sample.mp4'(영상 파일 경로)
-DEFAULT_SOURCE = 0
+# 기본 입력 소스: 외장 USB 웹캠이 연결되어 있으면 우선 선택(없으면 0) 또는 'sample.mp4'
+DEFAULT_SOURCE = default_camera_index()
 # ==============================================================================
 
 
@@ -131,7 +132,17 @@ def close_runners(runners: list[MethodRunner]) -> None:
 
 
 def draw_overlay(frame, frame_idx: int, runners: list[MethodRunner]):
-    """화면 표시용 복사본 위에 프레임 번호와 각 메서드 상태를 겹쳐 그린다."""
+    """화면 표시용 복사본 위에 프레임 번호, 마스크/ROI(지원 시), 5프레임 다수결 상태를 그린다."""
+    if len(runners) == 1 and callable(getattr(runners[0].detector, 'render', None)):
+        runner = runners[0]
+        canvas = runner.detector.render(frame)
+        h, w = canvas.shape[:2]
+        color = (0, 165, 255) if runner.last_error is not None else ((0, 0, 255) if runner.last_voted else (0, 200, 0))
+        footer = f'Frame {frame_idx} | {runner.status_text()} | q/ESC quit'
+        cv2.rectangle(canvas, (0, max(0, h - 34)), (w, h), (20, 20, 20), -1)
+        cv2.putText(canvas, footer, (12, h - 11), cv2.FONT_HERSHEY_SIMPLEX, 0.52, color, 2, cv2.LINE_AA)
+        return canvas
+
     canvas = frame.copy()
     cv2.putText(
         canvas,
@@ -249,7 +260,10 @@ def main():
     )
     parser.add_argument('--no-show', action='store_true', help='OpenCV 창 없이 콘솔 로그만 출력')
     parser.add_argument('--max-frames', type=int, default=None, help='최대 처리 프레임 수 제한')
+    parser.add_argument('--roi', default=None, help='침대 경계 ROI JSON 경로 (미지정 시 기본 methods/bed_roi.json)')
     args = parser.parse_args()
+    if args.roi:
+        os.environ[ROI_ENV_VAR] = args.roi
     run_comparison(
         source=args.source,
         show=not args.no_show,

@@ -4,9 +4,6 @@
 
 | 기록 | 상태 | 결과 |
 | --- | --- | --- |
-
-아직 기록된 트러블슈팅 없음.
-
-기록이 생기면 위 문구를 지우고 실제 사건의 상대 링크와 상태를 표에 추가합니다.
+| [Part 5 실시간 웹캠 Tracked patient lost 오류](2026-11-16-part5-tracked-patient-lost.md) | 검증 대기 | 중심 거리 보조 추적 및 침대 ROI 재획득 추가 (`pytest` 23건 통과, 실웹캠 재확인 대기) |
 
 새 기록 양식: [_template.md](_template.md)
