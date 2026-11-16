@@ -19,6 +19,20 @@ PYTHONPATH=src/part5_bed_exit .venv/bin/python -m research.poc.run_static_pose_p
   --output-dir src/part5_bed_exit/results/pose_mediapipe_roboflow20_v1
 ```
 
+실행기는 Bool·시간·실패 이유뿐 아니라 Pose 추론 근거를 함께 저장한다.
+
+- `yolo_pose/*.jpg`: YOLO Pose 관절·스켈레톤·ROI·판정 이미지 20장
+- `mediapipe_pose/*.jpg`: MediaPipe Pose 관절·스켈레톤·ROI·판정 이미지 20장
+- `comparison/*.jpg`: 동일 입력의 두 모델 좌우 비교 이미지 20장
+- `pose_comparison_sheet.jpg`: 20개 좌우 비교 결과를 한 장으로 모은 검수 시트
+- `keypoints.jsonl`: 전체 pose 후보, 선택 환자, 관절 좌표·confidence, 공통 관절과 ROI 이탈 여부 40행
+- `results.csv`, `summary.json`: 기존 판정·시간·실패 원인과 실행 환경
+
+시각화 색상은 공통 관절 ROI 내부=초록, 외부=빨강, 비교에 쓰지 않는 관절=청록,
+선택되지 않은 pose 후보=회색이다. `UNAVAILABLE` 이미지도 검출된 후보가 있으면 관절을
+보존하므로 `incomplete_body_coverage`, `patient_unassociated`, `ambiguous_people`를 직접
+검토할 수 있다. 빈 병상의 `no_person`은 ROI만 표시된다.
+
 [notebooks/part5_bed_exit.ipynb](notebooks/part5_bed_exit.ipynb)를 실행하면 모델 다운로드부터 데이터셋 접근·다운로드, ROI 확인, 영상/웹캠 실행, 이벤트 정량평가까지 진행할 수 있다. 학습은 하지 않는다.
 
 ```bash

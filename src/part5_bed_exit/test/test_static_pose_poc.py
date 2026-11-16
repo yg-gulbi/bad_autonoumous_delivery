@@ -1,12 +1,20 @@
 from pathlib import Path
 
+import numpy as np
 import pytest
 
+from part5_bed_exit.methods.bed_exit_core import Candidate, Diagnostics, PolygonROI
 from research.poc.run_static_pose_poc import (
     QUOTAS,
     classify_sample,
     discover_samples,
     parse_yolo_labels,
+)
+from research.poc.pose_visualization import (
+    build_pose_record,
+    render_comparison_sheet,
+    render_pose_observation,
+    write_image,
 )
 
 
@@ -42,3 +50,57 @@ def test_selection_is_quota_bounded_and_test_first(tmp_path):
     assert len(samples) == sum(QUOTAS.values())
     assert all(sample["split"] == "test" for sample in samples)
     assert [sample["category"] for sample in samples].count("empty_bed") == 8
+
+
+def test_pose_artifact_keeps_keypoints_and_marks_roi_exit(tmp_path):
+    frame = np.zeros((100, 100, 3), dtype=np.uint8)
+    roi = PolygonROI([[.1, .1], [.8, .1], [.8, .8], [.1, .8]])
+    points = np.tile(np.array([50.0, 50.0, .9]), (17, 1))
+    points[9, :2] = [95.0, 50.0]
+    candidate = Candidate(np.array([20, 20, 96, 90], dtype=float), .88, points=points)
+    diagnostics = Diagnostics(
+        valid=True,
+        reason="visible_keypoint_outside",
+        score=1 / 13,
+        bbox=tuple(candidate.bbox),
+        points=points.tolist(),
+    )
+    record = build_pose_record(
+        method_name="yolo_pose",
+        model_name="test.pt",
+        split="test",
+        image_id="sample",
+        roi=roi,
+        shape=frame.shape,
+        candidates=[candidate],
+        diagnostics=diagnostics,
+        predicted=True,
+        inference_time_ms=12.3,
+        failure_reason="",
+        point_conf=.5,
+        tolerance_px=3.0,
+    )
+    assert record["candidate_count"] == 1
+    assert record["candidates"][0]["selected_patient"] is True
+    assert record["candidates"][0]["keypoints"][9]["name"] == "left_wrist"
+    assert record["candidates"][0]["keypoints"][9]["outside_roi"] is True
+
+    rendered = render_pose_observation(
+        frame,
+        method_name="yolo_pose",
+        model_name="test.pt",
+        roi=roi,
+        candidates=[candidate],
+        diagnostics=diagnostics,
+        predicted=True,
+        inference_time_ms=12.3,
+        failure_reason="",
+        point_conf=.5,
+        tolerance_px=3.0,
+    )
+    output = tmp_path / "pose.jpg"
+    write_image(output, rendered)
+    assert rendered.shape == frame.shape
+    assert output.stat().st_size > 0
+    sheet = render_comparison_sheet([("sample.rf.hash", np.hstack([rendered, rendered]))])
+    assert sheet.shape[1] == 1536

@@ -156,6 +156,7 @@ class BedExitMethod(FrameMethod):
     def reset(self):
         self.selector.reset()
         self.last = Diagnostics()
+        self.last_candidates: list[Candidate] = []
 
     @abstractmethod
     def candidates(self, frame) -> list[Candidate]:
@@ -169,9 +170,11 @@ class BedExitMethod(FrameMethod):
         if (not isinstance(frame,np.ndarray) or frame.ndim!=3 or frame.shape[2]!=3
                 or frame.dtype!=np.uint8 or frame.size==0):
             self.last = Diagnostics(reason="invalid_frame")
+            self.last_candidates = []
             raise JudgmentUnavailable(self.last.reason)
         self.last = Diagnostics(reason="inference_pending")
-        patient,reason = self.selector.select(self.candidates(frame),frame.shape)
+        self.last_candidates = self.candidates(frame)
+        patient,reason = self.selector.select(self.last_candidates,frame.shape)
         if patient is None:
             self.last = Diagnostics(reason=reason)
             raise JudgmentUnavailable(reason)

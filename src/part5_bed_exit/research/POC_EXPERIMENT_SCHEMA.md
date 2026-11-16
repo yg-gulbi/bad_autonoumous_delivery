@@ -21,4 +21,18 @@
 
 필수 최소 항목인 method, model, dataset/image_id, preprocessing, ROI version, expected Bool, predicted Bool, inference time, failure reason, notes를 모두 포함한다.
 
+## Pose 검수 산출물
+
+`keypoints.jsonl`은 이미지·방법별 한 행이며 다음 원시 추론 근거를 보존한다.
+
+- 전체 pose 후보의 `bbox_xyxy`, 후보 confidence, 선택 환자 여부
+- 모델별 모든 keypoint의 index, pixel `x/y`, confidence
+- 공통 13관절 이름, confidence 임계값 통과 여부, 단일 ROI 이탈 여부
+- 판정 Bool 또는 `null`, diagnostics, 실패 원인, 추론 시간
+- 해당 모델의 시각화 이미지 상대 경로
+
+`yolo_pose/`, `mediapipe_pose/`, `comparison/`의 이미지는 JSONL과 같은 image id를
+사용한다. 시각화는 검수 보조 자료이며 좌표의 원본은 JSONL이다. JPEG 재압축 좌표를
+수치 평가에 다시 사용하지 않는다.
+
 3/5 런타임을 평가할 때는 별도 frame-sequence 결과에 `sequence_id`, `frame_index`, `timestamp`, `history`, `published_bool`을 추가한다. 판단 불가 frame을 `predicted_bool=false`로 기록하지 않는다.

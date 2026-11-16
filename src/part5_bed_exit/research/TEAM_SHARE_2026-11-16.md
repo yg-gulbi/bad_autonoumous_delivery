@@ -35,6 +35,13 @@ Roboflow 20장 정적 POC에서 YOLO Pose는 6/20, MediaPipe Pose는 2/20만 유
 
 주요 실패는 누운 자세의 `incomplete_body_coverage`, `no_person`, 환자 연결 실패와 후보 모호성이다. MediaPipe는 더 빨랐지만 이 표본에서 유효 판정률이 더 낮았다.
 
+### Pose 시각 검수 산출물
+
+`results/pose_mediapipe_roboflow20_v4/`에 모델별 관절 이미지 20장씩, 좌우 비교
+20장, 전체 비교 시트 `pose_comparison_sheet.jpg`, 전체 후보·관절 좌표 40행
+`keypoints.jsonl`을 생성했다. 공통 관절은 ROI 내부 초록, 외부 빨강이며 판단 불가
+사례도 검출된 후보 스켈레톤과 실패 이유를 보존한다. 결과 디렉터리는 Git 제외 대상이다.
+
 ## 대표 3장과 코너케이스
 
 - 이탈: `frame-000217_png.rf.1e5e3fc3b018662cf183eeee102c7036`; 두 방법 `True`

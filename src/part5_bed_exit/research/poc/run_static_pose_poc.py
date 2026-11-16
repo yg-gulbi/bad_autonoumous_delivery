@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import importlib.metadata
+import json
 import platform
 import time
 from collections import Counter
@@ -19,6 +20,12 @@ from part5_bed_exit.methods.bed_exit_core import (
     YoloPoseROI,
 )
 from research.datasets.downloads import save_json, sha256
+from research.poc.pose_visualization import (
+    build_pose_record,
+    render_comparison_sheet,
+    render_pose_observation,
+    write_image,
+)
 
 
 CLASS_NAMES = {0: "bed_exit", 1: "hospital_bed", 2: "in_bed"}
@@ -147,6 +154,8 @@ def run(dataset_root: Path, model_dir: Path, output_dir: Path) -> dict:
     }
     model_load_ms = (time.perf_counter() - load_started) * 1000
     rows = []
+    pose_records = []
+    comparison_items = []
     try:
         warmup_frame = cv2.imread(str(samples[0]["image_path"]), cv2.IMREAD_COLOR)
         if warmup_frame is None:
@@ -161,6 +170,7 @@ def run(dataset_root: Path, model_dir: Path, output_dir: Path) -> dict:
             frame = cv2.imread(str(sample["image_path"]), cv2.IMREAD_COLOR)
             if frame is None:
                 raise ValueError(f"Cannot decode {sample['image_path']}")
+            rendered = {}
             for method_name, method in methods.items():
                 _configure(method, sample)
                 started = time.perf_counter()
@@ -171,6 +181,39 @@ def run(dataset_root: Path, model_dir: Path, output_dir: Path) -> dict:
                 except Exception as exc:
                     failure = method.last.reason if isinstance(exc, JudgmentUnavailable) else f"{type(exc).__name__}: {exc}"
                 elapsed_ms = (time.perf_counter() - started) * 1000
+                visualization_path = Path(method_name) / f"{sample['image_id']}.jpg"
+                annotated = render_pose_observation(
+                    frame,
+                    method_name=method_name,
+                    model_name=MODEL_FILES[method_name],
+                    roi=method.roi,
+                    candidates=method.last_candidates,
+                    diagnostics=method.last,
+                    predicted=predicted,
+                    inference_time_ms=elapsed_ms,
+                    failure_reason=failure,
+                    point_conf=method.point_conf,
+                    tolerance_px=method.tolerance_px,
+                )
+                write_image(output_dir / visualization_path, annotated)
+                rendered[method_name] = annotated
+                pose_record = build_pose_record(
+                    method_name=method_name,
+                    model_name=MODEL_FILES[method_name],
+                    split=sample["split"],
+                    image_id=sample["image_id"],
+                    roi=method.roi,
+                    shape=frame.shape,
+                    candidates=method.last_candidates,
+                    diagnostics=method.last,
+                    predicted=predicted,
+                    inference_time_ms=elapsed_ms,
+                    failure_reason=failure,
+                    point_conf=method.point_conf,
+                    tolerance_px=method.tolerance_px,
+                )
+                pose_record["visualization_path"] = visualization_path.as_posix()
+                pose_records.append(pose_record)
                 rows.append({
                     "method": method_name,
                     "model": MODEL_FILES[method_name],
@@ -190,13 +233,20 @@ def run(dataset_root: Path, model_dir: Path, output_dir: Path) -> dict:
                     "failure_reason": failure,
                     "notes": "empty bed expects no decision" if sample["category"] == "empty_bed" else "class-derived provisional expected bool",
                 })
+            comparison = cv2.hconcat([rendered["yolo_pose"], rendered["mediapipe_pose"]])
+            write_image(output_dir / "comparison" / f"{sample['image_id']}.jpg", comparison)
+            comparison_items.append((sample["image_id"], comparison))
     finally:
         for method in methods.values():
             method.close()
+    write_image(output_dir / "pose_comparison_sheet.jpg", render_comparison_sheet(comparison_items))
     with (output_dir / "results.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS)
         writer.writeheader()
         writer.writerows(rows)
+    with (output_dir / "keypoints.jsonl").open("w", encoding="utf-8") as handle:
+        for record in pose_records:
+            handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
     summary = {
         "status": "complete",
         "dataset_root": str(dataset_root.resolve()),
@@ -210,6 +260,13 @@ def run(dataset_root: Path, model_dir: Path, output_dir: Path) -> dict:
         "weights": {name: {"file": MODEL_FILES[name],
                             "sha256": sha256(model_dir / MODEL_FILES[name])} for name in methods},
         "rows": len(rows),
+        "artifacts": {
+            "keypoints_jsonl": "keypoints.jsonl",
+            "yolo_pose_images": len(samples),
+            "mediapipe_pose_images": len(samples),
+            "comparison_images": len(samples),
+            "comparison_sheet": "pose_comparison_sheet.jpg",
+        },
         "method_summary": {},
         "limitations": [
             "Static images do not validate the runtime 3-of-5 temporal vote.",
