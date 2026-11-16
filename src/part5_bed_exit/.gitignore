@@ -1,9 +1,9 @@
 /models/
+/data/
 /results/
-/research/data/
 /examples/methods.local.json
-/research/templates/testbed.local.json
-/research/notebooks/.ipynb_checkpoints/
+/examples/testbed.local.json
+/notebooks/.ipynb_checkpoints/
 *.task
 *.zip
 *.part

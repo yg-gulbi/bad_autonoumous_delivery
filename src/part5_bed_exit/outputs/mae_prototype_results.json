@@ -1,0 +1,1094 @@
+{
+  "cpu": {
+    "01_uncovered_masked_lower": {
+      "mae_ms": 166.65,
+      "det_plus_vitpose_on_comp": {
+        "model": "mae_base+det+vitpose_b",
+        "bbox_xyxy": [
+          258.2,
+          415.0,
+          796.3,
+          1063.2
+        ],
+        "bbox_wh": [
+          538.1,
+          648.1
+        ],
+        "bbox_conf": 0.7705,
+        "bbox_center_in_roi": true,
+        "bbox_outside_pct": 0.0,
+        "kp_ge_03": 13,
+        "kp_ge_05": 13,
+        "upper_ge_03": 11,
+        "upper_ge_05": 11,
+        "lower_ge_03": 2,
+        "lower_ge_05": 2,
+        "mean_conf_all": 0.649,
+        "mean_conf_upper": 0.871,
+        "mean_conf_lower": 0.241,
+        "outside_kps_03": [],
+        "timings_ms": {
+          "mae_ms": 166.65,
+          "det_ms": 23.56,
+          "vitpose_ms": 156.53
+        },
+        "keypoints": {
+          "nose": {
+            "x": 531.2,
+            "y": 577.3,
+            "conf": 0.973,
+            "in_roi": true
+          },
+          "left_eye": {
+            "x": 551.5,
+            "y": 538.4,
+            "conf": 0.965,
+            "in_roi": true
+          },
+          "right_eye": {
+            "x": 494.3,
+            "y": 555.4,
+            "conf": 0.988,
+            "in_roi": true
+          },
+          "left_ear": {
+            "x": 599.7,
+            "y": 535.5,
+            "conf": 0.931,
+            "in_roi": true
+          },
+          "right_ear": {
+            "x": 460.5,
+            "y": 576.3,
+            "conf": 1.002,
+            "in_roi": true
+          },
+          "left_shoulder": {
+            "x": 681.4,
+            "y": 660.8,
+            "conf": 0.705,
+            "in_roi": true
+          },
+          "right_shoulder": {
+            "x": 441.2,
+            "y": 667.1,
+            "conf": 0.8,
+            "in_roi": true
+          },
+          "left_elbow": {
+            "x": 736.5,
+            "y": 867.8,
+            "conf": 0.855,
+            "in_roi": true
+          },
+          "right_elbow": {
+            "x": 284.3,
+            "y": 481.3,
+            "conf": 0.861,
+            "in_roi": true
+          },
+          "left_wrist": {
+            "x": 768.2,
+            "y": 1104.5,
+            "conf": 0.825,
+            "in_roi": true
+          },
+          "right_wrist": {
+            "x": 430.6,
+            "y": 509.4,
+            "conf": 0.678,
+            "in_roi": true
+          },
+          "left_hip": {
+            "x": 651.1,
+            "y": 1116.1,
+            "conf": 0.66,
+            "in_roi": true
+          },
+          "right_hip": {
+            "x": 454.4,
+            "y": 1124.4,
+            "conf": 0.636,
+            "in_roi": true
+          },
+          "left_knee": {
+            "x": 844.1,
+            "y": 1195.1,
+            "conf": 0.03,
+            "in_roi": true
+          },
+          "right_knee": {
+            "x": 469.5,
+            "y": 513.1,
+            "conf": 0.025,
+            "in_roi": true
+          },
+          "left_ankle": {
+            "x": 697.2,
+            "y": 1195.5,
+            "conf": 0.053,
+            "in_roi": true
+          },
+          "right_ankle": {
+            "x": 397.9,
+            "y": 1194.7,
+            "conf": 0.044,
+            "in_roi": true
+          }
+        }
+      },
+      "full_roi_vitpose_on_comp": {
+        "model": "mae_base+roi+vitpose_b",
+        "bbox_xyxy": [
+          135.7,
+          371.6,
+          972.7,
+          1936.4
+        ],
+        "bbox_wh": [
+          836.9,
+          1564.8
+        ],
+        "bbox_conf": 1.0,
+        "bbox_center_in_roi": true,
+        "bbox_outside_pct": 0.78,
+        "kp_ge_03": 17,
+        "kp_ge_05": 17,
+        "upper_ge_03": 11,
+        "upper_ge_05": 11,
+        "lower_ge_03": 6,
+        "lower_ge_05": 6,
+        "mean_conf_all": 0.912,
+        "mean_conf_upper": 0.967,
+        "mean_conf_lower": 0.811,
+        "outside_kps_03": [],
+        "timings_ms": {
+          "mae_ms": 166.65,
+          "vitpose_ms": 164.8
+        },
+        "keypoints": {
+          "nose": {
+            "x": 527.2,
+            "y": 568.9,
+            "conf": 0.951,
+            "in_roi": true
+          },
+          "left_eye": {
+            "x": 552.9,
+            "y": 536.9,
+            "conf": 0.955,
+            "in_roi": true
+          },
+          "right_eye": {
+            "x": 492.1,
+            "y": 545.2,
+            "conf": 1.015,
+            "in_roi": true
+          },
+          "left_ear": {
+            "x": 605.0,
+            "y": 541.4,
+            "conf": 0.955,
+            "in_roi": true
+          },
+          "right_ear": {
+            "x": 454.3,
+            "y": 568.3,
+            "conf": 0.998,
+            "in_roi": true
+          },
+          "left_shoulder": {
+            "x": 694.6,
+            "y": 669.7,
+            "conf": 0.981,
+            "in_roi": true
+          },
+          "right_shoulder": {
+            "x": 431.1,
+            "y": 665.5,
+            "conf": 0.939,
+            "in_roi": true
+          },
+          "left_elbow": {
+            "x": 734.4,
+            "y": 893.3,
+            "conf": 1.016,
+            "in_roi": true
+          },
+          "right_elbow": {
+            "x": 279.4,
+            "y": 463.6,
+            "conf": 0.941,
+            "in_roi": true
+          },
+          "left_wrist": {
+            "x": 773.9,
+            "y": 1122.0,
+            "conf": 0.928,
+            "in_roi": true
+          },
+          "right_wrist": {
+            "x": 438.7,
+            "y": 501.6,
+            "conf": 0.954,
+            "in_roi": true
+          },
+          "left_hip": {
+            "x": 647.0,
+            "y": 1151.9,
+            "conf": 0.87,
+            "in_roi": true
+          },
+          "right_hip": {
+            "x": 447.1,
+            "y": 1153.2,
+            "conf": 0.916,
+            "in_roi": true
+          },
+          "left_knee": {
+            "x": 696.1,
+            "y": 1513.3,
+            "conf": 0.83,
+            "in_roi": true
+          },
+          "right_knee": {
+            "x": 413.0,
+            "y": 1502.4,
+            "conf": 0.817,
+            "in_roi": true
+          },
+          "left_ankle": {
+            "x": 712.4,
+            "y": 1835.3,
+            "conf": 0.702,
+            "in_roi": true
+          },
+          "right_ankle": {
+            "x": 370.4,
+            "y": 1821.7,
+            "conf": 0.732,
+            "in_roi": true
+          }
+        }
+      }
+    },
+    "02_covered_arm_out_slp": {
+      "mae_ms": 125.29,
+      "det_plus_vitpose_on_comp": {
+        "model": "mae_base+det+vitpose_b",
+        "bbox_xyxy": [
+          260.0,
+          418.4,
+          758.6,
+          648.4
+        ],
+        "bbox_wh": [
+          498.5,
+          229.9
+        ],
+        "bbox_conf": 0.5862,
+        "bbox_center_in_roi": true,
+        "bbox_outside_pct": 0.0,
+        "kp_ge_03": 11,
+        "kp_ge_05": 10,
+        "upper_ge_03": 10,
+        "upper_ge_05": 10,
+        "lower_ge_03": 1,
+        "lower_ge_05": 0,
+        "mean_conf_all": 0.562,
+        "mean_conf_upper": 0.791,
+        "mean_conf_lower": 0.141,
+        "outside_kps_03": [],
+        "timings_ms": {
+          "mae_ms": 125.29,
+          "det_ms": 24.1,
+          "vitpose_ms": 147.88
+        },
+        "keypoints": {
+          "nose": {
+            "x": 519.5,
+            "y": 573.4,
+            "conf": 0.968,
+            "in_roi": true
+          },
+          "left_eye": {
+            "x": 543.6,
+            "y": 534.4,
+            "conf": 0.95,
+            "in_roi": true
+          },
+          "right_eye": {
+            "x": 485.6,
+            "y": 550.3,
+            "conf": 0.986,
+            "in_roi": true
+          },
+          "left_ear": {
+            "x": 596.8,
+            "y": 535.8,
+            "conf": 0.996,
+            "in_roi": true
+          },
+          "right_ear": {
+            "x": 454.6,
+            "y": 569.8,
+            "conf": 0.927,
+            "in_roi": true
+          },
+          "left_shoulder": {
+            "x": 682.1,
+            "y": 639.8,
+            "conf": 0.722,
+            "in_roi": true
+          },
+          "right_shoulder": {
+            "x": 424.7,
+            "y": 635.9,
+            "conf": 0.763,
+            "in_roi": true
+          },
+          "left_elbow": {
+            "x": 701.6,
+            "y": 601.6,
+            "conf": 0.503,
+            "in_roi": true
+          },
+          "right_elbow": {
+            "x": 283.6,
+            "y": 475.9,
+            "conf": 0.872,
+            "in_roi": true
+          },
+          "left_wrist": {
+            "x": 606.6,
+            "y": 642.6,
+            "conf": 0.253,
+            "in_roi": true
+          },
+          "right_wrist": {
+            "x": 427.7,
+            "y": 503.8,
+            "conf": 0.76,
+            "in_roi": true
+          },
+          "left_hip": {
+            "x": 637.1,
+            "y": 858.4,
+            "conf": 0.329,
+            "in_roi": true
+          },
+          "right_hip": {
+            "x": 477.3,
+            "y": 862.2,
+            "conf": 0.273,
+            "in_roi": true
+          },
+          "left_knee": {
+            "x": 694.9,
+            "y": 590.6,
+            "conf": 0.105,
+            "in_roi": true
+          },
+          "right_knee": {
+            "x": 378.5,
+            "y": 835.2,
+            "conf": 0.049,
+            "in_roi": true
+          },
+          "left_ankle": {
+            "x": 455.8,
+            "y": 513.4,
+            "conf": 0.047,
+            "in_roi": true
+          },
+          "right_ankle": {
+            "x": 433.4,
+            "y": 463.3,
+            "conf": 0.044,
+            "in_roi": true
+          }
+        }
+      },
+      "full_roi_vitpose_on_comp": {
+        "model": "mae_base+roi+vitpose_b",
+        "bbox_xyxy": [
+          122.3,
+          352.3,
+          1051.8,
+          2069.9
+        ],
+        "bbox_wh": [
+          929.5,
+          1717.6
+        ],
+        "bbox_conf": 1.0,
+        "bbox_center_in_roi": true,
+        "bbox_outside_pct": 3.87,
+        "kp_ge_03": 15,
+        "kp_ge_05": 15,
+        "upper_ge_03": 9,
+        "upper_ge_05": 9,
+        "lower_ge_03": 6,
+        "lower_ge_05": 6,
+        "mean_conf_all": 0.732,
+        "mean_conf_upper": 0.794,
+        "mean_conf_lower": 0.62,
+        "outside_kps_03": [],
+        "timings_ms": {
+          "mae_ms": 125.29,
+          "vitpose_ms": 156.02
+        },
+        "keypoints": {
+          "nose": {
+            "x": 513.1,
+            "y": 559.1,
+            "conf": 0.976,
+            "in_roi": true
+          },
+          "left_eye": {
+            "x": 541.3,
+            "y": 530.9,
+            "conf": 0.992,
+            "in_roi": true
+          },
+          "right_eye": {
+            "x": 484.8,
+            "y": 537.9,
+            "conf": 1.001,
+            "in_roi": true
+          },
+          "left_ear": {
+            "x": 604.9,
+            "y": 542.9,
+            "conf": 1.01,
+            "in_roi": true
+          },
+          "right_ear": {
+            "x": 447.3,
+            "y": 558.8,
+            "conf": 0.936,
+            "in_roi": true
+          },
+          "left_shoulder": {
+            "x": 695.0,
+            "y": 679.8,
+            "conf": 0.843,
+            "in_roi": true
+          },
+          "right_shoulder": {
+            "x": 421.6,
+            "y": 656.4,
+            "conf": 0.829,
+            "in_roi": true
+          },
+          "left_elbow": {
+            "x": 967.5,
+            "y": 633.4,
+            "conf": 0.225,
+            "in_roi": true
+          },
+          "right_elbow": {
+            "x": 268.3,
+            "y": 468.4,
+            "conf": 0.841,
+            "in_roi": true
+          },
+          "left_wrist": {
+            "x": 414.1,
+            "y": 502.9,
+            "conf": 0.288,
+            "in_roi": true
+          },
+          "right_wrist": {
+            "x": 418.6,
+            "y": 499.3,
+            "conf": 0.792,
+            "in_roi": true
+          },
+          "left_hip": {
+            "x": 659.7,
+            "y": 1154.8,
+            "conf": 0.756,
+            "in_roi": true
+          },
+          "right_hip": {
+            "x": 470.2,
+            "y": 1140.7,
+            "conf": 0.699,
+            "in_roi": true
+          },
+          "left_knee": {
+            "x": 688.9,
+            "y": 1458.1,
+            "conf": 0.589,
+            "in_roi": true
+          },
+          "right_knee": {
+            "x": 465.8,
+            "y": 1441.4,
+            "conf": 0.624,
+            "in_roi": true
+          },
+          "left_ankle": {
+            "x": 741.8,
+            "y": 1835.7,
+            "conf": 0.505,
+            "in_roi": true
+          },
+          "right_ankle": {
+            "x": 474.3,
+            "y": 1828.7,
+            "conf": 0.545,
+            "in_roi": true
+          }
+        }
+      }
+    }
+  },
+  "cuda": {
+    "01_uncovered_masked_lower": {
+      "mae_ms": 8.66,
+      "det_plus_vitpose_on_comp": {
+        "model": "mae_base+det+vitpose_b",
+        "bbox_xyxy": [
+          258.2,
+          415.1,
+          796.3,
+          1063.2
+        ],
+        "bbox_wh": [
+          538.1,
+          648.1
+        ],
+        "bbox_conf": 0.7703,
+        "bbox_center_in_roi": true,
+        "bbox_outside_pct": 0.0,
+        "kp_ge_03": 13,
+        "kp_ge_05": 13,
+        "upper_ge_03": 11,
+        "upper_ge_05": 11,
+        "lower_ge_03": 2,
+        "lower_ge_05": 2,
+        "mean_conf_all": 0.649,
+        "mean_conf_upper": 0.871,
+        "mean_conf_lower": 0.242,
+        "outside_kps_03": [],
+        "timings_ms": {
+          "mae_ms": 8.66,
+          "det_ms": 6.29,
+          "vitpose_ms": 16.12
+        },
+        "keypoints": {
+          "nose": {
+            "x": 531.3,
+            "y": 577.3,
+            "conf": 0.973,
+            "in_roi": true
+          },
+          "left_eye": {
+            "x": 551.5,
+            "y": 538.3,
+            "conf": 0.965,
+            "in_roi": true
+          },
+          "right_eye": {
+            "x": 494.3,
+            "y": 555.3,
+            "conf": 0.988,
+            "in_roi": true
+          },
+          "left_ear": {
+            "x": 599.7,
+            "y": 535.4,
+            "conf": 0.932,
+            "in_roi": true
+          },
+          "right_ear": {
+            "x": 460.5,
+            "y": 576.3,
+            "conf": 1.002,
+            "in_roi": true
+          },
+          "left_shoulder": {
+            "x": 681.4,
+            "y": 660.8,
+            "conf": 0.705,
+            "in_roi": true
+          },
+          "right_shoulder": {
+            "x": 441.2,
+            "y": 667.0,
+            "conf": 0.801,
+            "in_roi": true
+          },
+          "left_elbow": {
+            "x": 736.4,
+            "y": 867.8,
+            "conf": 0.854,
+            "in_roi": true
+          },
+          "right_elbow": {
+            "x": 284.2,
+            "y": 481.2,
+            "conf": 0.86,
+            "in_roi": true
+          },
+          "left_wrist": {
+            "x": 768.2,
+            "y": 1104.5,
+            "conf": 0.823,
+            "in_roi": true
+          },
+          "right_wrist": {
+            "x": 430.6,
+            "y": 509.4,
+            "conf": 0.678,
+            "in_roi": true
+          },
+          "left_hip": {
+            "x": 651.1,
+            "y": 1116.1,
+            "conf": 0.661,
+            "in_roi": true
+          },
+          "right_hip": {
+            "x": 454.3,
+            "y": 1123.8,
+            "conf": 0.636,
+            "in_roi": true
+          },
+          "left_knee": {
+            "x": 844.0,
+            "y": 1195.1,
+            "conf": 0.03,
+            "in_roi": true
+          },
+          "right_knee": {
+            "x": 469.5,
+            "y": 513.1,
+            "conf": 0.025,
+            "in_roi": true
+          },
+          "left_ankle": {
+            "x": 697.1,
+            "y": 1195.5,
+            "conf": 0.054,
+            "in_roi": true
+          },
+          "right_ankle": {
+            "x": 398.2,
+            "y": 1194.7,
+            "conf": 0.044,
+            "in_roi": true
+          }
+        }
+      },
+      "full_roi_vitpose_on_comp": {
+        "model": "mae_base+roi+vitpose_b",
+        "bbox_xyxy": [
+          135.7,
+          371.6,
+          972.7,
+          1936.4
+        ],
+        "bbox_wh": [
+          836.9,
+          1564.8
+        ],
+        "bbox_conf": 1.0,
+        "bbox_center_in_roi": true,
+        "bbox_outside_pct": 0.78,
+        "kp_ge_03": 17,
+        "kp_ge_05": 17,
+        "upper_ge_03": 11,
+        "upper_ge_05": 11,
+        "lower_ge_03": 6,
+        "lower_ge_05": 6,
+        "mean_conf_all": 0.912,
+        "mean_conf_upper": 0.967,
+        "mean_conf_lower": 0.812,
+        "outside_kps_03": [],
+        "timings_ms": {
+          "mae_ms": 8.66,
+          "vitpose_ms": 15.79
+        },
+        "keypoints": {
+          "nose": {
+            "x": 527.3,
+            "y": 568.9,
+            "conf": 0.951,
+            "in_roi": true
+          },
+          "left_eye": {
+            "x": 553.0,
+            "y": 536.9,
+            "conf": 0.955,
+            "in_roi": true
+          },
+          "right_eye": {
+            "x": 492.1,
+            "y": 545.2,
+            "conf": 1.014,
+            "in_roi": true
+          },
+          "left_ear": {
+            "x": 605.0,
+            "y": 541.4,
+            "conf": 0.955,
+            "in_roi": true
+          },
+          "right_ear": {
+            "x": 454.3,
+            "y": 568.3,
+            "conf": 0.998,
+            "in_roi": true
+          },
+          "left_shoulder": {
+            "x": 694.6,
+            "y": 669.7,
+            "conf": 0.981,
+            "in_roi": true
+          },
+          "right_shoulder": {
+            "x": 431.0,
+            "y": 665.5,
+            "conf": 0.939,
+            "in_roi": true
+          },
+          "left_elbow": {
+            "x": 734.4,
+            "y": 893.2,
+            "conf": 1.016,
+            "in_roi": true
+          },
+          "right_elbow": {
+            "x": 279.4,
+            "y": 463.6,
+            "conf": 0.941,
+            "in_roi": true
+          },
+          "left_wrist": {
+            "x": 773.9,
+            "y": 1121.9,
+            "conf": 0.928,
+            "in_roi": true
+          },
+          "right_wrist": {
+            "x": 438.7,
+            "y": 501.5,
+            "conf": 0.954,
+            "in_roi": true
+          },
+          "left_hip": {
+            "x": 647.1,
+            "y": 1151.9,
+            "conf": 0.87,
+            "in_roi": true
+          },
+          "right_hip": {
+            "x": 447.1,
+            "y": 1153.3,
+            "conf": 0.916,
+            "in_roi": true
+          },
+          "left_knee": {
+            "x": 695.6,
+            "y": 1513.2,
+            "conf": 0.829,
+            "in_roi": true
+          },
+          "right_knee": {
+            "x": 413.0,
+            "y": 1502.2,
+            "conf": 0.816,
+            "in_roi": true
+          },
+          "left_ankle": {
+            "x": 710.1,
+            "y": 1833.7,
+            "conf": 0.707,
+            "in_roi": true
+          },
+          "right_ankle": {
+            "x": 370.4,
+            "y": 1821.3,
+            "conf": 0.732,
+            "in_roi": true
+          }
+        }
+      }
+    },
+    "02_covered_arm_out_slp": {
+      "mae_ms": 6.81,
+      "det_plus_vitpose_on_comp": {
+        "model": "mae_base+det+vitpose_b",
+        "bbox_xyxy": [
+          260.0,
+          418.4,
+          758.5,
+          648.4
+        ],
+        "bbox_wh": [
+          498.5,
+          230.0
+        ],
+        "bbox_conf": 0.5863,
+        "bbox_center_in_roi": true,
+        "bbox_outside_pct": 0.0,
+        "kp_ge_03": 11,
+        "kp_ge_05": 10,
+        "upper_ge_03": 10,
+        "upper_ge_05": 10,
+        "lower_ge_03": 1,
+        "lower_ge_05": 0,
+        "mean_conf_all": 0.561,
+        "mean_conf_upper": 0.791,
+        "mean_conf_lower": 0.14,
+        "outside_kps_03": [],
+        "timings_ms": {
+          "mae_ms": 6.81,
+          "det_ms": 6.76,
+          "vitpose_ms": 16.73
+        },
+        "keypoints": {
+          "nose": {
+            "x": 519.5,
+            "y": 573.4,
+            "conf": 0.968,
+            "in_roi": true
+          },
+          "left_eye": {
+            "x": 543.6,
+            "y": 534.4,
+            "conf": 0.95,
+            "in_roi": true
+          },
+          "right_eye": {
+            "x": 485.6,
+            "y": 550.3,
+            "conf": 0.986,
+            "in_roi": true
+          },
+          "left_ear": {
+            "x": 596.8,
+            "y": 535.8,
+            "conf": 0.995,
+            "in_roi": true
+          },
+          "right_ear": {
+            "x": 454.6,
+            "y": 569.7,
+            "conf": 0.927,
+            "in_roi": true
+          },
+          "left_shoulder": {
+            "x": 682.1,
+            "y": 640.1,
+            "conf": 0.723,
+            "in_roi": true
+          },
+          "right_shoulder": {
+            "x": 424.5,
+            "y": 636.0,
+            "conf": 0.763,
+            "in_roi": true
+          },
+          "left_elbow": {
+            "x": 701.6,
+            "y": 601.7,
+            "conf": 0.504,
+            "in_roi": true
+          },
+          "right_elbow": {
+            "x": 283.6,
+            "y": 475.9,
+            "conf": 0.873,
+            "in_roi": true
+          },
+          "left_wrist": {
+            "x": 606.7,
+            "y": 642.8,
+            "conf": 0.252,
+            "in_roi": true
+          },
+          "right_wrist": {
+            "x": 427.8,
+            "y": 503.9,
+            "conf": 0.756,
+            "in_roi": true
+          },
+          "left_hip": {
+            "x": 636.9,
+            "y": 859.0,
+            "conf": 0.329,
+            "in_roi": true
+          },
+          "right_hip": {
+            "x": 477.1,
+            "y": 863.0,
+            "conf": 0.272,
+            "in_roi": true
+          },
+          "left_knee": {
+            "x": 694.8,
+            "y": 590.7,
+            "conf": 0.104,
+            "in_roi": true
+          },
+          "right_knee": {
+            "x": 378.4,
+            "y": 835.3,
+            "conf": 0.048,
+            "in_roi": true
+          },
+          "left_ankle": {
+            "x": 455.8,
+            "y": 513.5,
+            "conf": 0.047,
+            "in_roi": true
+          },
+          "right_ankle": {
+            "x": 433.5,
+            "y": 463.2,
+            "conf": 0.043,
+            "in_roi": true
+          }
+        }
+      },
+      "full_roi_vitpose_on_comp": {
+        "model": "mae_base+roi+vitpose_b",
+        "bbox_xyxy": [
+          122.3,
+          352.3,
+          1051.8,
+          2069.9
+        ],
+        "bbox_wh": [
+          929.5,
+          1717.6
+        ],
+        "bbox_conf": 1.0,
+        "bbox_center_in_roi": true,
+        "bbox_outside_pct": 3.87,
+        "kp_ge_03": 15,
+        "kp_ge_05": 15,
+        "upper_ge_03": 9,
+        "upper_ge_05": 9,
+        "lower_ge_03": 6,
+        "lower_ge_05": 6,
+        "mean_conf_all": 0.733,
+        "mean_conf_upper": 0.794,
+        "mean_conf_lower": 0.62,
+        "outside_kps_03": [],
+        "timings_ms": {
+          "mae_ms": 6.81,
+          "vitpose_ms": 15.28
+        },
+        "keypoints": {
+          "nose": {
+            "x": 513.1,
+            "y": 559.1,
+            "conf": 0.976,
+            "in_roi": true
+          },
+          "left_eye": {
+            "x": 541.3,
+            "y": 530.9,
+            "conf": 0.992,
+            "in_roi": true
+          },
+          "right_eye": {
+            "x": 484.8,
+            "y": 537.9,
+            "conf": 1.001,
+            "in_roi": true
+          },
+          "left_ear": {
+            "x": 604.9,
+            "y": 542.9,
+            "conf": 1.01,
+            "in_roi": true
+          },
+          "right_ear": {
+            "x": 447.3,
+            "y": 558.8,
+            "conf": 0.936,
+            "in_roi": true
+          },
+          "left_shoulder": {
+            "x": 695.2,
+            "y": 679.7,
+            "conf": 0.844,
+            "in_roi": true
+          },
+          "right_shoulder": {
+            "x": 421.6,
+            "y": 656.3,
+            "conf": 0.829,
+            "in_roi": true
+          },
+          "left_elbow": {
+            "x": 967.4,
+            "y": 633.4,
+            "conf": 0.227,
+            "in_roi": true
+          },
+          "right_elbow": {
+            "x": 268.3,
+            "y": 468.4,
+            "conf": 0.841,
+            "in_roi": true
+          },
+          "left_wrist": {
+            "x": 414.0,
+            "y": 502.9,
+            "conf": 0.288,
+            "in_roi": true
+          },
+          "right_wrist": {
+            "x": 418.6,
+            "y": 499.3,
+            "conf": 0.793,
+            "in_roi": true
+          },
+          "left_hip": {
+            "x": 659.7,
+            "y": 1154.6,
+            "conf": 0.756,
+            "in_roi": true
+          },
+          "right_hip": {
+            "x": 470.2,
+            "y": 1140.5,
+            "conf": 0.699,
+            "in_roi": true
+          },
+          "left_knee": {
+            "x": 688.8,
+            "y": 1458.2,
+            "conf": 0.591,
+            "in_roi": true
+          },
+          "right_knee": {
+            "x": 465.9,
+            "y": 1441.4,
+            "conf": 0.624,
+            "in_roi": true
+          },
+          "left_ankle": {
+            "x": 741.7,
+            "y": 1835.8,
+            "conf": 0.505,
+            "in_roi": true
+          },
+          "right_ankle": {
+            "x": 477.9,
+            "y": 1831.3,
+            "conf": 0.546,
+            "in_roi": true
+          }
+        }
+      }
+    }
+  }
+}

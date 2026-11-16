@@ -1,0 +1,10 @@
+file_name,source_clip,frame_index,phase_note,original_clip_description,resolution
+s1_adl_04_sleep_to_sit_f025.jpg,Subject 1/ADL/04.mp4,25,SAFE (lying),From sleeping left side on the bed to sitting on the bed,1280x720
+s1_adl_04_sleep_to_sit_f068.jpg,Subject 1/ADL/04.mp4,68,TRANSITION (sitting up),From sleeping left side on the bed to sitting on the bed,1280x720
+s1_adl_04_sleep_to_sit_f110.jpg,Subject 1/ADL/04.mp4,110,EDGE_SITTING (legs off bed),From sleeping left side on the bed to sitting on the bed,1280x720
+s3_adl_03_get_up_from_bed_f044.jpg,Subject 3/ADL/03.mp4,44,SAFE (lying),Getting up from the sleeping position from the bed; walking,1280x720
+s3_adl_03_get_up_from_bed_f118.jpg,Subject 3/ADL/03.mp4,118,EDGE_SITTING (getting up),Getting up from the sleeping position from the bed; walking,1280x720
+s3_adl_03_get_up_from_bed_f266.jpg,Subject 3/ADL/03.mp4,266,EXIT (standing/walking away),Getting up from the sleeping position from the bed; walking,1280x720
+s2_fall_11_night_fall_from_bed_f063.jpg,Subject 2/Fall/11.mp4,63,"PRE_FALL (on bed, night)",Night: Falling from bed to ground,1280x720
+s2_fall_11_night_fall_from_bed_f143.jpg,Subject 2/Fall/11.mp4,143,"EXIT / FALLEN (on floor, night)",Night: Falling from bed to ground,1280x720
+s3_adl_12_night_bed_stand_f144.jpg,Subject 3/ADL/12.mp4,144,EXIT (standing at night),Night: Changing pages while sitting on bed; standing,1280x720
