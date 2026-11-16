@@ -31,3 +31,11 @@
 - #20: 병상 box가 이미지 하단까지 닿는 ROI annotation outlier
 
 전체 20장 표와 재현 명령은 `src/part5_bed_exit/research/ROBOFLOW_20_IMAGE_AUDIT.md`에 기록했다. 검수 시트는 원본 데이터와 함께 Git 제외 상태로 유지한다.
+
+## 5. 최종 평가 정정
+
+- 원본과 검수 시트를 다시 확인한 결과 #13~#20은 실제 빈 병상이다.
+- 이 8장의 두 모델 `no_person`은 사람 유무 인식 평가에서는 8/8 정답으로 집계한다.
+- 안전한 공개 Bool 계약에서는 빈 병상과 환자 소실을 단일 프레임으로 구분할 수 없으므로
+  `no_person`을 `False`로 발행하지 않고 기존 `JudgmentUnavailable` 처리를 유지한다.
+- 재계산 결과는 `11_최종_POC_재평가_및_학습후보_결정.md`에 기록했다.
