@@ -1,0 +1,14 @@
+path: .
+train: images
+val: images
+nc: 9
+names:
+  0: squat
+  1: run
+  2: sit
+  3: stretch
+  4: walk
+  5: jump
+  6: bendover
+  7: stand
+  8: lying

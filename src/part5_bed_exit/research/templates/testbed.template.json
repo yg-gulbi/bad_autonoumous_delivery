@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "policy": "any_body",
+  "gate": {"k": 3, "n": 5, "rearm_safe_frames": 5},
+  "method_settings": {
+    "outside_fraction": 0.05,
+    "policy": "any_body",
+    "point_conf": 0.5,
+    "tolerance_px": 3.0
+  },
+  "clips": [
+    {
+      "clip_id": "clip001",
+      "subject_id": "EDIT_ME",
+      "session_id": "EDIT_ME",
+      "split": "test",
+      "video": "data/own/raw/clip001.mp4",
+      "video_sha256": "EDIT_ME",
+      "duration_s": 10.0,
+      "labels_reviewed": false,
+      "roi_reviewed": false,
+      "roi_version": "EDIT_ME",
+      "roi": [[0.1,0.1],[0.9,0.1],[0.9,0.9],[0.1,0.9]],
+      "initial_patient_bbox": null,
+      "patient_present_intervals_s": [[0.0,10.0]],
+      "conditions": {
+        "case_id": "C08",
+        "blanket": "none",
+        "lighting": "normal",
+        "bed_motion": "stationary",
+        "source_domain": "own_rgb",
+        "authorization": "unknown"
+      },
+      "events": [
+        {"event_id":"EDIT_ME","risk_start_s":3.0,"boundary_cross_s":4.0,"end_s":6.0}
+      ],
+      "notes": "All coordinates and timestamps are EXAMPLES, not reviewed ground truth. Empty events=[] only for reviewed negative clips."
+    }
+  ]
+}

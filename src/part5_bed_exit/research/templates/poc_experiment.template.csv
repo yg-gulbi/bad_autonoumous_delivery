@@ -1,0 +1,1 @@
+method,model,dataset,split,image_id,image_sha256,preprocessing,roi_version,roi_source,raw_classes,expected_bool,predicted_bool,inference_time_ms,pose_detected,decision_reason,failure_reason,notes

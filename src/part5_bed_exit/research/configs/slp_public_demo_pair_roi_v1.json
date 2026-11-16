@@ -1,0 +1,13 @@
+{
+  "roi_reviewed": true,
+  "roi_version": "slp_public_demo_visible_mattress_v1",
+  "roi_source": "manually traced visible mattress boundary shared by the two SLP public demo crops",
+  "deployment_approved": false,
+  "roi": [
+    [0.133333, 0.092593],
+    [0.875, 0.111111],
+    [0.891667, 0.925926],
+    [0.141667, 0.916667]
+  ],
+  "notes": "POC-only crop coordinates. The source images contain ground-truth overlays and are not deployment-camera frames."
+}

@@ -1,15 +1,19 @@
+from glob import glob
 from setuptools import find_packages, setup
 
 setup(
     name='part5_bed_exit',
     version='0.1.0',
-    packages=find_packages(exclude=['test', 'test.*']),
+    packages=find_packages(exclude=['test', 'test.*', 'research', 'research.*']),
     package_data={'part5_bed_exit': ['methods/*.json']},
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/part5_bed_exit']),
         ('share/part5_bed_exit', ['package.xml']),
+        ('share/part5_bed_exit/examples', glob('examples/*.template.json')),
+        ('share/part5_bed_exit', ['USAGE.md', 'requirements.txt']),
     ],
     install_requires=['setuptools'],
+    extras_require={'test': ['pytest']},
     zip_safe=True,
     maintainer='Project contributors',
     maintainer_email='maintainer@example.com',

@@ -1,5 +1,6 @@
 """Webcam capture, replaceable detector object, and per-frame ROS output."""
 
+import math
 import os
 
 import cv2
@@ -30,8 +31,9 @@ class BedExitNode(Node):
         self.detector = None
         self.show = False
 
-        # ROS 2 실행 파라미터 선언 (기본값으로 GPU 세그멘테이션 + 외장 USB 웹캠 우선 선택)
+        # 기본 Segmentation 실행을 제공하면서 다른 클래스/내장 프리셋도 선택할 수 있게 한다.
         self.declare_parameter('method', DEFAULT_METHOD)
+        self.declare_parameter('method_config', '')
         self.declare_parameter('output_topic', '/patient/bed_exit')
         self.declare_parameter('camera_index', default_camera_index())
         self.declare_parameter('capture_fps', 30.0)
@@ -46,14 +48,14 @@ class BedExitNode(Node):
         self.show = bool(self.get_parameter('show').value)
 
         # 직접 detector 객체를 전달받지 않은 경우에만 method 파라미터 경로를 필수로 요구한다.
-        if not topic or fps <= 0 or (detector is None and not method_path):
+        if not topic or not math.isfinite(fps) or fps <= 0 or (detector is None and not method_path):
             raise ValueError(
                 'Set method=module:ClassOrObject, output_topic, and capture_fps > 0'
             )
 
         # 클래스/객체 경로 로딩 또는 코드 직접 주입 객체를 검증해 self.detector로 고정한다.
         self.detector = (
-            load_bed_exit_method(method_path)
+            load_bed_exit_method(method_path, self.get_parameter('method_config').value)
             if detector is None
             else validate_bed_exit_method(detector)
         )
@@ -111,9 +113,12 @@ class BedExitNode(Node):
 
     def process_frame(self):
         # 프레임 수신 실패 시 거짓 정상(False) 발행을 막기 위해 이력을 초기화하고 발행을 건너뛴다.
-        ok, frame = self.capture.read()
-        if not ok:
-            self.get_logger().error('Webcam read failed; no frame decision published')
+        try:
+            ok, frame = self.capture.read()
+            if not ok or frame is None:
+                raise RuntimeError('Webcam read failed')
+        except Exception as exc:
+            self.get_logger().error(f'Webcam read failed; no frame decision published: {exc}')
             self.state = BedExitState()
             return
         try:
@@ -123,10 +128,14 @@ class BedExitNode(Node):
             # 판단 메서드 예외 또는 비-bool 반환 시에도 동일하게 5프레임 이력을 초기화한다.
             self.state = BedExitState()
             self.get_logger().error(f'Judgment failed; history reset: {exc}')
-            self._render_preview(frame, None)
+            render_preview = getattr(self, '_render_preview', None)
+            if callable(render_preview):
+                render_preview(frame, None)
             return
         self.publisher.publish(Bool(data=unsafe))
-        self._render_preview(frame, unsafe)
+        render_preview = getattr(self, '_render_preview', None)
+        if callable(render_preview):
+            render_preview(frame, unsafe)
 
     def _release_capture(self):
         if self.capture is not None:

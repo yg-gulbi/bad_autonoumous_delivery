@@ -1,0 +1,17 @@
+{
+  "roi_version": "slp_miccai19_subject00004_cover2_mattress_v1",
+  "roi_source": "manually traced visible mattress boundary across the 45 public RGB cover2 frames",
+  "roi_reviewed": true,
+  "deployment_approved": false,
+  "roi": [
+    [0.176, 0.171],
+    [0.838, 0.160],
+    [0.868, 0.923],
+    [0.151, 0.923]
+  ],
+  "notes": [
+    "Research-only ROI for one fixed overhead SLP camera and subject.",
+    "The 45 public RGB frames do not include bed-exit labels or public pose labels.",
+    "Do not reuse this polygon for the deployment camera."
+  ]
+}

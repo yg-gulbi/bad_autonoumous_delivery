@@ -1,4 +1,4 @@
-"""Shared ROI, patient tracking, device resolution, and YOLO base utilities for Part 5."""
+"""Shared ROI, tracking, rendering, device, and YOLO utilities for Part 5."""
 
 from __future__ import annotations
 
@@ -16,17 +16,37 @@ from part5_bed_exit.bed_exit_method import BedExitMethod
 
 DEFAULT_ROI_PATH = Path(__file__).resolve().parent / 'bed_roi.json'
 DEFAULT_MODELS_DIR = Path(__file__).resolve().parents[2] / 'models'
-DEFAULT_VENV_SITE = Path('/home/mu-02/venvs/rokey_venv/lib/python3.12/site-packages')
 ROI_ENV_VAR = 'BED_EXIT_ROI_CONFIG'
 DEVICE_ENV_VAR = 'BED_EXIT_DEVICE'
+VENV_SITE_ENV_VAR = 'BED_EXIT_VENV_SITE'
+
+
+def _candidate_venv_site_packages() -> list[Path]:
+    """Return candidate virtual-environment site-packages paths without hardcoding user dirs."""
+    py_ver = f'python{sys.version_info.major}.{sys.version_info.minor}'
+    candidates: list[Path] = []
+    env_site = os.environ.get(VENV_SITE_ENV_VAR)
+    if env_site:
+        candidates.append(Path(env_site).expanduser())
+    virtual_env = os.environ.get('VIRTUAL_ENV')
+    if virtual_env:
+        candidates.append(Path(virtual_env).expanduser() / 'lib' / py_ver / 'site-packages')
+    # Workspace-local .venv (e.g. bad_ws/.venv) when launched under system ROS Python.
+    for parent in Path(__file__).resolve().parents:
+        venv_site = parent / '.venv' / 'lib' / py_ver / 'site-packages'
+        if venv_site.is_dir():
+            candidates.append(venv_site)
+            break
+    return candidates
 
 
 def _ensure_venv_site_packages() -> None:
-    """Append local rokey_venv site-packages when running under system Python."""
-    if DEFAULT_VENV_SITE.is_dir():
-        site_str = str(DEFAULT_VENV_SITE)
-        if site_str not in sys.path:
-            sys.path.append(site_str)
+    """Append an active or workspace-local venv site-packages when running under system Python."""
+    for site_dir in _candidate_venv_site_packages():
+        if site_dir.is_dir():
+            site_str = str(site_dir)
+            if site_str not in sys.path:
+                sys.path.append(site_str)
 
 
 def default_camera_index(v4l_root: Path = Path('/sys/class/video4linux')) -> int:
@@ -57,13 +77,15 @@ class MethodDiagnostics:
     reason: str = 'not_run'
     confidence: float | None = None
     bbox: tuple[float, float, float, float] | None = None
+    center: tuple[float, float] | None = None
+    center_inside: bool | None = None
     overlap_ratio: float | None = None
     outside_ratio: float | None = None
     mask: np.ndarray | None = None
 
 
 class BedROI:
-    """Normalized bed boundary polygon ROI with cached per-resolution raster masks."""
+    """Normalized bed polygon ROI with per-resolution rasterized bool mask cache."""
 
     def __init__(self, polygon):
         pts = np.asarray(polygon, dtype=np.float32)
@@ -82,7 +104,7 @@ class BedROI:
 
     @classmethod
     def from_json(cls, path: str | Path) -> BedROI:
-        """Load a BedROI from a JSON file containing a 'bed_polygon' field."""
+        """Load a BedROI from a JSON file with a 'bed_polygon' field."""
         data = json.loads(Path(path).read_text(encoding='utf-8'))
         if 'bed_polygon' not in data:
             raise ValueError(f"Missing 'bed_polygon' key in ROI config: {path}")
@@ -105,6 +127,11 @@ class BedROI:
             cv2.fillPoly(canvas, [poly_px], 1)
             self._masks[key] = canvas.astype(bool)
         return self._masks[key]
+
+    def contains(self, point: tuple[float, float], shape: tuple[int, int], tolerance_px: float = 0.0) -> bool:
+        """Return True when (x, y) pixel point lies inside or on the ROI boundary."""
+        poly_px = self.polygon_pixels(shape)
+        return bool(cv2.pointPolygonTest(poly_px, (float(point[0]), float(point[1])), True) >= -tolerance_px)
 
     def box_outside_fraction(self, box: np.ndarray, shape: tuple[int, int]) -> float:
         """Return fraction of an xyxy bounding box lying outside the bed ROI."""
