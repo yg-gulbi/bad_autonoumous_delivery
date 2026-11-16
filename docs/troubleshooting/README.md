@@ -9,5 +9,6 @@
 | [입력 영상 자동 연결](2026-11-15-part5-input-video.md) | 코드 수정 / 데이터 접근 검증 대기 | 모델과 입력 영상 구별, 다운로드 결과 자동 연결 |
 | [첫 설치 셀·Matplotlib inline 충돌](2026-11-15-part5-matplotlib-inline.md) | 해결 / 커널 재시작 필요 | 실행 설치 셀 추가, Matplotlib 업데이트 후 inline 표시 확인 |
 | [Part 5 colcon test가 pytest를 수집하지 못함](2026-11-16-part5-colcon-pytest-discovery.md) | 해결 | setuptools test extra를 선언해 60건 수집·통과 |
+| [Part 5 PolygonROI 2D np.cross NumPy 2.5 호환 오류](2026-11-16-part5-numpy25-cross.md) | 해결 | 2D 외적 직접 계산으로 수정해 68 passed, 1 skipped 확인 |
 
 새 기록 양식: [_template.md](_template.md)

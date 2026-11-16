@@ -1,5 +1,6 @@
 /models/
 /results/
+/outputs/
 /research/data/
 /examples/methods.local.json
 /research/templates/testbed.local.json

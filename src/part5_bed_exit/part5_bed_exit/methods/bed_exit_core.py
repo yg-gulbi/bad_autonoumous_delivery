@@ -46,7 +46,9 @@ class PolygonROI:
         if len(np.unique(p, axis=0)) != len(p) or abs(cv2.contourArea(p)) < 1e-6:
             raise ValueError("ROI has duplicate vertices or zero area")
         def orient(a, b, c):
-            return float(np.cross(b-a, c-a))
+            ab = b - a
+            ac = c - a
+            return float(ab[0] * ac[1] - ab[1] * ac[0])
         def intersects(a, b, c, d):
             o = [orient(a,b,c), orient(a,b,d), orient(c,d,a), orient(c,d,b)]
             if o[0]*o[1] < 0 and o[2]*o[3] < 0:
