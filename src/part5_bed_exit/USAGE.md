@@ -62,7 +62,44 @@ ros2 daemon start
 ros2 topic echo /patient/bed_exit
 ```
 
-실행 옵션 예시:
+### 영상 파일(`.mp4`)로 ROS 2 노드 실행하기
+웹캠 대신 녹화한 영상 파일을 넣어도 동일하게 화면 표시 + `/patient/bed_exit` 토픽 발행이 동작합니다(기본값으로 영상 끝에서 자동 반복 재생).
+
+```bash
+# 방법 1: 뒤에 영상 파일 경로 바로 전달
+ros2 run part5_bed_exit bed_exit test_bed.mp4
+
+# 방법 2: ROS 파라미터로 전달 (1회 재생 후 멈추려면 -p loop_video:=false 추가)
+ros2 run part5_bed_exit bed_exit --ros-args -p video_path:=test_bed.mp4
+```
+
+### 자주 쓰는 실행 옵션 (필요할 때만 추가)
+```bash
+# 카메라 번호 직접 지정(예: 0번 내장캠) 또는 프리뷰 창 끄기
+ros2 run part5_bed_exit bed_exit --ros-args -p camera_index:=0 -p show:=false
+```
+
+---
+
+## 3. 침대 경계(ROI) 수정
+`part5_bed_exit/methods/bed_roi.json`에서 화면 비율(`0.0 ~ 1.0`)로 꼭짓점 좌표를 수정합니다 (`colcon build` 없이 노드 재실행 시 바로 반영).
+
+```json
+{
+  "bed_polygon": [
+    [0.2, 0.2],
+    [0.8, 0.2],
+    [0.8, 0.85],
+    [0.2, 0.85]
+  ]
+}
+```
+- 다른 ROI JSON 파일을 지정하려면: `export BED_EXIT_ROI_CONFIG=/path/to/roi.json`
+
+---
+
+## 4. ROS 2 없이 웹캠·영상 테스트 및 단위 테스트
+>>>>>>> 9933a22 (feat(part5): support video file playback in BedExitNode and update USAGE)
 
 ```bash
 # 카메라 번호 직접 지정 및 프리뷰 비활성화

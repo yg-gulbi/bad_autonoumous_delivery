@@ -24,18 +24,22 @@ WINDOW_TITLE = 'Part 5 Bed Exit (/patient/bed_exit)'
 class BedExitNode(Node):
     """ROS 2 node publishing five-frame voted bed-exit state as std_msgs/msg/Bool."""
 
-    def __init__(self, detector=None):
+    def __init__(self, detector=None, video_path: str | None = None):
         super().__init__('bed_exit')
         # 초기화 도중 예외가 나더라도 destroy_node()/예외 정리가 안전하도록 먼저 None으로 둔다.
         self.capture = None
         self.detector = None
         self.show = False
+        self.is_video_file = False
+        self.loop_video = True
 
         # 기본 Segmentation 실행을 제공하면서 다른 클래스/내장 프리셋도 선택할 수 있게 한다.
         self.declare_parameter('method', DEFAULT_METHOD)
         self.declare_parameter('method_config', '')
         self.declare_parameter('output_topic', '/patient/bed_exit')
         self.declare_parameter('camera_index', default_camera_index())
+        self.declare_parameter('video_path', '' if video_path is None else str(video_path))
+        self.declare_parameter('loop_video', True)
         self.declare_parameter('capture_fps', 30.0)
         self.declare_parameter(
             'show',
@@ -44,6 +48,8 @@ class BedExitNode(Node):
         method_path = self.get_parameter('method').value
         topic = self.get_parameter('output_topic').value
         camera_index = self.get_parameter('camera_index').value
+        resolved_video = str(self.get_parameter('video_path').value).strip()
+        self.loop_video = bool(self.get_parameter('loop_video').value)
         fps = self.get_parameter('capture_fps').value
         self.show = bool(self.get_parameter('show').value)
 
@@ -60,16 +66,23 @@ class BedExitNode(Node):
             else validate_bed_exit_method(detector)
         )
 
-        # detector 생성 이후 카메라/타이머 초기화에 실패하면 확보한 리소스를 즉시 정리한다.
+        # detector 생성 이후 카메라/영상·타이머 초기화에 실패하면 확보한 리소스를 즉시 정리한다.
         try:
             self.state = BedExitState()
             self.publisher = self.create_publisher(Bool, topic, 10)
-            self.capture = cv2.VideoCapture(camera_index)
+            self.is_video_file = bool(resolved_video)
+            source = resolved_video if self.is_video_file else camera_index
+            source_desc = (
+                f'video_path={resolved_video}'
+                if self.is_video_file
+                else f'camera_index={camera_index}'
+            )
+            self.capture = cv2.VideoCapture(source)
             if not self.capture.isOpened():
-                raise RuntimeError(f'Cannot open webcam (camera_index={camera_index})')
+                raise RuntimeError(f'Cannot open video source ({source_desc})')
             self.timer = self.create_timer(1.0 / fps, self.process_frame)
             self.get_logger().info(
-                f'BedExitNode started: camera_index={camera_index}, topic={topic}, '
+                f'BedExitNode started: {source_desc}, topic={topic}, '
                 f'method={method_path}, show={self.show}'
             )
         except Exception:
@@ -113,13 +126,21 @@ class BedExitNode(Node):
 
     def process_frame(self):
         # 프레임 수신 실패 시 거짓 정상(False) 발행을 막기 위해 이력을 초기화하고 발행을 건너뛴다.
-        try:
-            ok, frame = self.capture.read()
-            if not ok or frame is None:
-                raise RuntimeError('Webcam read failed')
-        except Exception as exc:
-            self.get_logger().error(f'Webcam read failed; no frame decision published: {exc}')
+        ok, frame = self.capture.read()
+        if not ok and self.is_video_file and self.loop_video:
+            self.capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
             self.state = BedExitState()
+            reset = getattr(self.detector, 'reset', None)
+            if callable(reset):
+                reset()
+            ok, frame = self.capture.read()
+        if not ok:
+            self.state = BedExitState()
+            if self.is_video_file:
+                self.get_logger().info('Video playback finished; stopping timer')
+                self.timer.cancel()
+            else:
+                self.get_logger().error('Webcam read failed; no frame decision published')
             return
         try:
             unsafe = self.state.update(self.detector.judge(frame))
@@ -162,9 +183,11 @@ class BedExitNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
+    cli_args = rclpy.utilities.remove_ros_args(args=args)[1:]
+    cli_video = cli_args[0] if cli_args else None
     node = None
     try:
-        node = BedExitNode()
+        node = BedExitNode(video_path=cli_video)
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
