@@ -1,6 +1,8 @@
 /models/
 /data/
 /results/
+/research/data/
+/research/results/
 /examples/methods.local.json
 /examples/testbed.local.json
 /notebooks/.ipynb_checkpoints/

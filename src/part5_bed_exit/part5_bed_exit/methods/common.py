@@ -16,17 +16,37 @@ from part5_bed_exit.bed_exit_method import BedExitMethod
 
 DEFAULT_ROI_PATH = Path(__file__).resolve().parent / 'bed_roi.json'
 DEFAULT_MODELS_DIR = Path(__file__).resolve().parents[2] / 'models'
-DEFAULT_VENV_SITE = Path('/home/mu-02/venvs/rokey_venv/lib/python3.12/site-packages')
 ROI_ENV_VAR = 'BED_EXIT_ROI_CONFIG'
 DEVICE_ENV_VAR = 'BED_EXIT_DEVICE'
+VENV_SITE_ENV_VAR = 'BED_EXIT_VENV_SITE'
+
+
+def _candidate_venv_site_packages() -> list[Path]:
+    """Return candidate virtual-environment site-packages paths without hardcoding user dirs."""
+    py_ver = f'python{sys.version_info.major}.{sys.version_info.minor}'
+    candidates: list[Path] = []
+    env_site = os.environ.get(VENV_SITE_ENV_VAR)
+    if env_site:
+        candidates.append(Path(env_site).expanduser())
+    virtual_env = os.environ.get('VIRTUAL_ENV')
+    if virtual_env:
+        candidates.append(Path(virtual_env).expanduser() / 'lib' / py_ver / 'site-packages')
+    # Workspace-local .venv (e.g. bad_ws/.venv) when launched under system ROS Python.
+    for parent in Path(__file__).resolve().parents:
+        venv_site = parent / '.venv' / 'lib' / py_ver / 'site-packages'
+        if venv_site.is_dir():
+            candidates.append(venv_site)
+            break
+    return candidates
 
 
 def _ensure_venv_site_packages() -> None:
-    """Append local rokey_venv site-packages when running under system Python."""
-    if DEFAULT_VENV_SITE.is_dir():
-        site_str = str(DEFAULT_VENV_SITE)
-        if site_str not in sys.path:
-            sys.path.append(site_str)
+    """Append an active or workspace-local venv site-packages when running under system Python."""
+    for site_dir in _candidate_venv_site_packages():
+        if site_dir.is_dir():
+            site_str = str(site_dir)
+            if site_str not in sys.path:
+                sys.path.append(site_str)
 
 
 def default_camera_index(v4l_root: Path = Path('/sys/class/video4linux')) -> int:

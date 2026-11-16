@@ -24,6 +24,15 @@ ROS 노드는 웹캠 BGR 프레임을 선택한 판단 객체의 `judge(frame) -
 
 모든 방법론은 `judge(frame) -> bool`을 제공해야 한다. 내장 프리셋은 `examples/methods.template.json`을 로컬 설정으로 복사하고 실제 카메라 ROI를 검수한 뒤 `roi_reviewed=true`로 설정해야 한다.
 
+### 메서드별 구현 · 기본값 차이
+
+| 구분 | 클래스 / 경로 | 기반 추상 클래스 (다형성) | 기본 가중치 / ROI 키 | 주요 기본 파라미터 · 판정 규칙 |
+| --- | --- | --- | --- | --- |
+| **Segmentation (기본)** | `SegmentationBedExitMethod` (`methods/segmentation_method.py`) | `BaseYoloBedExitMethod(BedExitMethod)` | `yolo11n-seg.pt` / `bed_polygon` (`methods/bed_roi.json`) | `outside_threshold=0.05`, `conf=0.25`, `imgsz=640`, `device='auto'`, `max_center_jump=0.25`, `mask_max_dim=160` |
+| **Detection** | `DetectionBedExitMethod` (`methods/detection_method.py`) | `BaseYoloBedExitMethod(BedExitMethod)` | `yolo11n.pt` / `bed_polygon` (`methods/bed_roi.json`) | `outside_threshold=0.25`, `require_center_inside=True`, `conf=0.35`, `imgsz=480`, `device='cpu'` |
+| **YOLO Pose / MediaPipe (프리셋)** | `YoloPoseROI`, `MediaPipePoseROI` (`methods/bed_exit_core.py`) | `bed_exit_core.BedExitMethod(BedExitMethod)` | `yolo11n-pose.pt` / `pose_landmarker_full.task` / `roi` (`method_config` JSON) | `policy='any_body'`, `point_conf=0.5`, `tolerance_px=3.0` (공통 13관절 중 1개라도 밖이면 `True`, 누락 시 `JudgmentUnavailable`) |
+| **미구현 스타터 템플릿** | `BedExitMethodTemplate` (`method_template.py`, `research/templates/method_template.py`) | `BedExitMethod` | 없음 | `judge()` 호출 시 `NotImplementedError` 발생 (팀원 복사·상속용) |
+
 ## 빌드와 실행
 
 ROS 2 Jazzy를 source한 뒤 워크스페이스 루트에서 실행한다.
