@@ -8,7 +8,7 @@ import pytest
 
 import compare_single_frame as cm
 from part5_bed_exit.bed_exit_method import BedExitMethod
-from research.templates.method_template import BedExitMethodTemplate
+from part5_bed_exit.method_template import BedExitMethodTemplate
 
 
 def _write_temp_avi(path, frame_count=4):

@@ -10,7 +10,7 @@ from part5_bed_exit.bed_exit_method import (
     load_bed_exit_method,
     validate_bed_exit_method,
 )
-from research.templates.method_template import BedExitMethodTemplate
+from part5_bed_exit.method_template import BedExitMethodTemplate
 
 
 def _register_temp_module(monkeypatch, module_name, **attrs):

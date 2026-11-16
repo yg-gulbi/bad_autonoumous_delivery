@@ -9,14 +9,14 @@ import time
 
 import cv2
 
-# ROS 2 setup.bash나 PYTHONPATH 없이도 런타임/연구 모듈을 바로 import할 수 있게 경로 추가
-PACKAGE_ROOT = Path(__file__).resolve().parents[2]
+# ROS 2 setup.bash나 PYTHONPATH 없이도 part5_bed_exit 모듈을 바로 import할 수 있게 경로 추가
+PACKAGE_ROOT = Path(__file__).resolve().parent
 if str(PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_ROOT))
 
 from part5_bed_exit.bed_exit_method import validate_bed_exit_method
 from part5_bed_exit.bed_exit_state import BedExitState
-from research.templates.method_template import BedExitMethodTemplate
+from part5_bed_exit.method_template import BedExitMethodTemplate
 
 # ==============================================================================
 # [사용자 설정 영역] 나와 팀원의 메서드 클래스/객체를 여기에 등록하고 선택한다.
@@ -249,29 +249,9 @@ def main():
     )
     parser.add_argument('--no-show', action='store_true', help='OpenCV 창 없이 콘솔 로그만 출력')
     parser.add_argument('--max-frames', type=int, default=None, help='최대 처리 프레임 수 제한')
-    parser.add_argument('--config', help='네 사전학습 메서드의 ROI/모델 JSON 경로')
-    parser.add_argument('--methods', nargs='+',
-                        choices=['detection', 'segmentation', 'yolo_pose', 'mediapipe_pose'],
-                        help='--config와 함께 실행할 메서드 (생략하면 네 가지 모두)')
     args = parser.parse_args()
-    methods = None
-    if args.methods and not args.config:
-        parser.error('--methods requires --config')
-    if args.config:
-        from part5_bed_exit.pretrained import create_method
-        names = args.methods or ['detection', 'segmentation', 'yolo_pose', 'mediapipe_pose']
-        methods = {}
-        try:
-            for name in names:
-                methods[name] = create_method(name, args.config)
-        except Exception:
-            for detector in methods.values():
-                detector.close()
-            raise
     run_comparison(
         source=args.source,
-        methods=methods,
-        selected=list(methods) if methods is not None else SELECTED_METHODS,
         show=not args.no_show,
         max_frames=args.max_frames,
     )

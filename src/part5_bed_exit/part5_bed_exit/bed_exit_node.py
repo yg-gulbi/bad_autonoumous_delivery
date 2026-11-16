@@ -25,7 +25,6 @@ class BedExitNode(Node):
 
         # ROS 2 실행 파라미터 선언 (output_topic은 ICD 확정안 /patient/bed_exit 사용)
         self.declare_parameter('method', '')
-        self.declare_parameter('method_config', '')
         self.declare_parameter('output_topic', '/patient/bed_exit')
         self.declare_parameter('camera_index', 0)
         self.declare_parameter('capture_fps', 30.0)
@@ -41,7 +40,7 @@ class BedExitNode(Node):
 
         # 클래스/객체 경로 로딩 또는 코드 직접 주입 객체를 검증해 self.detector로 고정한다.
         self.detector = (
-            load_bed_exit_method(method_path, self.get_parameter('method_config').value)
+            load_bed_exit_method(method_path)
             if detector is None
             else validate_bed_exit_method(detector)
         )

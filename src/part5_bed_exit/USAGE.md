@@ -1,47 +1,78 @@
-# Part 5 침대 이탈 런타임
+# Part 5 침대 이탈 감지 모듈 (`part5_bed_exit`)
 
-ROS 노드는 웹캠 BGR 프레임을 선택된 판단 객체의 `judge(frame) -> bool`에 전달한다.
-최근 5개 유효 프레임 중 3개 이상이 `True`이면 `/patient/bed_exit`에 `True`를 발행한다.
-카메라 또는 판단 실패 시 이력을 초기화하고 해당 프레임은 발행하지 않는다.
+웹캠의 BGR 이미지(`numpy` 배열)를 선택된 판단 객체의 `judge(frame)` 메서드에 전달한다. 반환값은 Python `bool`이어야 한다 (`True`: 이탈 감지 / unsafe, `False`: 정상 / safe). 신체 인식, ROI 설정, 모델 초기화 및 전처리는 각 메서드 클래스가 담당한다.
 
-## 런타임 구성
+최근 5개 프레임 중 `True`가 3개 이상이면 내부 `state.unsafe`와 출력이 `True`가 된다. 초기 4개 프레임은 `False`이며, 정상 판단된 프레임마다 `/patient/bed_exit` (`std_msgs/msg/Bool`)을 발행한다.
 
-- `bed_exit_node.py`: 카메라 입력, 5프레임 투표, ROS 발행
-- `bed_exit_method.py`: `judge(frame) -> bool` 계약과 메서드 로딩
-- `bed_exit_state.py`: 최근 5프레임 3회 이상 투표
-- `pretrained.py`: 네 내장 모델 생성과 ROI 설정 검증
-- `methods/bed_exit_core.py`: Detection, Segmentation, YOLO Pose, MediaPipe Pose 구현
+## 메서드 클래스 구성 및 객체 선정
 
-`method`는 `detection`, `segmentation`, `yolo_pose`, `mediapipe_pose` 중 하나다.
-`method_config`에는 검수 완료한 단일 ROI 설정 JSON을 전달한다.
+공통 인터페이스(`part5_bed_exit.bed_exit_method.BedExitMethod`)를 상속하거나 `judge(self, frame) -> bool` 메서드를 가진 클래스로 구현한다. 팀원 구현용 단일 클래스 양식은 `part5_bed_exit/method_template.py`의 `BedExitMethodTemplate`을 참고한다.
+
+```python
+from part5_bed_exit.bed_exit_method import BedExitMethod
+
+
+class YourBedExitMethod(BedExitMethod):
+    def __init__(self) -> None:
+        # 모델 가중치 로드, ROI, 객체 내부 상태를 초기화한다.
+        ...
+
+    def judge(self, frame) -> bool:
+        # BGR 이미지를 판정한 결과를 Python bool로 반환한다.
+        return bool(...)
+
+    def close(self) -> None:
+        # 필요 시 노드 종료 시점에 리소스를 정리한다.
+        ...
+```
+
+- **ROS 파라미터로 객체 선정**: `-p method:=your_package.your_method:YourBedExitMethod`처럼 `module:ClassName`을 지정하면 노드가 무인자 생성자(`cls()`)로 객체를 생성하며, `module:detector_obj`처럼 이미 생성된 인스턴스 객체를 지정할 수도 있다.
+- **코드 직접 주입**: Python 코드에서 `BedExitNode(detector=YourBedExitMethod())`처럼 객체를 직접 생성해 전달하는 방식도 지원한다.
+- 실제 판단 알고리즘(YOLO 추론 등)은 이 공통 노드 골격과 분리해 각 메서드 클래스 내부에 구현한다.
+
+### 기본 제공 Detection · Segmentation 메서드
+
+무인자 생성자와 기본 `methods/bed_roi.json`(또는 환경변수 `BED_EXIT_ROI_CONFIG`, 이미지별 `<이름>.roi.json` 사이드카)으로 바로 사용할 수 있는 메서드 두 종을 제공한다.
+
+- `part5_bed_exit.methods.detection_method:DetectionBedExitMethod` (`yolo11n.pt`, 사람 BBox 중심점 ROI 포함 여부 + ROI 외부 비율 > `0.25`)
+- `part5_bed_exit.methods.segmentation_method:SegmentationBedExitMethod` (`yolo11n-seg.pt`, 사람 마스크의 안전 ROI 밖 픽셀 비율 > `0.10`, `mask_max_dim=160` 축소 평가)
+
+## 빌드와 실행
+
+ROS 2 Jazzy를 `source`한 뒤 `bad_ws` 워크스페이스 루트에서 실행한다.
 
 ```bash
-python3 -m venv --system-site-packages .venv
-source .venv/bin/activate
-python -m pip install -r src/part5_bed_exit/requirements.txt
-
 source /opt/ros/jazzy/setup.bash
 colcon build --packages-select part5_bed_exit --symlink-install
 source install/setup.bash
 ros2 run part5_bed_exit bed_exit --ros-args \
-  -p method:=yolo_pose \
-  -p method_config:="$(pwd)/src/part5_bed_exit/examples/methods.local.json" \
+  -p method:=part5_bed_exit.methods.detection_method:DetectionBedExitMethod \
   -p output_topic:=/patient/bed_exit \
   -p camera_index:=0 \
   -p capture_fps:=30.0
 ```
 
-`examples/methods.template.json`을 `methods.local.json`으로 복사한 뒤 실제 카메라 ROI를
-검수하고 `roi_reviewed=true`로 변경해야 한다. 모델 가중치와 로컬 설정은 Git에서 제외된다.
+`capture_fps`는 프레임 수집 시도 주기다. 실제 처리율은 카메라와 메서드 실행 시간에 제한되며, 호출은 순차 처리되며 모든 센서 프레임 처리를 보장하지 않는다.
 
-데이터셋 다운로드, 노트북, 메서드 비교, 이벤트 평가는 [`research/README.md`](research/README.md)에 분리되어 있으며 ROS 패키지 설치 대상이 아니다.
+카메라 수신 실패 또는 판단 예외·잘못된 반환값은 로그로 남기고 5프레임 이력을 초기화한다. 오류를 정상 판정(`False`)으로 바꾸어 발행하지 않으며 해당 프레임의 토픽은 발행하지 않는다. 복구 후 다시 5프레임을 수집한다.
 
-## 직접 import용 Detection·Segmentation 메서드 및 단일 프레임 시각화 비교 (`compare_single_frame.py`)
+## ROS 2 없이 메서드 클래스 비교 테스트
 
-`method_config` JSON 없이 무인자 생성자와 기본 `methods/bed_roi.json`(또는 `BED_EXIT_ROI_CONFIG`, 이미지별 `<이름>.roi.json` 사이드카)으로 바로 실행·시각화할 수 있는 메서드도 함께 제공한다.
+### 1) 영상/웹캠 5프레임 다수결 비교 (`compare_methods.py`)
 
-- `part5_bed_exit.methods.detection_method:DetectionBedExitMethod` (`yolo11n.pt`, 사람 BBox 중심점 ROI 포함 여부 + ROI 외부 비율 > `0.25`)
-- `part5_bed_exit.methods.segmentation_method:SegmentationBedExitMethod` (`yolo11n-seg.pt`, 사람 마스크의 안전 ROI 밖 픽셀 비율 > `0.10`, `mask_max_dim=160` 축소 평가)
+나와 팀원이 만든 여러 메서드 클래스(`judge(frame) -> bool`)를 ROS 2 실행 없이 웹캠이나 영상 파일로 바로 비교할 때는 `compare_methods.py`를 사용한다.
+
+1. [compare_methods.py](compare_methods.py) 상단의 `METHODS` 딕셔너리에 비교할 메서드 클래스나 객체를 등록한다.
+2. 필요 시 `SELECTED_METHODS`에 실행할 키 목록(또는 전체 실행 시 `None`)과 `DEFAULT_SOURCE`를 지정한다.
+3. 워크스페이스 루트(`bad_ws/`)에서 실행한다.
+
+```bash
+python3 src/part5_bed_exit/compare_methods.py --source 0
+# 또는 영상 파일로 화면 없이 요약표만 확인
+python3 src/part5_bed_exit/compare_methods.py --source sample.mp4 --no-show
+```
+
+### 2) 단일 프레임 순전파·시각화 비교 (`compare_single_frame.py`)
 
 ```bash
 # test_images/ 폴더 이미지를 5프레임 다수결 없이 단일 프레임 판정하고 outputs/<method>/에 저장

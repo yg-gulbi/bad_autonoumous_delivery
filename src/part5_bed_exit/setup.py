@@ -1,5 +1,4 @@
 from setuptools import find_packages, setup
-from glob import glob
 
 setup(
     name='part5_bed_exit',
@@ -9,8 +8,7 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/part5_bed_exit']),
         ('share/part5_bed_exit', ['package.xml']),
-        ('share/part5_bed_exit/examples', glob('examples/*.template.json')),
-        ('share/part5_bed_exit', ['USAGE.md', 'requirements.txt']),
+        ('share/part5_bed_exit', ['USAGE.md']),
     ],
     install_requires=['setuptools'],
     extras_require={'test': ['pytest']},

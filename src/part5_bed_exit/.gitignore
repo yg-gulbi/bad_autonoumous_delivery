@@ -1,10 +1,2 @@
 /models/
-/results/
 /outputs/
-/research/data/
-/examples/methods.local.json
-/research/templates/testbed.local.json
-/research/notebooks/.ipynb_checkpoints/
-*.task
-*.zip
-*.part
