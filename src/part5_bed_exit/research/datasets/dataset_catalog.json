@@ -32,7 +32,7 @@
       "modality": "Static RGB, LWIR, depth, pressure; uncover/cover1/cover2",
       "labels": "14-joint LSP pose labels; no bed-exit events",
       "use": "Occlusion/lying-pose robustness and invalid-observation analysis",
-      "access": "Official ZIP Range access verified: 17,534,988,296 bytes, 134,062 members. RGB members are encrypted: obtain ACLab access and set SLP_ZIP_PASSWORD. danaLab.zip was inspected and contains model artifacts, not sample RGB data",
+      "access": "Official ZIP Range access verified: 17,534,988,296 bytes, 134,062 members. RGB members are encrypted: obtain ACLab access and set SLP_ZIP_PASSWORD. The official public GitHub reference archive includes demo_2d.PNG with low-resolution covered/uncovered RGB panels and pre-drawn ground-truth skeletons; it is usable only for qualitative smoke tests, not raw-data evaluation",
       "download_function": "download_slp_samples (bounded Range extraction after approved password)",
       "license": "Non-commercial research/teaching; dataset terms differ from code license",
       "event_gt": false

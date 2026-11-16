@@ -58,6 +58,11 @@ Roboflow 상태 라벨은 원본으로 보존하고 표본 층화·검수 대상
 
 현재 Roboflow에는 담요 상태 label이 없고 검수 20장에는 담요 가림 장면이 없다. 담요 성능 주장은 불가능하다. 후속 SLP 또는 BlanketSet 검토 시 RGB-only, 실제 RGB-D, 실제 압력 track을 분리한다. RGB에서 생성한 pseudo-depth는 성능 또는 안전성 근거로 사용하지 않는다.
 
+SLP 공식 공개 데모의 RGB panel 두 장 smoke test에서는 비가림에서 YOLO Pose가 유효
+`False`, MediaPipe가 `no_person`이었고, 이불 가림에서는 YOLO Pose가 후보를 찾았지만
+`incomplete_body_coverage`, MediaPipe는 `no_person`이었다. 공개 panel에는 정답 스켈레톤이
+이미 그려져 있고 서로 다른 자세이므로 정확도·가림 성능 수치로 사용하지 않는다.
+
 ## 검증 상태
 
 - 독립 `.venv`: `pip check` 이상 없음

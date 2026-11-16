@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import cv2
 import numpy as np
 import pytest
 
@@ -16,6 +17,7 @@ from research.poc.pose_visualization import (
     render_pose_observation,
     write_image,
 )
+from research.poc.run_pose_pair_poc import prepare_frame
 
 
 def _write_sample(root: Path, split: str, stem: str, labels: str) -> None:
@@ -104,3 +106,12 @@ def test_pose_artifact_keeps_keypoints_and_marks_roi_exit(tmp_path):
     assert output.stat().st_size > 0
     sheet = render_comparison_sheet([("sample.rf.hash", np.hstack([rendered, rendered]))])
     assert sheet.shape[1] == 1536
+
+
+def test_pose_pair_frame_upscale_preserves_aspect_ratio(tmp_path):
+    path = tmp_path / "input.png"
+    assert cv2.imwrite(str(path), np.zeros((216, 120, 3), dtype=np.uint8))
+    frame = prepare_frame(path, output_width=480)
+    assert frame.shape == (864, 480, 3)
+    with pytest.raises(ValueError, match="positive"):
+        prepare_frame(path, output_width=0)
