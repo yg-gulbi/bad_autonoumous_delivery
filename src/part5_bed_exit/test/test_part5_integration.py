@@ -1,11 +1,13 @@
 """Verify raw strategies, strict votes, and ROS publication at the boundary."""
 
 import importlib.util
+import io
 from itertools import product
 import json
 from pathlib import Path
 import sys
 from types import SimpleNamespace
+import zipfile
 
 import numpy as np
 import pytest
@@ -140,6 +142,30 @@ def test_dataset_zip_extraction_rejects_escape_paths_and_size_overrun(tmp_path):
         z.writestr('frame.txt', '12345')
     with pytest.raises(ValueError, match='size budget'):
         extract_zip(archive, tmp_path / 'output', max_bytes=4)
+
+
+def test_slp_miccai19_public_download_extracts_only_exact_unencrypted_subset(tmp_path, monkeypatch):
+    from research.datasets import downloads
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as z:
+        for index in range(1, 46):
+            z.writestr(f'SLP/simLab/00004/RGB/cover2/image_{index:06d}.png', b'png' + bytes([index]))
+        z.writestr('SLP/simLab/00005/RGB/cover2/image_000001.png', b'wrong-subject')
+        z.writestr('SLP/simLab/00004/RGB/uncover/image_000001.png', b'wrong-cover')
+    payload = archive.getvalue()
+
+    class FakeRemote(io.BytesIO):
+        def __init__(self, *args, **kwargs):
+            super().__init__(payload)
+            self.transferred = len(payload)
+
+    monkeypatch.setattr(downloads, 'HTTPRangeReader', FakeRemote)
+    records = downloads.download_slp_miccai19_public_rgb(tmp_path)
+    assert len(records) == 45
+    assert {record['cover'] for record in records} == {'cover2'}
+    assert {record['label_type'] for record in records} == {'none_pose_labels_encrypted'}
+    assert not (tmp_path / 'raw/SLP/simLab/00005').exists()
+    assert json.loads((tmp_path / 'download_manifest.json').read_text())['limitations'][2] == 'pose labels encrypted'
 
 
 def test_benchmark_errors_are_empty_decisions_and_reset_the_five_frame_window(tmp_path, monkeypatch):

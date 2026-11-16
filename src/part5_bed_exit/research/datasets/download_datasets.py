@@ -13,12 +13,14 @@ PACKAGE_ROOT = RESEARCH_ROOT.parent
 sys.path.insert(0, str(PACKAGE_ROOT))
 
 from research.datasets.downloads import (  # noqa: E402
+    download_blanketset_public_metadata,
     download_fallvision_files,
     download_file,
     download_huggingface_dataset,
     download_roboflow,
     download_roboflow_previews,
     download_slp_archive,
+    download_slp_miccai19_public_rgb,
     download_slp_samples,
     ensure_free_space,
     extract_zip,
@@ -177,8 +179,18 @@ def run_one(dataset: dict, root: Path, mode: str) -> dict:
                 result["files"].append(str(directory / "samples"))
                 result["status"] = "downloaded"
             else:
+                public_files = download_slp_miccai19_public_rgb(directory / "miccai19_public_unlabeled")
+                result["files"].append(str(directory / "miccai19_public_unlabeled"))
                 result["files"].append(str(write_access_note(dataset, directory)))
-                result["status"] = "downloaded_archive_access_required" if mode == "full" else "access_required"
+                result["status"] = ("downloaded_archive_and_public_unlabeled_subset_access_required"
+                                    if mode == "full" else
+                                    "public_unlabeled_subset_downloaded_full_access_required")
+                result["public_unlabeled_images"] = len(public_files)
+        elif dataset_id == "blanketset":
+            result["files"].extend(str(path) for path in download_blanketset_public_metadata(
+                directory / "public_metadata"))
+            result["files"].append(str(write_access_note(dataset, directory)))
+            result["status"] = "public_metadata_downloaded_video_access_required"
         elif dataset_id == "patientcare":
             if mode == "preview":
                 inventory = huggingface_inventory(directory)

@@ -6,8 +6,8 @@
 
 1. `roboflow_bed_exit_v4`: API 키로 848장과 YOLO 라벨을 받고 클래스 박스 의미를 검수한다.
 2. `fallvision`: Dataverse 파일 목록을 받은 뒤 침대 영상·Pose CSV 대응과 전체 용량을 검수한다.
-3. `slp2022`: 공식 코드와 17.5 GB 원본 ZIP을 받고, 승인 암호가 있으면 이불 조건별 RGB를 추출한다.
-4. `blanketset`: 제한 상태를 확인하고 제공자 승인 파일만 `raw/`에 넣는다.
+3. `slp2022`: MICCAI19 공개 `simLab/00004/RGB/cover2` 45장을 비라벨 정성 평가에 사용한다. SLP2022 전체와 관절 정답은 승인 암호가 있을 때만 추출한다.
+4. `blanketset`: 공개 README·조건표·동작 이미지만 받는다. 405개 RGB-IR-D 영상은 법적 접근 제한이 해제되거나 제공자 승인을 받은 뒤 사용한다.
 5. `in_bed_patient_segmentation`: 저자 승인 후 1,487프레임과 person/bed Mask 형식을 검수한다.
 6. `tip_pimesh`: 공개 코드를 받고, TIP 원본은 저자 승인 후 RGB·COCO17 대응을 확인한다.
 7. `enighttrack`: 공개 논문을 기준으로 20개 시나리오를 정리하고, Depth 원본은 저자 승인 후 받는다.

@@ -32,8 +32,8 @@
       "modality": "Static RGB, LWIR, depth, pressure; uncover/cover1/cover2",
       "labels": "14-joint LSP pose labels; no bed-exit events",
       "use": "Occlusion/lying-pose robustness and invalid-observation analysis",
-      "access": "Official ZIP Range access verified: 17,534,988,296 bytes, 134,062 members. RGB members are encrypted: obtain ACLab access and set SLP_ZIP_PASSWORD. The official public GitHub reference archive includes demo_2d.PNG with low-resolution covered/uncovered RGB panels and pre-drawn ground-truth skeletons; it is usable only for qualitative smoke tests, not raw-data evaluation",
-      "download_function": "download_slp_samples (bounded Range extraction after approved password)",
+      "access": "SLP2022 has 130,749 encrypted files and only empty directories are plain. The older MICCAI19 ZIP exposes exactly 45 password-free 896x1600 RGB frames for simLab subject 00004 under cover2; its joints_gt_RGB.mat remains encrypted. Use these 45 frames only for unlabeled qualitative testing",
+      "download_function": "download_slp_miccai19_public_rgb; download_slp_samples only after approved password",
       "license": "Non-commercial research/teaching; dataset terms differ from code license",
       "event_gt": false
     },
@@ -45,7 +45,7 @@
       "labels": "8 movement sequences and blanket/lighting conditions",
       "use": "Normal blanket movement/occlusion false alarms after access is granted",
       "access": "Official CKAN package_show API returned 200; notes explicitly say video access is currently restricted due to legal considerations",
-      "download_function": "Provider-approved files only; no unrestricted video URL assumed",
+      "download_function": "download_blanketset_public_metadata; provider-approved videos only",
       "license": "Catalog metadata says CC BY-SA; this does not override restricted video access",
       "event_gt": false
     },
@@ -100,13 +100,13 @@
     {
       "id": "blanketgen2_fit3d",
       "name": "BlanketGen2-Fit3D",
-      "url": "https://arxiv.org/abs/2501.12318",
-      "modality": "1,217,312 synthetic blanket-occluded RGB frames based on Fit3D",
-      "labels": "Fit3D pose and SMPL ground truth retained through synthetic blanket rendering",
+      "url": "https://doi.org/10.25747/44jy-3v61",
+      "modality": "1,217,312 transparent RGBA synthetic blanket layers for Fit3D; original RGB is separate",
+      "labels": "No labels in the Zenodo release; frame correspondence allows separately licensed Fit3D pose/SMPL labels to be reused",
       "use": "Occluded-pose training candidate, followed by evaluation on real bed images",
-      "access": "The paper says code and data will be public, but no official archive URL was verified",
-      "download_function": "Download the open paper; dataset files require a verified provider URL",
-      "license": "Confirm data terms separately from the arXiv paper license",
+      "access": "Official Zenodo record 23260194 verified. Supplement is 38,151,323 bytes and videos.zip is 29,768,449,960 bytes; eight Blender archives require substantially more storage",
+      "download_function": "download_blanketgen2_fit3d (preview=supplement, full=supplement+videos.zip)",
+      "license": "Blanket layers CC BY 4.0; original Fit3D is a separate non-commercial research license",
       "event_gt": false
     },
     {

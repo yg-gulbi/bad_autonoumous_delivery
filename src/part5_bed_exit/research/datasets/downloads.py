@@ -16,6 +16,25 @@ from urllib.parse import quote, urlparse
 import requests
 
 SLP_ARCHIVE="https://coe.northeastern.edu/Research/AClab/SLP/SLP2022.zip"
+SLP_MICCAI19_ARCHIVE="https://coe.northeastern.edu/Research/AClab/SLP/SLP_MICCAI19.zip"
+BLANKETSET_PUBLIC_RESOURCES={
+    "movement_sequences.png": (
+        "https://rdm.inesctec.pt/dataset/36363e81-6d41-4195-b475-9181b53e3696/"
+        "resource/392d37a6-b6b3-41a9-bef3-971a40708260/download/movementsequences.png"
+    ),
+    "README.md": (
+        "https://rdm.inesctec.pt/dataset/36363e81-6d41-4195-b475-9181b53e3696/"
+        "resource/ffc0f314-16b2-40d5-a34b-fa91a80fcb36/download/readme.md"
+    ),
+    "blanketset_table.csv": (
+        "https://rdm.inesctec.pt/dataset/36363e81-6d41-4195-b475-9181b53e3696/"
+        "resource/03939c8e-6372-4bcd-bf96-e83aeb2c2fd0/download/blanketsettable.csv"
+    ),
+}
+MANNEQUIN_RGB_URL=(
+    "https://coe.northeastern.edu/Research/AClab/pose/colorManneNumbered.zip"
+)
+BLANKETGEN2_API="https://zenodo.org/api/records/23260194"
 FALLVISION_API=(
     "https://dataverse.harvard.edu/api/datasets/export"
     "?exporter=dataverse_json&persistentId=doi:10.7910/DVN/75QPKK"
@@ -278,6 +297,157 @@ def download_slp_samples(output_dir,count_per_cover=2):
               "license":"SLP non-commercial research/teaching; see official README",
               "source":"https://github.com/ostadabbas/SLP-Dataset-and-Code"})
     return records
+
+
+def download_slp_miccai19_public_rgb(output_dir):
+    """Extract the only password-free SLP RGB subset with HTTP Range.
+
+    The MICCAI19 archive exposes 45 thick-blanket RGB frames for simLab
+    subject 00004.  Its pose labels and every other useful member remain
+    encrypted, so this subset is for unlabeled qualitative testing only.
+    """
+    output_dir=Path(output_dir)
+    manifest_path=output_dir/"download_manifest.json"
+    if manifest_path.is_file():
+        old=json.loads(manifest_path.read_text(encoding="utf-8"))
+        files=old.get("files",[])
+        if (len(files)==45
+                and all(r.get("archive_url")==SLP_MICCAI19_ARCHIVE for r in files)
+                and all((output_dir/"raw"/r["member"]).is_file()
+                        and sha256(output_dir/"raw"/r["member"])==r["sha256"] for r in files)):
+            return files
+
+    records=[]
+    with HTTPRangeReader(SLP_MICCAI19_ARCHIVE,max_transfer=128*1024**2) as remote,zipfile.ZipFile(remote) as z:
+        members=[]
+        for info in z.infolist():
+            p=PurePosixPath(info.filename)
+            if (not info.is_dir() and not info.flag_bits&1 and p.suffix.lower()==".png"
+                    and p.parts[:5]==("SLP","simLab","00004","RGB","cover2")):
+                members.append(info)
+        members=sorted(members,key=lambda info: info.filename)
+        if len(members)!=45:
+            raise RuntimeError(f"Expected 45 public MICCAI19 RGB frames, found {len(members)}")
+        for info in members:
+            p=PurePosixPath(info.filename)
+            if p.is_absolute() or ".." in p.parts:
+                raise ValueError("Unsafe ZIP member path")
+            if info.file_size>10*1024**2:
+                raise ValueError("Unexpectedly large image")
+            data=z.read(info)
+            dest=output_dir/"raw"/Path(*p.parts)
+            dest.parent.mkdir(parents=True,exist_ok=True)
+            part=dest.with_name(dest.name+".part")
+            part.write_bytes(data)
+            part.replace(dest)
+            records.append({"dataset":"SLP_MICCAI19_public_unlabeled",
+                            "archive_url":SLP_MICCAI19_ARCHIVE,
+                            "member":info.filename,"cover":"cover2",
+                            "bytes":len(data),"sha256":sha256(dest),
+                            "label_type":"none_pose_labels_encrypted"})
+        transferred=remote.transferred
+    save_json(manifest_path,{"files":records,"network_bytes":transferred,
+              "license":"SLP non-commercial research/teaching; see official README",
+              "limitations":["single subject","cover2 only","pose labels encrypted",
+                             "no bed-exit event labels"],
+              "source":"https://coe.northeastern.edu/Research/AClab/SLP/"})
+    return records
+
+
+def download_blanketset_public_metadata(output_dir):
+    """Download public BlanketSet documentation, never restricted videos."""
+    output_dir=Path(output_dir)
+    paths=[]
+    for name,url in BLANKETSET_PUBLIC_RESOURCES.items():
+        last_error=None
+        for attempt in range(5):
+            try:
+                paths.append(download_file(url,output_dir/name,max_bytes=20*1024**2))
+                break
+            except requests.RequestException as exc:
+                last_error=exc
+                if attempt<4:
+                    time.sleep(2*(attempt+1))
+        else:
+            raise last_error
+    save_json(output_dir/"public_manifest.json",{
+        "dataset":"BlanketSet",
+        "source":"https://rdm.inesctec.pt/dataset/nis-2022-004",
+        "files":[path.name for path in paths],
+        "video_access":"restricted_due_to_legal_considerations",
+        "pose_labels":"not_provided",
+    })
+    return paths
+
+
+def download_mannequin_rgb_in_bed(output_dir):
+    """Download the public RGB mannequin in-bed pose set and LSP14 labels."""
+    output_dir=Path(output_dir)
+    archive=download_file(
+        MANNEQUIN_RGB_URL,output_dir/"raw"/"colorManneNumbered.zip",
+        max_bytes=50*1024**2)
+    extracted=output_dir/"extracted"
+    extract_zip(archive,extracted,max_bytes=2*1024**3)
+    images=sorted(extracted.rglob("*.jpg"))
+    labels=sorted(extracted.rglob("joints_gt.mat"))
+    if len(images)!=312 or len(labels)!=1:
+        raise RuntimeError(
+            f"Expected 312 RGB images and one joints_gt.mat, found {len(images)} and {len(labels)}")
+    save_json(output_dir/"download_manifest.json",{
+        "dataset":"Mannequin RGB In-Bed Pose",
+        "source":MANNEQUIN_RGB_URL,
+        "archive_sha256":sha256(archive),
+        "rgb_images":len(images),
+        "pose_labels":"LSP14 joints_gt.mat",
+        "blanket":"none",
+    })
+    return images
+
+
+def blanketgen2_inventory(output_dir):
+    """Record the official Zenodo files without downloading large archives."""
+    r=requests.get(BLANKETGEN2_API,timeout=(15,90),headers={"Accept":"application/json"})
+    r.raise_for_status()
+    payload=r.json()
+    files=[]
+    for item in payload.get("files",[]):
+        files.append({"name":item["key"],"bytes":item["size"],
+                      "checksum":item.get("checksum"),
+                      "url":item["links"]["self"]})
+    if not any(item["name"]=="videos.zip" for item in files):
+        raise RuntimeError("BlanketGen2 Zenodo record does not contain videos.zip")
+    save_json(Path(output_dir)/"inventory.json",{
+        "record":23260194,"doi":"10.25747/44jy-3v61",
+        "license":"CC BY 4.0","files":files,
+        "note":"Original Fit3D RGB frames and pose labels are not included."})
+    return files
+
+
+def download_blanketgen2_fit3d(output_dir,include_videos=False):
+    """Download public BlanketGen2 materials; full mode adds 29.8 GB overlays."""
+    output_dir=Path(output_dir)
+    files=blanketgen2_inventory(output_dir)
+    wanted={"BlanketGen2-Fit3D_Supplementary_Materials.zip"}
+    if include_videos:
+        wanted.add("videos.zip")
+    selected=[item for item in files if item["name"] in wanted]
+    if {item["name"] for item in selected}!=wanted:
+        raise RuntimeError("Required BlanketGen2 files are missing from the Zenodo record")
+    required=sum(item["bytes"] for item in selected)
+    ensure_free_space(output_dir,required)
+    paths=[]
+    for item in selected:
+        algorithm,value=(item["checksum"] or "md5:").split(":",1)
+        paths.append(download_file_resumable(
+            item["url"],output_dir/"raw"/item["name"],
+            max_bytes=item["bytes"],checksum=value or None,checksum_type=algorithm))
+    save_json(output_dir/"download_manifest.json",{
+        "dataset":"BlanketGen2-Fit3D","doi":"10.25747/44jy-3v61",
+        "files":[path.name for path in paths],"bytes":required,
+        "contains_original_rgb":False,"contains_pose_labels":False,
+        "usage":"Composite transparent blanket layers with separately licensed Fit3D frames.",
+    })
+    return paths
 
 
 def download_slp_archive(output_dir,max_bytes=18*1024**3):
