@@ -40,12 +40,14 @@ PYTHONPATH=src/part5_bed_exit .venv/bin/python \
   -m research.poc.run_pose_pair_poc \
   --uncovered /path/to/uncovered.png \
   --covered /path/to/covered.png \
+  --roi-config /path/to/reviewed-pair-roi.json \
   --output-dir src/part5_bed_exit/results/pose_pair_run_v1
 ```
 
-이 실행기는 입력을 같은 표시 폭으로 확대하고 full-image ROI를 사용한다. 따라서 출력 Bool은
-침대 이탈 결과가 아니라 pose 유효성 smoke test다. 모델별 이미지, 좌우 비교, 관절 JSONL,
-CSV와 제한사항을 기록한 summary를 생성하며 기존 결과 디렉터리를 덮어쓰지 않는다.
+이 실행기는 입력을 같은 표시 폭으로 확대하고 `roi_reviewed=true`인 단일 Bed ROI 설정을
+필수로 사용한다. ROI는 pair 이미지에서 직접 검수한 정규화 다각형이어야 하며 배포 카메라
+ROI와 구분한다. 모델별 이미지, 좌우 비교, 관절 JSONL, CSV와 제한사항을 기록한 summary를
+생성하며 기존 결과 디렉터리를 덮어쓰지 않는다.
 
 [notebooks/part5_bed_exit.ipynb](notebooks/part5_bed_exit.ipynb)를 실행하면 모델 다운로드부터 데이터셋 접근·다운로드, ROI 확인, 영상/웹캠 실행, 이벤트 정량평가까지 진행할 수 있다. 학습은 하지 않는다.
 

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import cv2
@@ -17,7 +18,7 @@ from research.poc.pose_visualization import (
     render_pose_observation,
     write_image,
 )
-from research.poc.run_pose_pair_poc import prepare_frame
+from research.poc.run_pose_pair_poc import load_bed_roi_config, prepare_frame
 
 
 def _write_sample(root: Path, split: str, stem: str, labels: str) -> None:
@@ -115,3 +116,23 @@ def test_pose_pair_frame_upscale_preserves_aspect_ratio(tmp_path):
     assert frame.shape == (864, 480, 3)
     with pytest.raises(ValueError, match="positive"):
         prepare_frame(path, output_width=0)
+
+
+def test_pose_pair_requires_reviewed_bed_roi(tmp_path):
+    path = tmp_path / "roi.json"
+    config = {
+        "roi_reviewed": True,
+        "roi_version": "pair_v1",
+        "roi_source": "manual mattress polygon",
+        "deployment_approved": False,
+        "roi": [[.1, .1], [.9, .1], [.9, .9], [.1, .9]],
+    }
+    path.write_text(json.dumps(config), encoding="utf-8")
+    loaded, roi = load_bed_roi_config(path)
+    assert loaded["deployment_approved"] is False
+    assert np.allclose(roi.vertices, config["roi"])
+
+    config["roi_reviewed"] = False
+    path.write_text(json.dumps(config), encoding="utf-8")
+    with pytest.raises(ValueError, match="roi_reviewed"):
+        load_bed_roi_config(path)

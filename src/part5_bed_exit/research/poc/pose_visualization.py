@@ -215,9 +215,32 @@ def render_pose_observation(
     canvas = frame.copy()
     roi_pixels = np.rint(roi.pixels(frame.shape)).astype(np.int32)
     overlay = canvas.copy()
-    cv2.fillPoly(overlay, [roi_pixels], (20, 120, 50))
-    canvas = cv2.addWeighted(overlay, .10, canvas, .90, 0)
-    cv2.polylines(canvas, [roi_pixels], True, (40, 210, 80), 2, cv2.LINE_AA)
+    roi_color = (255, 0, 255)
+    cv2.fillPoly(overlay, [roi_pixels], roi_color)
+    canvas = cv2.addWeighted(overlay, .08, canvas, .92, 0)
+    roi_thickness = max(3, round(min(frame.shape[:2]) / 180))
+    cv2.polylines(
+        canvas, [roi_pixels], True, roi_color, roi_thickness, cv2.LINE_AA
+    )
+    label_x = int(np.clip(roi_pixels[:, 0].min() + 6, 6, canvas.shape[1] - 100))
+    label_y = int(np.clip(roi_pixels[:, 1].min() + 22, 92, canvas.shape[0] - 12))
+    cv2.rectangle(
+        canvas,
+        (label_x - 4, label_y - 18),
+        (label_x + 88, label_y + 5),
+        roi_color,
+        -1,
+    )
+    cv2.putText(
+        canvas,
+        "BED ROI",
+        (label_x, label_y),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        .52,
+        (255, 255, 255),
+        1,
+        cv2.LINE_AA,
+    )
 
     for candidate in candidates:
         _draw_pose(
@@ -268,10 +291,10 @@ def render_pose_observation(
         )
     cv2.putText(
         canvas,
-        "green=in | red=out | cyan=other | gray=unselected",
+        "magenta=bed ROI | green=in | red=out | cyan=other | gray=unselected",
         (10, canvas.shape[0] - 10),
         cv2.FONT_HERSHEY_SIMPLEX,
-        .36,
+        .32,
         (245, 245, 245),
         1,
         cv2.LINE_AA,

@@ -31,8 +31,9 @@ MODEL_FILES = {
 }
 CSV_FIELDS = (
     "condition", "method", "model", "image_path", "image_sha256",
-    "preprocessing", "roi_source", "predicted_bool", "inference_time_ms",
-    "candidate_count", "decision_reason", "failure_reason", "notes",
+    "preprocessing", "roi_version", "roi_source", "roi_normalized",
+    "predicted_bool", "inference_time_ms", "candidate_count",
+    "decision_reason", "failure_reason", "notes",
 )
 
 
@@ -52,9 +53,27 @@ def _text_bool(value: bool | None) -> str:
     return "" if value is None else str(value).lower()
 
 
+def load_bed_roi_config(path: Path) -> tuple[dict, PolygonROI]:
+    """Load one visually reviewed, pair-specific bed polygon."""
+    path = Path(path)
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    config = json.loads(path.read_text(encoding="utf-8"))
+    if config.get("roi_reviewed") is not True:
+        raise ValueError("Review the pair bed ROI and set roi_reviewed=true")
+    version = config.get("roi_version")
+    source = config.get("roi_source")
+    if not isinstance(version, str) or not version.strip():
+        raise ValueError("roi_version is required")
+    if not isinstance(source, str) or not source.strip():
+        raise ValueError("roi_source is required")
+    return config, PolygonROI(config["roi"])
+
+
 def run(
     uncovered_path: Path,
     covered_path: Path,
+    roi_config_path: Path,
     model_dir: Path,
     output_dir: Path,
     output_width: int = 480,
@@ -66,9 +85,10 @@ def run(
     for path in paths.values():
         if not path.is_file():
             raise FileNotFoundError(path)
+    roi_config_path = Path(roi_config_path)
+    roi_config, roi = load_bed_roi_config(roi_config_path)
     output_dir.mkdir(parents=True)
 
-    roi = PolygonROI([[0, 0], [1, 0], [1, 1], [0, 1]])
     methods = {
         "yolo_pose": YoloPoseROI(roi, model_dir / MODEL_FILES["yolo_pose"], device="cpu"),
         "mediapipe_pose": MediaPipePoseROI(roi, model_dir / MODEL_FILES["mediapipe_pose"]),
@@ -144,7 +164,11 @@ def run(
                     "image_path": str(path.resolve()),
                     "image_sha256": sha256(path),
                     "preprocessing": f"OpenCV BGR; cubic upscale to width {output_width}",
-                    "roi_source": "full_image_smoke_test_not_deployment_bed_roi",
+                    "roi_version": roi_config["roi_version"],
+                    "roi_source": roi_config["roi_source"],
+                    "roi_normalized": json.dumps(
+                        roi.vertices.tolist(), separators=(",", ":")
+                    ),
                     "predicted_bool": _text_bool(predicted),
                     "inference_time_ms": f"{elapsed_ms:.3f}",
                     "candidate_count": len(method.last_candidates),
@@ -179,7 +203,13 @@ def run(
             for condition, path in paths.items()
         },
         "preprocessing": f"OpenCV BGR; cubic upscale from 120x216 to {output_width}x{round(216 * output_width / 120)}",
-        "roi_source": "full_image_smoke_test_not_deployment_bed_roi",
+        "roi": {
+            "config_path": str(roi_config_path.resolve()),
+            "version": roi_config["roi_version"],
+            "source": roi_config["roi_source"],
+            "normalized_vertices": roi.vertices.tolist(),
+            "deployment_approved": bool(roi_config.get("deployment_approved", False)),
+        },
         "rows": len(rows),
         "artifacts": {
             "comparison_sheet": "pose_pair_comparison.jpg",
@@ -189,7 +219,7 @@ def run(
         "limitations": [
             "The public demo crops are low-resolution and already contain SLP ground-truth skeleton overlays.",
             "The two crops are different poses and are not a controlled matched-pair accuracy test.",
-            "Full-image ROI is used only to inspect pose availability; Bool is not a bed-exit result.",
+            "The manually reviewed mattress polygon is specific to these public demo crops and is not a deployment-camera ROI.",
             "Raw SLP RGB requires provider-approved access and SLP_ZIP_PASSWORD.",
         ],
     }
@@ -202,6 +232,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--uncovered", type=Path, required=True)
     parser.add_argument("--covered", type=Path, required=True)
+    parser.add_argument("--roi-config", type=Path, required=True)
     parser.add_argument("--model-dir", type=Path, default=package_root / "models")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--output-width", type=int, default=480)
@@ -209,6 +240,7 @@ def main() -> int:
     summary = run(
         args.uncovered,
         args.covered,
+        args.roi_config,
         args.model_dir,
         args.output_dir,
         args.output_width,
