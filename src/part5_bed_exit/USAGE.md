@@ -142,7 +142,7 @@ env MPLCONFIGDIR=/tmp/part5-mpl \
   .venv/bin/python -m research.integration.four_method_mp4_benchmark \
   --video src/part5_bed_exit/research/data/videos/test_input_sequence1.mp4 \
   --config src/part5_bed_exit/research/configs/test_input_sequence1_methods_v1.json \
-  --output-dir src/part5_bed_exit/results/integration/mp4_four_method_wrapper/full_v2 \
+  --output-dir src/part5_bed_exit/results/integration/mp4_benchmark/full_v2 \
   --methods detection segmentation yolo_pose mediapipe_pose \
   --final-method yolo_pose \
   --panel-width 320 \
