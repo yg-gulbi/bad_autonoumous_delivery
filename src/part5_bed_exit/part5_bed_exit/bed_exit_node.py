@@ -15,9 +15,7 @@ from part5_bed_exit.bed_exit_method import (
 from part5_bed_exit.bed_exit_state import BedExitState
 from part5_bed_exit.methods.common import default_camera_index
 
-DEFAULT_METHOD = (
-    'part5_bed_exit.methods.segmentation_method:SegmentationBedExitMethod'
-)
+DEFAULT_METHOD = 'segmentation'
 WINDOW_TITLE = 'Part 5 Bed Exit (/patient/bed_exit)'
 
 

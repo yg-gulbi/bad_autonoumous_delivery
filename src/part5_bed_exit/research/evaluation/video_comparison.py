@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import csv
 from fractions import Fraction
 import math
@@ -89,6 +90,10 @@ def _grid(panels):
 CSV_FIELDS = ['frame_index', 'media_s', 'method', 'valid', 'raw_bool', 'output_bool',
               'state', 'warmup', 'history_size', 'event', 'three_consecutive_exit',
               'judge_ms', 'score', 'reason', 'error']
+
+COMPARISON_FIELDS = ['method', 'valid_frames', 'invalid_frames', 'valid_rate',
+                     'raw_true', 'voted_exit_frames', 'events', 'judge_p95_ms',
+                     'shared_processing_fps']
 
 
 def run_video_comparison(video_path, config_path, output_dir, methods=None,
@@ -249,10 +254,51 @@ def run_video_comparison(video_path, config_path, output_dir, methods=None,
         for name, count in counts.items():
             times = count.pop('judge_ms')
             record['summary'][name] = dict(count, judge_p95_ms=float(np.percentile(times, 95)) if times else None)
+        with (out / 'comparison.csv').open('w', newline='', encoding='utf-8') as csv_file:
+            csv_writer = csv.DictWriter(csv_file, fieldnames=COMPARISON_FIELDS)
+            csv_writer.writeheader()
+            for name, summary in record['summary'].items():
+                total = summary['valid_frames'] + summary['invalid_frames']
+                csv_writer.writerow({
+                    'method': name,
+                    **summary,
+                    'valid_rate': summary['valid_frames'] / total if total else None,
+                    'shared_processing_fps': record['processing_fps'],
+                })
         record['stopped_at_frame_limit'] = max_frames is not None and frames == max_frames
         record['artifacts'] = {'video': str(out / 'comparison.mp4'),
-                               'frames': str(out / 'frames.csv'), 'summary': str(out / 'run.json')}
+                               'frames': str(out / 'frames.csv'),
+                               'comparison': str(out / 'comparison.csv'),
+                               'summary': str(out / 'run.json')}
         save_json(out / 'run.json', record)
     if close_errors:
         raise RuntimeError('; '.join(close_errors))
     return record
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Replay one MP4 through the four Part 5 methods and save a comparison table.')
+    parser.add_argument('--video', required=True, help='Input MP4 path')
+    parser.add_argument('--config', required=True, help='Reviewed single-ROI method config')
+    parser.add_argument('--output-dir', required=True, help='New result directory')
+    parser.add_argument('--methods', nargs='+', choices=tuple(MODEL_FILES), default=None)
+    parser.add_argument('--max-frames', type=int, default=None,
+                        help='Optional frame limit; omit to process the full MP4')
+    parser.add_argument('--panel-width', type=int, default=640)
+    args = parser.parse_args()
+    record = run_video_comparison(
+        args.video, args.config, args.output_dir, methods=args.methods,
+        max_frames=args.max_frames, panel_width=args.panel_width)
+    print(f"status={record['status']} frames={record['frames']} "
+          f"shared_processing_fps={record['processing_fps']:.3f}")
+    print('method,valid,invalid,raw_true,voted_exit,events,p95_ms')
+    for name, summary in record['summary'].items():
+        print(f"{name},{summary['valid_frames']},{summary['invalid_frames']},"
+              f"{summary['raw_true']},{summary['voted_exit_frames']},"
+              f"{summary['events']},{summary['judge_p95_ms']:.3f}")
+    print(record['artifacts']['comparison'])
+
+
+if __name__ == '__main__':
+    main()

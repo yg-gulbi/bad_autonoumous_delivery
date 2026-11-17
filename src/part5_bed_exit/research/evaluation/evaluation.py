@@ -369,8 +369,12 @@ def run_benchmark(manifest_path,model_dir,output_dir,methods=None,device="cpu",s
         raise FileExistsError("Choose a new run directory to preserve prior results")
     output_dir.mkdir(parents=True,exist_ok=True)
     from part5_bed_exit.methods.bed_exit_core import MODEL_FILES
+    # Custom factories may expose model names that are not part of the four
+    # built-in pretrained strategies.  Hash built-in weights when known; a
+    # custom adapter is responsible for recording its own composite weights.
     weight_hashes={n:sha256(Path(model_dir)/MODEL_FILES[n])
-                   for n in methods if (Path(model_dir)/MODEL_FILES[n]).is_file()}
+                   for n in methods
+                   if n in MODEL_FILES and (Path(model_dir)/MODEL_FILES[n]).is_file()}
     save_json(output_dir/"run.json",{"status":"running","environment":environment_record(),
               "manifest_sha256":sha256(manifest_path),"manifest":manifest,
               "weight_sha256":weight_hashes,"device":device,"split":split,

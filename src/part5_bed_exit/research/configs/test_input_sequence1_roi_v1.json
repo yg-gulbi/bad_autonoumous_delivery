@@ -1,0 +1,23 @@
+{
+  "roi_version": "test_input_sequence1_perspective_trapezoid_v1",
+  "roi_source": "frame_0000 supine baseline of test_input_sequence1.mp4; board edges extended along perspective lines toward foot side",
+  "roi_reviewed": true,
+  "deployment_approved": false,
+  "bed_polygon": [
+    [0.278, 0.040],
+    [0.626, 0.040],
+    [0.882, 0.970],
+    [0.073, 0.970]
+  ],
+  "raw_board_polygon": [
+    [0.255, 0.145],
+    [0.655, 0.150],
+    [0.880, 0.962],
+    [0.075, 0.962]
+  ],
+  "perspective_extension": {
+    "far_edge_ratio": 0.1285,
+    "direction": "head_to_foot_upward",
+    "reason": "Camera views from head toward feet; feet extend past raw board top edge in image space."
+  }
+}

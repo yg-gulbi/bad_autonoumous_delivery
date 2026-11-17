@@ -236,6 +236,62 @@ def test_end_to_end_original_pts_to_episode_report(tmp_path):
     assert (tmp_path/"results/detection/logic_only/frames.csv").is_file()
 
 
+EXTERNAL_BENCHMARK_ADAPTERS = (
+    "vitpose",
+    "aotgan_vitpose",
+    "mae_vitpose",
+    "yolo_classification",
+    "pose_lstm",
+    "pose_tcn",
+    "pose_stgcn",
+    "fastsam",
+    "sam2",
+)
+
+
+@pytest.mark.parametrize("adapter_name", EXTERNAL_BENCHMARK_ADAPTERS)
+def test_each_external_model_can_replace_the_benchmark_factory(tmp_path, adapter_name):
+    """Run one adapter at a time without registering it as a built-in model.
+
+    PixelMethod is a deterministic contract double.  Real adapters replace it
+    with their own backend while preserving judge/reset/close/last behavior.
+    This test verifies benchmark plumbing, not model accuracy.
+    """
+    pytest.importorskip('av', reason='Install Part 5 requirements for the optional video benchmark')
+    video=tmp_path/"clip.mp4"
+    writer=cv2.VideoWriter(str(video),cv2.VideoWriter_fourcc(*"mp4v"),10,(32,32))
+    assert writer.isOpened()
+    for i in range(10):
+        writer.write(np.full((32,32,3),255 if 2<=i<7 else 0,np.uint8))
+    writer.release()
+    clip={"clip_id":"factory_contract","subject_id":"p1","session_id":"s1",
+          "split":"test","video":"clip.mp4","video_sha256":sha256(video),
+          "duration_s":1.0,"labels_reviewed":True,"roi_reviewed":True,
+          "roi_version":"logic_v1","roi":[[0,0],[1,0],[1,1],[0,1]],
+          "patient_present_intervals_s":[[0,1]],
+          "events":[event("exit",.2,.4,.8)],
+          "conditions":{"case_id":"synthetic_factory_contract"}}
+    manifest=tmp_path/"testbed.json"
+    save_json(manifest,{"schema_version":1,"policy":"any_body","clips":[clip]})
+    calls=[]
+
+    def factory(name,roi,models,**kwargs):
+        calls.append(name)
+        assert name == adapter_name
+        return PixelMethod(roi)
+
+    output=tmp_path/"results"
+    result=run_benchmark(manifest,tmp_path,output,methods=[adapter_name],factory=factory)
+
+    assert calls == [adapter_name]
+    assert result[0]["method"] == adapter_name
+    assert result[0]["tp"] == 1
+    assert json.loads((output/"run.json").read_text())["status"] == "complete"
+    assert (output/adapter_name/"aggregate.json").is_file()
+    assert (output/adapter_name/"factory_contract"/"frames.csv").is_file()
+    assert (output/"comparison.csv").is_file()
+
+
 def test_html_download_is_rejected_and_partial_file_removed(tmp_path,monkeypatch):
     class Response:
         headers={"Content-Type":"text/html"}
