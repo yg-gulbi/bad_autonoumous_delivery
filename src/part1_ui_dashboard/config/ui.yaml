@@ -1,0 +1,12 @@
+fleet_yaml: ""
+host: 0.0.0.0
+port: 8090
+event_log_size: 500
+map_yaml: main_map/main_maps.yaml
+floor_plan_yaml: config/floor_plan.yaml
+map_rotate: ccw90
+map_deskew: auto
+map_padding_m: 0.25
+mode_label: auto
+dev_tools: false
+ack_timeout_s: 3.0
