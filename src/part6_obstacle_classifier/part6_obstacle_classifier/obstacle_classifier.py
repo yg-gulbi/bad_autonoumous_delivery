@@ -1,4 +1,4 @@
-"""ROS-independent obstacle classification and depth-to-3D pipeline."""
+"""ROS 2에 의존하지 않는 순수 장애물 분류 및 Depth 기반 3D 위치 변환 파이프라인."""
 
 from dataclasses import dataclass
 from importlib import import_module
@@ -9,7 +9,7 @@ import numpy as np
 
 @dataclass(frozen=True)
 class Detection:
-    """One object: label, confidence, pixel (x1, y1, x2, y2), and optional map pose."""
+    """탐지된 단일 객체 정보 (클래스명, 신뢰도, 픽셀 좌표 bbox, 선택적 map 좌표 pose)."""
 
     label: str
     confidence: float
@@ -17,6 +17,7 @@ class Detection:
     pose: dict[str, float] | None = None
 
     def to_dict(self) -> dict:
+        """JSON 직렬화를 위해 딕셔너리로 변환. 유효한 Depth가 없어 pose가 None이면 pose 키를 생략한다."""
         data = {
             'label': self.label,
             'confidence': self.confidence,
@@ -28,22 +29,24 @@ class Detection:
 
 
 class UnconfiguredClassifier:
-    """Fail explicitly until a real model adapter is selected."""
+    """모델 어댑터(method)가 지정되지 않았을 때 명시적으로 예외를 발생시키는 기본 클래스."""
 
     def classify(self, frame):
         raise RuntimeError('Classifier is not configured; set method:=module:ClassName')
 
 
 class Yolo11Classifier:
-    """Ultralytics YOLO11n adapter implementing classify(frame) -> list[Detection]."""
+    """Ultralytics YOLO11n 모델로 BGR 이미지에서 객체를 탐지하는 어댑터 클래스."""
 
     def __init__(self, model_path: str = 'yolo11n.pt', conf_threshold: float = 0.25):
+        # YOLO 패키지가 설치되지 않은 환경에서도 모듈 임포트·단위 테스트가 가능하도록 지연 임포트
         from ultralytics import YOLO
 
         self.model = YOLO(model_path)
         self.conf_threshold = float(conf_threshold)
 
     def classify(self, frame: np.ndarray) -> list[Detection]:
+        """BGR 이미지를 입력받아 이미지 경계 안으로 보정된 Detection 목록을 반환."""
         height, width = frame.shape[:2]
         results = self.model(frame, conf=self.conf_threshold, verbose=False)
         detections: list[Detection] = []
@@ -55,6 +58,7 @@ class Yolo11Classifier:
             label = str(self.model.names[cls_id])
             conf = float(box.conf[0])
             x1, y1, x2, y2 = map(float, box.xyxy[0].tolist())
+            # 모델 출력 좌표가 소수 오차로 이미지 경계를 살짝 벗어나지 않도록 클리핑
             x1 = max(0.0, min(x1, float(width)))
             y1 = max(0.0, min(y1, float(height)))
             x2 = max(0.0, min(x2, float(width)))
@@ -65,6 +69,7 @@ class Yolo11Classifier:
 
 
 def load_classifier(path: str, **kwargs):
+    """'패키지.모듈:클래스명' 문자열을 받아 분류기 인스턴스를 동적으로 생성해 반환."""
     if not path:
         return UnconfiguredClassifier()
     module, separator, name = path.partition(':')
@@ -78,18 +83,20 @@ def load_classifier(path: str, **kwargs):
 
 
 def validate_frame(frame):
+    """입력이 비어 있지 않은 3채널 uint8 BGR 이미지인지 검증."""
     if (not isinstance(frame, np.ndarray) or frame.dtype != np.uint8
             or frame.ndim != 3 or frame.shape[2] != 3 or frame.size == 0):
         raise ValueError('Expected a non-empty uint8 BGR image with three channels')
 
 
 def preprocess(frame):
-    """Preserve source coordinates; model-specific resizing belongs in the adapter."""
+    """원본 픽셀 좌표를 유지하기 위해 형태 검증만 수행 (모델별 리사이즈는 어댑터 내부에서 처리)."""
     validate_frame(frame)
     return frame
 
 
 def classify_obstacles(frame, classifier):
+    """분류기를 실행하고 반환된 Detection(라벨, 신뢰도, bbox 범위)의 유효성을 검증."""
     detections = classifier.classify(frame)
     if not isinstance(detections, list):
         raise TypeError('classify() must return list[Detection]')
@@ -169,6 +176,7 @@ def attach_poses(
 
 
 def build_result(detections: list[Detection], header) -> dict:
+    """정상 처리 결과 딕셔너리 생성 (탐지 객체 유무에 따라 obstacle_present가 True/False)."""
     return {
         'status': 'ok',
         'header': header,
@@ -178,7 +186,7 @@ def build_result(detections: list[Detection], header) -> dict:
 
 
 def build_error(status: str, message: str, header=None) -> dict:
-    """Unknown obstacle presence must never be represented as clear."""
+    """오류/타임아웃 응답 생성. 장애물 없음(False)과 혼동되지 않도록 obstacle_present는 None으로 둔다."""
     return {
         'status': status,
         'header': header,
@@ -198,6 +206,7 @@ def process_frame(
     min_depth: float = 0.2,
     max_depth: float = 5.0,
 ) -> dict:
+    """전체 처리 파이프라인: 프레임 검증 -> 객체 분류 -> 유효 Depth 기반 3D/map 위치 계산 -> 결과 생성."""
     detections = classify_obstacles(preprocess(frame), classifier)
     detections = attach_poses(
         detections,
