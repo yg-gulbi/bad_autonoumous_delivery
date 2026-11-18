@@ -1,18 +1,26 @@
 from setuptools import find_packages, setup
 
+package_name = 'part3_fleet_manager'
+
 setup(
-    name='part3_fleet_manager',
+    name=package_name,
     version='0.1.0',
     packages=find_packages(exclude=['test']),
     data_files=[
-        ('share/ament_index/resource_index/packages', ['resource/part3_fleet_manager']),
-        ('share/part3_fleet_manager', ['package.xml']),
+        ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
+        ('share/' + package_name, ['package.xml']),
+        ('share/' + package_name + '/config', ['config/fleet.yaml']),
+        ('share/' + package_name + '/launch', ['launch/fleet_mock.launch.py']),
     ],
     install_requires=['setuptools'],
-    zip_safe=True,
+    extras_require={'test': ['pytest']},
+    entry_points={'console_scripts': [
+        'fleet_manager_node = part3_fleet_manager.fleet_manager_node:main',
+        'mock_hospital_nav = part3_fleet_manager.mock_hospital_nav:main',
+    ]},
+    zip_safe=False,
     maintainer='Project contributors',
     maintainer_email='maintainer@example.com',
-    description='PART 03 central fleet dispatch, road-1 occupancy, and safety pause core (skeleton).',
+    description='PART 03 central fleet manager for hospital AMRs.',
     license='UNLICENSED',
-    entry_points={'console_scripts': []},
 )

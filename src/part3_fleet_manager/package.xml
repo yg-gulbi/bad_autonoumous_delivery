@@ -2,12 +2,24 @@
 <package format="3">
   <name>part3_fleet_manager</name>
   <version>0.1.0</version>
-  <description>PART 03 central fleet dispatch, road-1 occupancy, and safety pause core (skeleton).</description>
+  <description>PART 03 central fleet manager for hospital AMRs.</description>
   <maintainer email="maintainer@example.com">Project contributors</maintainer>
   <license>UNLICENSED</license>
   <buildtool_depend>ament_python</buildtool_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>rcl_interfaces</exec_depend>
   <exec_depend>rclpy</exec_depend>
+  <exec_depend>ros2launch</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <!-- irobot_create_msgs enables optional hazard and dock subscriptions. -->
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>python3-shapely</exec_depend>
+  <exec_depend>python3-networkx</exec_depend>
   <test_depend>python3-pytest</test_depend>
   <export><build_type>ament_python</build_type></export>
 </package>
