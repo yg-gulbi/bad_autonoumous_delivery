@@ -17,7 +17,7 @@ from std_msgs.msg import Empty, String
 from tf2_ros import Buffer, TransformListener
 import tf2_geometry_msgs  # noqa: F401  # Registers PointStamped transform support
 
-from .obstacle_classifier import build_error, load_classifier, process_frame
+from .obstacle_classifier import build_error, draw_detections, load_classifier, process_frame
 
 
 class ObstacleClassifierNode(Node):
@@ -29,6 +29,7 @@ class ObstacleClassifierNode(Node):
         self.declare_parameter('camera_info_topic', 'oakd/rgb/camera_info')
         self.declare_parameter('trigger_topic', 'obstacle/inspect_image')
         self.declare_parameter('output_topic', 'obstacle_classifier/result')
+        self.declare_parameter('image_output_topic', 'obstacle_classifier/image/compressed')
         self.declare_parameter('target_frame', 'map')
         self.declare_parameter(
             'method',
@@ -71,6 +72,9 @@ class ObstacleClassifierNode(Node):
         self.publisher = self.create_publisher(
             String, str(self.get_parameter('output_topic').value), 10
         )
+        self.image_publisher = self.create_publisher(
+            CompressedImage, str(self.get_parameter('image_output_topic').value), 10
+        )
 
         self.create_subscription(
             CameraInfo,
@@ -100,6 +104,7 @@ class ObstacleClassifierNode(Node):
         )
 
     def camera_info_callback(self, msg: CameraInfo):
+        """카메라 내부 파라미터 행렬 K(3x3)를 최초 1회 저장."""
         with self.lock:
             if self.K is None:
                 self.K = np.array(msg.k, dtype=np.float64).reshape(3, 3)
@@ -119,6 +124,7 @@ class ObstacleClassifierNode(Node):
             )
 
     def _on_capture_timeout(self):
+        """지정 시간 내에 RGB·Depth·CameraInfo가 준비되지 않으면 오류 JSON 발행."""
         with self.lock:
             if not self.pending_capture:
                 self._cancel_timeout_timer()
@@ -130,6 +136,7 @@ class ObstacleClassifierNode(Node):
         )
 
     def _transform_to_target(self, x: float, y: float, z: float, frame_id: str, stamp):
+        """depth_msg.header.stamp 시점의 TF를 조회해 카메라 3D 좌표를 target_frame(map)으로 변환."""
         pt = PointStamped()
         pt.header.frame_id = frame_id
         pt.header.stamp = stamp
@@ -183,13 +190,27 @@ class ObstacleClassifierNode(Node):
                 min_depth=self.min_depth,
                 max_depth=self.max_depth,
             )
+            self.publish_annotated_image(rgb_frame, result['detections'], rgb_msg.header)
         except Exception as exc:
             self.get_logger().error(f'Classification failed: {exc}')
             result = build_error('processing_error', str(exc), header)
 
         self.publish_result(result)
 
+    def publish_annotated_image(self, frame: np.ndarray, detections: list[dict], header):
+        """탐지 결과가 그려진 이미지를 JPEG로 압축해 CompressedImage 토픽으로 발행."""
+        annotated = draw_detections(frame, detections)
+        ok, encoded = cv2.imencode('.jpg', annotated)
+        if not ok:
+            return
+        msg = CompressedImage()
+        msg.header = header
+        msg.format = 'jpeg'
+        msg.data = encoded.tobytes()
+        self.image_publisher.publish(msg)
+
     def publish_result(self, result: dict):
+        """탐지 및 좌표 계산 결과를 JSON 문자열로 발행."""
         msg = String()
         msg.data = json.dumps(result, allow_nan=False)
         self.publisher.publish(msg)

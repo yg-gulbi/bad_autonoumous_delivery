@@ -17,5 +17,6 @@ setup(
     license='UNLICENSED',
     entry_points={'console_scripts': [
         'obstacle_classifier = part6_obstacle_classifier.obstacle_classifier_node:main',
+        'test_realtime_obstacle = part6_obstacle_classifier.test_realtime_obstacle:main',
     ]},
 )

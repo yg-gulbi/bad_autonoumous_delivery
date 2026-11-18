@@ -115,7 +115,7 @@ def extract_valid_depth(
     min_depth: float = 0.2,
     max_depth: float = 5.0,
 ) -> float | None:
-    """Return depth in meters if finite and within [min_depth, max_depth], else None."""
+    """픽셀 (u, v)의 깊이(m)가 유한값이고 유효 범위(min_depth < z < max_depth)일 때만 반환."""
     if depth_image is None or depth_image.size == 0:
         return None
     height, width = depth_image.shape[:2]
@@ -123,6 +123,7 @@ def extract_valid_depth(
         return None
 
     raw = float(depth_image[v, u])
+    # 정수형(uint16, mm 단위)은 m 단위로 변환, 실수형(float32)은 그대로 사용
     z = raw / 1000.0 if np.issubdtype(depth_image.dtype, np.integer) else raw
     if not math.isfinite(z) or not (min_depth < z < max_depth):
         return None
@@ -130,7 +131,7 @@ def extract_valid_depth(
 
 
 def deproject_pixel_to_3d(u: int, v: int, z: float, K: np.ndarray) -> tuple[float, float, float]:
-    """Back-project pixel (u, v) and depth z (m) to camera 3D coordinates (X, Y, Z)."""
+    """카메라 내부 파라미터 K를 이용해 픽셀 (u, v)와 깊이 z(m)를 카메라 3D 좌표 (X, Y, Z)로 역투영."""
     fx, fy = float(K[0, 0]), float(K[1, 1])
     cx, cy = float(K[0, 2]), float(K[1, 2])
     return ((u - cx) * z / fx, (v - cy) * z / fy, z)
@@ -207,3 +208,30 @@ def process_frame(
         max_depth=max_depth,
     )
     return build_result(detections, header)
+
+
+def draw_detections(frame: np.ndarray, detections: list[dict]) -> np.ndarray:
+    """탐지된 객체의 바운딩 박스, 라벨, 신뢰도 및 map 좌표를 BGR 이미지에 그려 반환."""
+    import cv2
+
+    annotated = frame.copy()
+    for item in detections:
+        x1, y1, x2, y2 = map(int, item['bbox'])
+        label = item['label']
+        conf = item['confidence']
+        pose = item.get('pose')
+        text = f'{label} {conf:.2f}'
+        if pose is not None:
+            # 유효한 Depth로 map 좌표가 계산된 경우 함께 표기
+            text += f" ({pose['x']:.2f}, {pose['y']:.2f})"
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        cv2.putText(
+            annotated,
+            text,
+            (x1, max(15, y1 - 6)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 255, 0),
+            1,
+        )
+    return annotated
