@@ -2,36 +2,32 @@
 
 ROS 노드는 웹캠 BGR 프레임을 선택한 판단 객체의 `judge(frame) -> bool`에 전달한다. 최근 5개 유효 프레임 중 3개 이상이 `True`이면 `/patient/bed_exit`에 `True`를 발행한다. 카메라 또는 판단 실패 시 이력을 초기화하고 해당 프레임은 발행하지 않는다.
 
-기본 실행은 외장 USB 웹캠을 우선 선택하고 Segmentation 프리셋을 사용한다. 실제 카메라에서 검수한 단일 ROI를 강제하기 위해 `method_config`가 없거나 `roi_reviewed=false`이면 실행하지 않는다. GUI 환경에서는 ROI·마스크·5프레임 투표 프리뷰도 표시한다.
+운영 실행은 `camera_index=0`의 웹캠과 `method_config`의 `method`로 선택한 판단 모델을 사용한다. 설정에는 실제 카메라에서 정한 단일 ROI와 모델 디렉터리도 함께 넣는다. 다른 카메라는 `camera_index`로 명시한다.
 
 ## 런타임 구성
 
 - `bed_exit_node.py`: 카메라 입력, 프리뷰, 5프레임 투표, ROS 발행
-- `bed_exit_method.py`: `judge(frame) -> bool` 계약과 메서드 로딩
+- `bed_exit_method.py`: `judge(frame) -> bool` 계약과 테스트 주입 객체 검사
 - `bed_exit_state.py`: 최근 5프레임 3회 이상 투표
-- `pretrained.py`: 네 내장 모델 생성과 단일 ROI 설정 검증
-- `methods/bed_exit_core.py`: Detection, Segmentation, YOLO Pose, MediaPipe Pose 구현
-- `methods/detection_method.py`, `methods/segmentation_method.py`: 기본 ROI와 무인자 생성자를 지원하는 Detection/Segmentation 구현
+- `pretrained.py`: 설정의 `method`에 맞는 판단 객체 생성과 ROI 설정 검증
+- `methods/bed_exit_core.py`: 네 판단 모델의 실제 구현
 
-## 메서드 선택
+## 운영 메서드
 
-기본 Segmentation 외에도 ROS 파라미터로 다른 구현을 지정할 수 있다.
+운영 노드는 `method_config` JSON의 `method`로 네 내장 모델 중 하나를 선택한다.
+임의 `module:Class` 동적 로딩은 사용하지 않는다.
 
-- 클래스 경로: `-p method:=your_package.your_method:YourBedExitMethod`
-- Detection 프리셋: `-p method:=detection -p method_config:=/path/to/methods.local.json`
-- 내장 프리셋: `detection`, `segmentation`, `yolo_pose`, `mediapipe_pose` 중 하나와 검수된 `method_config` JSON 지정
-- 코드 직접 주입: `BedExitNode(detector=YourBedExitMethod())`
+- 운영 실행: 검수된 `method_config` JSON 지정
+- 단위 테스트: `BedExitNode(detector=FakeDetector())` 형태의 코드 직접 주입
+- 네 모델 비교: `research/`의 벤치마크 도구에서만 수행
 
-모든 방법론은 `judge(frame) -> bool`을 제공해야 한다. 내장 프리셋은 `examples/methods.template.json`을 로컬 설정으로 복사하고 실제 카메라 ROI를 검수한 뒤 `roi_reviewed=true`로 설정해야 한다.
+판단 객체는 `judge(frame) -> bool`을 제공해야 한다. `examples/methods.template.json`을 로컬 설정으로 복사한 뒤 실제 카메라의 ROI 좌표로 교체한다.
 
 ### 메서드별 구현 · 기본값 차이
 
 | 구분 | 클래스 / 경로 | 기반 추상 클래스 (다형성) | 기본 가중치 / ROI 키 | 주요 기본 파라미터 · 판정 규칙 |
 | --- | --- | --- | --- | --- |
-| **Segmentation (기본 프리셋)** | `SegmentationROI` (`methods/bed_exit_core.py`) | `bed_exit_core.BedExitMethod(BedExitMethod)` | `yolo11n-seg.pt` / `roi` (`method_config` JSON) | `outside_fraction=0.05`, `conf=0.25`, `imgsz=640`, 검수된 ROI 필수 |
-| **Detection 프리셋** | `DetectionROI` (`methods/bed_exit_core.py`) | `bed_exit_core.BedExitMethod(BedExitMethod)` | `yolo11n.pt` / `roi` (`method_config` JSON) | `outside_fraction=0.05`, `conf=0.25`, `imgsz=640`, 검수된 ROI 필수 |
-| **YOLO Pose / MediaPipe (프리셋)** | `YoloPoseROI`, `MediaPipePoseROI` (`methods/bed_exit_core.py`) | `bed_exit_core.BedExitMethod(BedExitMethod)` | `yolo11n-pose.pt` / `pose_landmarker_full.task` / `roi` (`method_config` JSON) | `policy='any_body'`, `point_conf=0.5`, `tolerance_px=3.0` (공통 13관절 중 1개라도 밖이면 `True`, 누락 시 `JudgmentUnavailable`) |
-| **미구현 스타터 템플릿** | `BedExitMethodTemplate` (`method_template.py`, `research/templates/method_template.py`) | `BedExitMethod` | 없음 | `judge()` 호출 시 `NotImplementedError` 발생 (팀원 복사·상속용) |
+| **Segmentation (기본 선택)** | `SegmentationROI` (`methods/bed_exit_core.py`) | `bed_exit_core.BedExitMethod(BedExitMethod)` | `yolo11n-seg.pt` / `roi` (`method_config` JSON) | 마스크 값 `>0.5`, ROI 밖 비율 `>0.05`, 검수된 ROI 필수 |
 
 ## 빌드와 실행
 
@@ -46,12 +42,11 @@ source /opt/ros/jazzy/setup.bash
 colcon build --packages-select part5_bed_exit --symlink-install
 source install/setup.bash
 
-# 실제 USB 카메라 화면에서 roi 좌표를 수정한 뒤 roi_reviewed를 true로 변경한다.
+# 실제 USB 카메라 화면을 기준으로 roi 좌표를 수정한다.
 cp src/part5_bed_exit/examples/methods.template.json \
   src/part5_bed_exit/examples/methods.local.json
 
 ros2 run part5_bed_exit bed_exit --ros-args \
-  -p method:=segmentation \
   -p method_config:="$(pwd)/src/part5_bed_exit/examples/methods.local.json"
 ```
 
@@ -78,22 +73,13 @@ ros2 run part5_bed_exit bed_exit --ros-args \
   -p show:=false \
   -p method_config:="$(pwd)/src/part5_bed_exit/examples/methods.local.json"
 
-# Detection 프리셋 선택
-ros2 run part5_bed_exit bed_exit --ros-args \
-  -p method:=detection \
-  -p method_config:="$(pwd)/src/part5_bed_exit/examples/methods.local.json"
-
-# 검수된 ROI를 사용하는 YOLO Pose 내장 프리셋
-ros2 run part5_bed_exit bed_exit --ros-args \
-  -p method:=yolo_pose \
-  -p method_config:="$(pwd)/src/part5_bed_exit/examples/methods.local.json"
 ```
 
 `capture_fps`는 프레임 수집 시도 주기이며 실제 처리율은 카메라와 추론 시간에 제한된다.
 
 ## 침대 ROI와 추론 장치
 
-서비스 프리셋은 `method_config`의 정규화된 `roi` 좌표만 사용한다. `methods/bed_roi.json`은 클래스 경로를 직접 사용하는 기존 Detection/Segmentation 구현의 기본 예시이므로, 실제 배포 ROI로 간주하지 않는다.
+운영 판단 모델은 `method_config`의 정규화된 `roi` 좌표를 공통으로 사용한다. `methods/bed_roi.json`은 연구 도구 호환 구현의 예시이므로 실제 배포 ROI로 간주하지 않는다.
 
 ```bash
 export BED_EXIT_ROI_CONFIG=/path/to/roi.json
@@ -118,7 +104,7 @@ PYTHONPATH=src/part5_bed_exit python \
   -m research.evaluation.video_comparison \
   --video src/part5_bed_exit/research/data/videos/test_input_sequence1.mp4 \
   --config src/part5_bed_exit/research/configs/test_input_sequence1_methods_v1.json \
-  --output-dir src/part5_bed_exit/results/dump/adhoc_runs/test_input_sequence1_segmentation_run \
+  --output-dir src/part5_bed_exit/results/exploratory/video_comparison_runs/test_input_sequence1_segmentation_run \
   --methods segmentation
 ```
 
@@ -142,7 +128,7 @@ env MPLCONFIGDIR=/tmp/part5-mpl \
   .venv/bin/python -m research.integration.four_method_mp4_benchmark \
   --video src/part5_bed_exit/research/data/videos/test_input_sequence1.mp4 \
   --config src/part5_bed_exit/research/configs/test_input_sequence1_methods_v1.json \
-  --output-dir src/part5_bed_exit/results/integration/mp4_benchmark/full_v2 \
+  --output-dir src/part5_bed_exit/results/integration_tests/mp4_four_model_benchmark/full_v2 \
   --methods detection segmentation yolo_pose mediapipe_pose \
   --final-method yolo_pose \
   --panel-width 320 \
@@ -167,8 +153,8 @@ python3 src/part5_bed_exit/research/evaluation/compare_methods.py \
 단일 프레임 순전파·시각화 비교:
 
 ```bash
-python3 src/part5_bed_exit/compare_single_frame.py
-python3 src/part5_bed_exit/compare_single_frame.py \
+python3 src/part5_bed_exit/research/evaluation/single_frame_comparison.py
+python3 src/part5_bed_exit/research/evaluation/single_frame_comparison.py \
   --source img1.jpg img2.png \
   --show
 ```

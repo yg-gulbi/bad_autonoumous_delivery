@@ -1,7 +1,5 @@
 {
-  "roi_version": "test_input_sequence1_perspective_trapezoid_v1",
-  "roi_reviewed": true,
-  "deployment_approved": false,
+  "method": "segmentation",
   "model_dir": "../../models",
   "device": "cpu",
   "roi": [
@@ -9,11 +7,5 @@
     [0.626, 0.040],
     [0.882, 0.970],
     [0.073, 0.970]
-  ],
-  "method_settings": {
-    "outside_fraction": 0.05,
-    "policy": "any_body",
-    "point_conf": 0.5,
-    "tolerance_px": 3.0
-  }
+  ]
 }

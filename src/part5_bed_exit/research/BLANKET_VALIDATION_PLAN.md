@@ -13,7 +13,7 @@
 2026-11-16 후속 smoke test에서는 SLP 공식 GitHub reference archive의 공개
 `demo_2d.PNG`에서 비가림·이불 가림 RGB panel 두 장을 분리해 실행했다. 이 panel은
 120×216 저해상도이고 정답 스켈레톤이 이미 그려진 논문·코드 데모 자료이므로, 원본 SLP
-RGB나 담요 성능 검증을 대체하지 않는다. 결과는 `results/pose_pair_slp_public_demo_v1/`에
+RGB나 담요 성능 검증을 대체하지 않는다. 결과는 `results/model_tests/archived_runs/pose_pair_slp_public_demo_v1/`에
 별도 저장했다.
 
 ## 2. 후속 데이터 보충 원칙

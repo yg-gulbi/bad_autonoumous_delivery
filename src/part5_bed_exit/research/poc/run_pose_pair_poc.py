@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Run YOLO Pose and MediaPipe Pose on one uncovered/covered RGB image pair."""
+"""비가림·담요 가림 RGB 이미지 한 쌍에서 두 Pose 모델을 비교하는 POC.
+
+검수된 침대 ROI를 불러 YOLO Pose와 MediaPipe Pose의 관절·이탈 판단을 실행하고
+CSV, JSON과 비교 이미지를 저장한다. 영상 연속 판단이나 ROS 발행은 하지 않는다.
+"""
 from __future__ import annotations
 
 import argparse
@@ -16,7 +20,7 @@ from part5_bed_exit.methods.bed_exit_core import (
     PolygonROI,
     YoloPoseROI,
 )
-from research.datasets.downloads import save_json, sha256
+from research.dataset_download_label.downloads import save_json, sha256
 from research.poc.pose_visualization import (
     build_pose_record,
     render_comparison_sheet,
@@ -38,6 +42,7 @@ CSV_FIELDS = (
 
 
 def prepare_frame(path: Path, output_width: int = 480):
+    """이미지를 읽고 종횡비를 유지한 채 지정 너비로 확대·축소한다."""
     frame = cv2.imread(str(path), cv2.IMREAD_COLOR)
     if frame is None:
         raise ValueError(f"Cannot decode {path}")
@@ -50,11 +55,12 @@ def prepare_frame(path: Path, output_width: int = 480):
 
 
 def _text_bool(value: bool | None) -> str:
+    """선택적 불리언을 CSV에 쓸 소문자 문자열로 변환한다."""
     return "" if value is None else str(value).lower()
 
 
 def load_bed_roi_config(path: Path) -> tuple[dict, PolygonROI]:
-    """Load one visually reviewed, pair-specific bed polygon."""
+    """이미지 쌍 전용으로 사람이 검수한 침대 다각형 설정을 읽는다."""
     path = Path(path)
     if not path.is_file():
         raise FileNotFoundError(path)
@@ -78,6 +84,7 @@ def run(
     output_dir: Path,
     output_width: int = 480,
 ) -> dict:
+    """비가림·가림 이미지 쌍에서 두 Pose 모델을 실행하고 결과를 저장한다."""
     paths = {"uncovered": Path(uncovered_path), "covered": Path(covered_path)}
     model_dir, output_dir = Path(model_dir), Path(output_dir)
     if output_dir.exists():
@@ -228,6 +235,7 @@ def run(
 
 
 def main() -> int:
+    """명령행 인자를 해석해 이미지 쌍 Pose POC를 실행한다."""
     package_root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--uncovered", type=Path, required=True)

@@ -60,7 +60,6 @@ flowchart LR
     CAM["웹캠 BGR 프레임"] --> JUDGE["선택한 메서드 객체의 judge(frame)"]
     JUDGE --> VOTE["최근 5프레임 다수결 (3회 이상 True)"]
     VOTE --> PUB["/patient/bed_exit (std_msgs/msg/Bool) 발행"]
-```
 
 ### 저장소 구조
 

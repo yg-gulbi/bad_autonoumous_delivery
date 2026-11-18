@@ -1,9 +1,12 @@
-"""ROS 2 없이 웹캠/영상 파일로 나와 팀원의 이탈 판단 메서드 객체들을 비교·검증하는 실행 스크립트."""
+"""ROS 없이 웹캠·영상에서 여러 침대 이탈 판단 객체를 동시에 비교하는 도구.
+
+각 객체에 동일 프레임을 전달하고 원시 판정, 오류와 메서드 간 불일치를 집계하며
+선택적으로 화면을 표시한다. 운영 ROS 노드의 발행 경로는 사용하지 않는다.
+"""
 
 import argparse
 from dataclasses import dataclass, field
 import inspect
-import os
 from pathlib import Path
 import sys
 import time
@@ -17,27 +20,11 @@ if str(PACKAGE_ROOT) not in sys.path:
 
 from part5_bed_exit.bed_exit_method import validate_bed_exit_method
 from part5_bed_exit.bed_exit_state import BedExitState
-from part5_bed_exit.methods.common import ROI_ENV_VAR, default_camera_index
-from part5_bed_exit.methods.segmentation_method import SegmentationBedExitMethod
-from research.templates.method_template import BedExitMethodTemplate
+from part5_bed_exit.pretrained import create_method
 
-# ==============================================================================
-# [사용자 설정 영역] 나와 팀원의 메서드 클래스/객체를 여기에 등록하고 선택한다.
-# ==============================================================================
-# 각 클래스는 judge(self, frame) -> bool 메서드를 가져야 한다.
-# 클래스를 그대로 넣어도 되고(MethodClass), 미리 생성한 객체를 넣어도 된다(MethodClass()).
-METHODS = {
-    'template_sample': BedExitMethodTemplate(),
-    'segmentation': SegmentationBedExitMethod,
-    # 'teammate': TeammateBedExitMethod(),
-}
-
-# 이번 실행에서 비교할 메서드 키 목록 (None이면 METHODS에 등록된 전체 메서드 실행)
 SELECTED_METHODS = None
-
-# 기본 입력 소스: 외장 USB 웹캠이 연결되어 있으면 우선 선택(없으면 0) 또는 'sample.mp4'
-DEFAULT_SOURCE = default_camera_index()
-# ==============================================================================
+DEFAULT_SOURCE = 0
+DEFAULT_CONFIG = PACKAGE_ROOT / 'examples' / 'methods.template.json'
 
 
 @dataclass
@@ -86,14 +73,17 @@ class MethodRunner:
 
     @property
     def avg_ms(self) -> float:
+        """유효 프레임당 평균 판단 시간을 밀리초로 반환한다."""
         return self.total_ms / self.valid_frames if self.valid_frames else 0.0
 
     @property
     def fps(self) -> float:
+        """평균 판단 시간을 초당 처리 프레임 수로 환산한다."""
         avg = self.avg_ms
         return 1000.0 / avg if avg > 0 else 0.0
 
     def status_text(self) -> str:
+        """최근 원시 판단·투표·오류·처리 시간을 한 줄로 만든다."""
         if self.last_error is not None:
             return f'{self.name}: ERROR ({self.last_error})'
         return (
@@ -204,11 +194,17 @@ def run_comparison(
     source=DEFAULT_SOURCE,
     methods=None,
     selected=SELECTED_METHODS,
+    config_path=DEFAULT_CONFIG,
     show: bool = True,
     max_frames: int | None = None,
 ) -> tuple[list[MethodRunner], int, int]:
     """웹캠 또는 영상 프레임마다 선택된 모든 메서드 객체를 순차 실행·비교한다."""
-    runners = select_runners(METHODS if methods is None else methods, selected)
+    active_methods = (
+        {'segmentation': create_method(config_path, 'segmentation')}
+        if methods is None
+        else methods
+    )
+    runners = select_runners(active_methods, selected)
     cap = None
     total_frames = 0
     raw_disagreements = 0
@@ -254,6 +250,7 @@ def run_comparison(
 
 
 def main():
+    """명령행 옵션을 해석해 ROS 없는 다중 메서드 영상 비교를 실행한다."""
     parser = argparse.ArgumentParser(description='Compare Part 5 bed-exit method classes.')
     parser.add_argument(
         '--source',
@@ -262,12 +259,11 @@ def main():
     )
     parser.add_argument('--no-show', action='store_true', help='OpenCV 창 없이 콘솔 로그만 출력')
     parser.add_argument('--max-frames', type=int, default=None, help='최대 처리 프레임 수 제한')
-    parser.add_argument('--roi', default=None, help='침대 경계 ROI JSON 경로 (미지정 시 기본 methods/bed_roi.json)')
+    parser.add_argument('--config', default=str(DEFAULT_CONFIG), help='method·모델·ROI 설정 JSON')
     args = parser.parse_args()
-    if args.roi:
-        os.environ[ROI_ENV_VAR] = args.roi
     run_comparison(
         source=args.source,
+        config_path=args.config,
         show=not args.no_show,
         max_frames=args.max_frames,
     )

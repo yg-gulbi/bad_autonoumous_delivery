@@ -1,1 +1,1 @@
-"""Standalone ROS integration test nodes kept outside the production package."""
+"""운영 패키지 밖에 둔 MP4 기반 ROS 통합 시험 노드 모음."""

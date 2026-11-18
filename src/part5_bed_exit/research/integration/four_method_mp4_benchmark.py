@@ -1,4 +1,8 @@
-"""Benchmark four Part 5 methods on one MP4 while recording their ROS topics."""
+"""한 MP4에서 네 내장 메서드를 동시에 실행하고 ROS 토픽을 기록하는 벤치마크.
+
+동일 프레임을 Detection·Segmentation·YOLO Pose·MediaPipe Pose에 전달해 개별 토픽과
+최종 토픽을 발행하고 CSV·비교 영상·rosbag을 저장한다. 운영 노드가 아닌 통합 실험기다.
+"""
 
 from __future__ import annotations
 
@@ -20,7 +24,7 @@ from std_msgs.msg import Bool
 from part5_bed_exit.bed_exit_state import BedExitState
 from part5_bed_exit.methods.bed_exit_core import JudgmentUnavailable, MODEL_FILES
 from part5_bed_exit.pretrained import create_method
-from research.datasets.downloads import save_json, sha256
+from research.dataset_download_label.downloads import save_json, sha256
 
 
 POSE_LOSS_REASONS = {
@@ -34,7 +38,7 @@ POSE_LOSS_REASONS = {
 
 
 def inspect_mp4(path):
-    """Validate a constant-frame-rate MP4 using the base OpenCV dependency."""
+    """OpenCV로 고정 프레임률 MP4의 존재·크기·FPS·프레임 수를 검증한다."""
     path = Path(path).expanduser().resolve()
     if not path.is_file() or path.suffix.lower() != '.mp4':
         raise ValueError(f'Provide an existing MP4 file: {path}')
@@ -62,7 +66,7 @@ def inspect_mp4(path):
 
 
 def video_frames(path, fps):
-    """Yield every BGR frame once without requiring the optional PyAV package."""
+    """선택적 PyAV 없이 OpenCV로 모든 BGR 프레임과 계산 시간을 한 번씩 반환한다."""
     capture = cv2.VideoCapture(str(path))
     try:
         if not capture.isOpened():
@@ -79,14 +83,16 @@ def video_frames(path, fps):
 
 
 class PoseLossAfterTrack:
-    """Convert pose loss to EXIT only after one successful patient observation."""
+    """한 번 환자를 본 뒤 발생한 Pose 손실만 이탈로 변환하는 실험 래퍼."""
 
     def __init__(self, detector):
+        """원본 Pose 판단 객체와 추적 성공 여부를 초기화한다."""
         self.detector = detector
         self.tracked = False
         self.last_reason = 'not_started'
 
     def judge(self, frame):
+        """원본 판정을 실행하고 추적 이후의 특정 판단 불가를 이탈로 바꾼다."""
         try:
             decision = self.detector.judge(frame)
         except JudgmentUnavailable as exc:
@@ -101,17 +107,27 @@ class PoseLossAfterTrack:
         return decision
 
     def close(self):
+        """내부 판단 객체가 제공하는 종료 메서드를 호출한다."""
         close = getattr(self.detector, 'close', None)
         if callable(close):
             close()
 
+    def render(self, frame):
+        """실험 래퍼 안의 실제 Pose 메서드가 만든 고유 시각화를 그대로 반환한다."""
+        render = getattr(self.detector, 'render', None)
+        return render(frame) if callable(render) else frame.copy()
+
 
 def topic_for(base_topic, method):
+    """기본 토픽 뒤에 메서드 이름을 붙인 개별 결과 토픽을 만든다."""
     return f"{base_topic.rstrip('/')}/{method}"
 
 
 class FourMethodPublisher(Node):
+    """메서드별 토픽과 선택된 최종 결과 토픽을 발행하는 ROS 2 노드."""
+
     def __init__(self, methods, base_topic, final_method=None):
+        """메서드별 발행자와 선택적 최종 발행자를 생성한다."""
         super().__init__('part5_four_method_mp4_benchmark')
         self.method_publishers = {
             name: self.create_publisher(Bool, topic_for(base_topic, name), 10)
@@ -125,12 +141,14 @@ class FourMethodPublisher(Node):
 
     @property
     def recorded_topics(self):
+        """rosbag에 기록해야 할 모든 실제 토픽 이름을 반환한다."""
         topics = [publisher.topic_name for publisher in self.method_publishers.values()]
         if self.final_publisher is not None:
             topics.append(self.final_publisher.topic_name)
         return topics
 
     def publish_state(self, method, value):
+        """메서드 개별 상태와 필요 시 같은 값을 최종 토픽에 발행한다."""
         message = Bool(data=value)
         self.method_publishers[method].publish(message)
         if method == self.final_method:
@@ -138,6 +156,7 @@ class FourMethodPublisher(Node):
 
 
 def _start_recorder(node, bag_dir, timeout_s):
+    """ros2 bag record 프로세스를 시작하고 토픽 구독 준비를 기다린다."""
     if bag_dir.exists():
         raise FileExistsError(f'Bag output already exists: {bag_dir}')
     command = ['ros2', 'bag', 'record', '-o', str(bag_dir), '--topics', *node.recorded_topics]
@@ -154,6 +173,7 @@ def _start_recorder(node, bag_dir, timeout_s):
 
 
 def _stop_recorder(process):
+    """실행 중인 rosbag 프로세스에 SIGINT를 보내 정상 종료시킨다."""
     if process is None or process.poll() is not None:
         return
     process.send_signal(signal.SIGINT)
@@ -165,6 +185,7 @@ def _stop_recorder(process):
 
 
 def _panel(frame, method, row, width):
+    """메서드 하나의 영상·판정·처리 시간을 표시하는 패널을 만든다."""
     height = max(2, round(frame.shape[0] * width / frame.shape[1]))
     image = cv2.resize(frame, (width, height))
     header = np.full((76, width, 3), 24, np.uint8)
@@ -185,6 +206,7 @@ def _panel(frame, method, row, width):
 
 
 def _grid(panels):
+    """네 메서드 패널을 2×2 격자로 결합한다."""
     top = np.hstack(panels[:2])
     bottom = np.hstack(panels[2:4])
     return np.vstack([top, bottom])
@@ -204,6 +226,7 @@ SUMMARY_FIELDS = [
 def run(video, config, output_dir, methods=None, final_method='yolo_pose',
         base_topic='/patient/bed_exit', panel_width=320, show=False,
         pose_loss_after_track=True, bag_ready_timeout=20.0, max_frames=None):
+    """한 MP4의 동일 프레임을 네 메서드에 전달하고 ROS·파일 결과를 기록한다."""
     methods = list(MODEL_FILES) if methods is None else list(methods)
     if len(methods) != 4 or set(methods) != set(MODEL_FILES):
         raise ValueError(f'Exactly these four methods are required: {tuple(MODEL_FILES)}')
@@ -242,7 +265,7 @@ def run(video, config, output_dir, methods=None, final_method='yolo_pose',
     status = 'complete'
     try:
         for name in methods:
-            detector = create_method(name, config)
+            detector = create_method(config, name)
             if pose_loss_after_track and name in ('yolo_pose', 'mediapipe_pose'):
                 detector = PoseLossAfterTrack(detector)
             detectors[name] = detector
@@ -298,7 +321,11 @@ def run(video, config, output_dir, methods=None, final_method='yolo_pose',
                     count['raw_true'] += int(raw is True)
                     count['voted_exit_frames'] += int(voted is True)
                     count['judge_ms'].append(elapsed)
-                    panels.append(_panel(frame, name, row, panel_width))
+                    # 방법론별 고유 근거를 비교 영상에 남긴다.
+                    # Detection=BBox, Segmentation=마스크, Pose=모델별 색상의 관절 골격이다.
+                    render = getattr(detectors[name], 'render', None)
+                    rendered = render(frame) if callable(render) else frame.copy()
+                    panels.append(_panel(rendered, name, row, panel_width))
                 canvas = _grid(panels)
                 if writer is None:
                     writer = cv2.VideoWriter(
@@ -362,6 +389,7 @@ def run(video, config, output_dir, methods=None, final_method='yolo_pose',
 
 
 def parse_args(argv=None):
+    """네 메서드 통합 벤치마크의 명령행 인자를 해석한다."""
     parser = argparse.ArgumentParser(
         description='Run all four methods on one MP4, publish per-method topics, and record one bag.')
     parser.add_argument('--video', required=True)
@@ -382,6 +410,7 @@ def parse_args(argv=None):
 
 
 def main(argv=None):
+    """ROS를 초기화하고 벤치마크를 실행한 뒤 종료한다."""
     args = parse_args(argv)
     rclpy.init(args=[])
     try:

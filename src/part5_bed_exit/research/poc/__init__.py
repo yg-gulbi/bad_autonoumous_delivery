@@ -1,1 +1,1 @@
-"""Reproducible static-image proof-of-concept runners."""
+"""정적 이미지와 합성 자료로 재현 가능한 개념 검증 실험 도구 모음."""

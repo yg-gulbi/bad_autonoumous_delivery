@@ -1,6 +1,10 @@
 /models/
 /data/
-/results/
+/results/**
+!/results/README.md
+!/results/**/
+!/results/**/README.md
+!/results/model_tests/exploratory_prototypes/slp_two_image_prototypes/**
 /research/data/
 /research/results/
 /examples/methods.local.json

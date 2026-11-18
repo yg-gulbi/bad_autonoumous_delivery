@@ -1,3 +1,9 @@
+"""Part 5를 ROS 2 ``ament_python`` 패키지로 설치하기 위한 패키징 설정.
+
+설치할 Python 패키지와 설정 파일을 지정하고 ``ros2 run part5_bed_exit bed_exit``가
+``part5_bed_exit.bed_exit_node:main``을 호출하도록 콘솔 진입점을 등록한다.
+"""
+
 from glob import glob
 from setuptools import find_packages, setup
 
@@ -19,5 +25,7 @@ setup(
     maintainer_email='maintainer@example.com',
     description='Replaceable webcam bed-exit judgment with five-frame voting.',
     license='UNLICENSED',
+    # [PART05-V5-00 ROS 실행 명령 등록]
+    # ``ros2 run part5_bed_exit bed_exit`` → bed_exit_node.main() → BedExitNode.__init__()
     entry_points={'console_scripts': ['bed_exit = part5_bed_exit.bed_exit_node:main']},
 )

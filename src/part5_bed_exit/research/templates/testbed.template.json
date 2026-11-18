@@ -21,7 +21,6 @@
       "roi_reviewed": false,
       "roi_version": "EDIT_ME",
       "roi": [[0.1,0.1],[0.9,0.1],[0.9,0.9],[0.1,0.9]],
-      "initial_patient_bbox": null,
       "patient_present_intervals_s": [[0.0,10.0]],
       "conditions": {
         "case_id": "C08",
