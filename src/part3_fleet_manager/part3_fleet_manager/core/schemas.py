@@ -16,6 +16,8 @@ COMMAND_FIELDS = {
     "CONFIRM_STEP": ("robot", "mission_id", "result"),
     "CANCEL_MISSION": ("mission_id",),
     "RETRY": ("robot",),
+    "PAUSE_ALL": (),
+    "RESUME_ALL": (),
     "PAUSE_ROBOT": ("robot",),
     "RESUME_ROBOT": ("robot",),
     "GO_ZONE": ("robot", "zone"),
@@ -32,10 +34,21 @@ class SchemaError(ValueError):
         super().__init__(message)
         self.ref = ref
 
+    def user_message(self):
+        field, sep, detail = str(self).partition(": ")
+        if not sep:
+            return "입력 형식을 확인하세요."
+        labels = {"v": "메시지 버전", "cmd": "명령", "type": "임무 종류", "level": "응급도",
+                  "by": "조작자 이름", "requested_by": "요청자", "result": "확인 결과", "robot": "로봇",
+                  "pickup": "출발지", "destination": "목적지", "chart_no": "차트번호", "item": "물품",
+                  "stops": "정류장", "zone": "구역", "resource": "구간", "choice": "선택지"}
+        label = labels.get(field.split(".")[-1], "입력값")
+        return f"{label} 항목을 확인하세요."
+
     def ack(self) -> dict:
         return {
             "v": VERSION, "ref": self.ref, "ok": False, "code": self.code,
-            "message": str(self), "mission_id": None,
+            "message": self.user_message(), "mission_id": None,
         }
 
 
@@ -180,6 +193,18 @@ def parse_fleet_state(text: str) -> dict:
             "wait_reason": (str, NULL), "progress_pct": (*NUMBER, NULL), "remaining_m": (*NUMBER, NULL),
             "stall_s": NUMBER, "paused_by": (str, NULL),
         }, path=path)
+        if "obstacle" in robot and robot["obstacle"] is not None:
+            observation = robot["obstacle"]
+            _fields(robot, {"obstacle": dict}, path=path)
+            _fields(observation, {"kind": str, "at": NUMBER, "labels": list, "detections": list}, path=path+"obstacle.")
+            _choice(observation["kind"], ("PERSON", "OBJECT", "NONE", "UNKNOWN"), path+"obstacle.kind")
+            for detection in observation["detections"]:
+                if not isinstance(detection, dict):
+                    raise SchemaError("탐지는 객체여야 합니다")
+                _fields(detection, {"label": str, "confidence": NUMBER})
+                if detection.get("pose") is not None:
+                    _fields(detection, {"pose": dict})
+                    _fields(detection["pose"], {"x": NUMBER, "y": NUMBER})
         if "state_since" in robot:
             _fields(robot, {"state_since": NUMBER}, path=path)
         if "route" in robot:

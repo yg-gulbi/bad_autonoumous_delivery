@@ -112,27 +112,33 @@ class ResourceManager:
         self.events: list[dict] = []
         self.last_decision = None
 
+    def robot_label(self, robot):
+        return self.config.robots[robot].label
+
+    def zone_label(self, zone):
+        return self.config.zone_names.get(zone) or f"{zone} 구역"
+
     def resource_label(self, name):
         if name == g.CORRIDOR:
             return "복도"
         zone = name.removeprefix("ROOM_")
         return self.config.zone_names.get(zone, f"{zone} 구역") + " 출입"
 
-    def record(self, kind, now, reason, *, robot=None, mission_id=None, candidates=None, **detail):
+    def record(self, event_type, now, reason, *, robot=None, mission_id=None, candidates=None, **detail):
         if candidates is None:
             candidates = [r for r in self.pending if self.eligible(r)]
         self.events.append({
-            "v": 1, "ts": now, "type": kind, "robot": robot, "mission_id": mission_id,
+            "v": 1, "ts": now, "type": event_type, "robot": robot, "mission_id": mission_id,
             "detail": {"reason": reason, "candidates": candidates, **detail},
         })
 
         event = self.events[-1]
         names = detail.get("resources", ())
-        if kind.startswith("CORRIDOR_YIELD_"):
+        if event_type.startswith("CORRIDOR_YIELD_"):
             names = [g.CORRIDOR]
-        if kind in ("RESOURCE_GRANT", "RESOURCE_HOLD", "CORRIDOR_YIELD_START"):
+        if event_type in ("RESOURCE_GRANT", "RESOURCE_HOLD", "CORRIDOR_YIELD_START"):
             self.last_decision = {key: event[key] for key in ("type", "ts", "robot", "detail")}
-        if kind in ("RESOURCE_GRANT", "RESOURCE_HOLD", "RESOURCE_UNKNOWN", "RESOURCE_RELEASE",
+        if event_type in ("RESOURCE_GRANT", "RESOURCE_HOLD", "RESOURCE_UNKNOWN", "RESOURCE_RELEASE",
                     "RESOURCE_CLEAR_CONFIRM", "CORRIDOR_YIELD_START", "CORRIDOR_YIELD_END", "CORRIDOR_YIELD_TIMEOUT"):
             for name in names:
                 self.resources[name].reason, self.resources[name].decided_at = reason, now
@@ -148,7 +154,7 @@ class ResourceManager:
             self._decide_after = max(self._decide_after, now + self.config.resources.decision_window_s)
         leg = Leg(robot, destination, level, now, mission_id, carrying_patient, mission_type)
         self.pending[robot] = leg
-        self.record("RESOURCE_REQUEST", now, f"{robot}이 {destination}행 구간을 요청했습니다.",
+        self.record("RESOURCE_REQUEST", now, f"{self.robot_label(robot)} — {self.zone_label(destination)}으로 가는 구간 요청",
                     robot=robot, mission_id=mission_id, destination=destination, level=level)
         return leg
 
@@ -192,15 +198,15 @@ class ResourceManager:
 
     def clear_unknown(self, name: str, by: str, now: float):
         if not isinstance(by, str) or not by.strip():
-            raise ValueError("E-400: operator identity required")
+            raise ValueError("E-400: 조작자 이름을 입력하세요.")
         resource = self.resources[name]
         if resource.state != "UNKNOWN":
-            raise ValueError("E-409: resource is not UNKNOWN")
+            raise ValueError("E-409: 점유 확인이 필요한 구간만 해제할 수 있습니다.")
         inside = [robot for robot, region in self.regions.items() if region == name]
         confirmed = resource.holders.keys() - resource.uncertain
         if len(confirmed.union(inside)) > resource.capacity:
-            raise ValueError("E-423: current reports still exceed capacity")
-        reason = f"{by}이 {self.resource_label(name)}의 점유 불명을 확인했습니다."
+            raise ValueError("E-423: 현재 보고된 로봇 수가 정원을 초과합니다.")
+        reason = f"{by} — {self.resource_label(name)} 현장 확인 완료"
         self.record("RESOURCE_CLEAR_CONFIRM", now, reason, by=by, resources=[name],
                     uncertain=sorted(resource.uncertain))
         uncertain = resource.uncertain.copy()
@@ -239,7 +245,7 @@ class ResourceManager:
             if holding.entered_at is None:
                 holding.entered_at = now
                 leg = self.active.get(robot)
-                self.record("RESOURCE_ENTER", now, f"{robot}이 {self.resource_label(name)} 안에 있습니다.",
+                self.record("RESOURCE_ENTER", now, f"{self.robot_label(robot)} · {self.resource_label(name)} 진입 확인",
                             robot=robot, mission_id=leg.mission_id if leg else None, resources=[name])
             holding.outside_since = None
         for robot, holding in list(resource.holders.items()):
@@ -262,7 +268,7 @@ class ResourceManager:
                     resource.holders[robot] = Holding()
                     continue
                 leg = self.active.get(robot)
-                self._release(name, robot, now, f"{robot}이 {self.resource_label(name)} 해제 여유 밖에 연속으로 있습니다.",
+                self._release(name, robot, now, f"{self.robot_label(robot)} · {self.resource_label(name)} 통과 완료",
                               leg.mission_id if leg else None)
 
     def effective_level(self, leg: Leg, now: float) -> int:
@@ -279,7 +285,7 @@ class ResourceManager:
     def _hold_reason(self, leg, needed, now):
         robot = leg.robot
         if not self.eligible(robot):
-            return f"{robot}의 연결·위치 또는 안전 정지 상태로 대기합니다."
+            return f"{self.robot_label(robot)} — 연결·위치 또는 안전 정지 상태 확인 대기"
         for name in needed:
             resource = self.resources[name]
             if resource.state == "UNKNOWN":
@@ -288,7 +294,7 @@ class ResourceManager:
                 return f"{self.resource_label(name)}에 막힘이 보고되어 대기합니다."
             blockers = resource.blockers(robot)
             if blockers:
-                return f"{self.resource_label(name)} 정원 {resource.capacity}대를 {', '.join(blockers)}이 사용 중이어서 대기합니다."
+                return f"{self.resource_label(name)} 정원 {resource.capacity}대 사용 중 ({', '.join(map(self.robot_label, blockers))}) — 빈자리 대기"
         if any(robot not in self.resources[n].holders for n in needed) and now < self._decide_after:
             return "경쟁 요청을 모으는 동안 대기합니다."
         return None
@@ -372,8 +378,11 @@ class ResourceManager:
             self._needed.pop(robot, None)
             grants.append(leg)
             level = self.effective_level(leg, now)
+            rule = {"LEVEL": "응급도 우선", "REQUEST_TIME": "요청 시각순", "SUBMIT_ORDER": "접수순",
+                    "ONLY": "단독 요청"}.get(basis["rule"], "진입 가능")
+            area = " · ".join(map(self.resource_label, needed)) or "이동 구간"
             self.record("RESOURCE_GRANT", now,
-                        f"필요 자원을 모두 사용할 수 있어 실효 Level {level}과 요청 순서에 따라 {robot}에 허가합니다.",
+                        f"{area} 사용 가능 · 실효 Level {level}, {rule} → {self.robot_label(robot)} 허가",
                         robot=robot, mission_id=leg.mission_id, candidates=candidates,
                         resources=list(needed), ranking=ranking, **basis)
         return TickResult(grants, self._corridor_commands(now))

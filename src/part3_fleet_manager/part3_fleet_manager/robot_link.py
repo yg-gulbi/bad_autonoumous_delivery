@@ -3,7 +3,7 @@
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import BatteryState
-from std_msgs.msg import String
+from std_msgs.msg import Empty, String
 
 try:
     from irobot_create_msgs.msg import DockStatus, HazardDetection, HazardDetectionVector
@@ -16,7 +16,7 @@ AMCL_QOS = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
 
 
 class RobotLink:
-    def __init__(self, node, robot, ns, config, enqueue, now):
+    def __init__(self, node, robot, ns, config, enqueue, now, obstacle):
         def topic(template):
             return template.format(ns=ns)
 
@@ -25,6 +25,9 @@ class RobotLink:
                 enqueue(key, extract(msg), now(), robot=robot)
             node.create_subscription(msg_type, topic(template), receive, qos)
 
+        if obstacle.enabled:
+            self.inspect = node.create_publisher(Empty, topic(obstacle.inspect_topic), 10)
+            listen(String, obstacle.result_topic, 10, "obstacle_result", lambda msg: msg.data)
         self.command = node.create_publisher(String, topic(config.command_topic), 10)
         listen(String, config.status_topic, 10, "status", lambda msg: msg.data)
         listen(PoseWithCovarianceStamped, config.amcl_pose_topic, AMCL_QOS, "pose",
@@ -37,6 +40,9 @@ class RobotLink:
             listen(HazardDetectionVector, config.hazard_topic, qos_profile_sensor_data, "hazards",
                    lambda msg: ["BUMP" for d in msg.detections if d.type == HazardDetection.BUMP])
             listen(DockStatus, config.dock_status_topic, qos_profile_sensor_data, "docked", lambda msg: msg.is_docked)
+
+    def request_inspection(self):
+        self.inspect.publish(Empty())
 
     def send(self, command):
         self.command.publish(String(data=command))

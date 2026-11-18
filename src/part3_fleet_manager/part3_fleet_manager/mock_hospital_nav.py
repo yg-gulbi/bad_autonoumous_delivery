@@ -1,7 +1,7 @@
 """One simulated PART 04 robot, using hospital_nav text commands and status JSON."""
 import json
 from itertools import pairwise
-from math import dist, isfinite
+from math import atan2, cos, dist, isfinite, sin
 from uuid import uuid4
 
 from ament_index_python.packages import get_package_share_path
@@ -73,6 +73,7 @@ class MockHospitalNav(Node):
         for name in ("reject_next", "fail_next", "drop_link"):
             self.declare_parameter(name, False)
         self.add_on_set_parameters_callback(self.validate)
+        self.yaw = 0.0
         self.pose = self.config.zones[unit.start_zone]
         self.state, self.mid, self.dest, self.level, self.reason = "IDLE", None, None, 1, ""
         self.path, self.total, self.stalled_until, self.fail = [], 0.0, 0.0, False
@@ -95,6 +96,8 @@ class MockHospitalNav(Node):
             if not isinstance(data, dict) or data.get("robot") != self.logical_id:
                 return
             action = data.get("action")
+            if action == "obstacle":
+                return
             if action in ("fail_next", "reject_next"):
                 self.set_parameters([Parameter(action, value=True)])
                 return
@@ -151,7 +154,8 @@ class MockHospitalNav(Node):
         msg.header.frame_id = "map"
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.pose.pose.position.x, msg.pose.pose.position.y = self.pose
-        msg.pose.pose.orientation.w = 1.0
+        msg.pose.pose.orientation.z = sin(self.yaw / 2)
+        msg.pose.pose.orientation.w = cos(self.yaw / 2)
         self.pose_pub.publish(msg)
 
     def progress(self):
@@ -243,6 +247,7 @@ class MockHospitalNav(Node):
             if step == length:
                 self.path.pop(0)
         if self.pose != initial:
+            self.yaw = atan2(self.pose[1] - initial[1], self.pose[0] - initial[0])
             self.publish_pose()
         if not self.path:
             self.state = "COMPLETE"

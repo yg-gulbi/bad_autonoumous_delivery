@@ -5,103 +5,10 @@ from dataclasses import replace
 
 import pytest
 
-from part3_fleet_manager.core import schemas
-from part3_fleet_manager.core.fleet_core import FleetCore
+from fleet_simulation import Simulation
 from part3_fleet_manager.core.store import Store
 
 A, B = "robot_a", "robot_b"
-
-
-class Simulation:
-    def __init__(self, cfg, *, require_at_start=False):
-        # The simulator normally runs without a webcam, just like fleet_mock.launch.py.
-        monitor = replace(cfg.safety.bed_monitor, require_at_start=require_at_start)
-        cfg = replace(cfg, safety=replace(cfg.safety, bed_monitor=monitor))
-        self.cfg = cfg
-        self.core = FleetCore(cfg)
-        self.pending = []
-        self.seq = 0
-        self.frames = {r: {"type": "STATE", "robot_id": c.ns, "state": "IDLE", "mission_id": None,
-                           "pose": self.pose(c.start_zone), "percent": 0}
-                       for r, c in cfg.robots.items()}
-        self.ids = {}
-        self.last = {}
-        self.now = 0
-
-    def pose(self, zone):
-        xy = self.cfg.zones[zone] if isinstance(zone, str) else zone
-        return dict(zip(("x", "y"), xy))
-
-    def tick(self, now):
-        self.now = now
-        for r, frame in self.frames.items():
-            self.core.enqueue("status", json.dumps(frame), now, robot=r)
-        for topic, payload, robot in self.pending:
-            self.core.enqueue(topic, payload, now, robot=robot)
-        self.pending.clear()
-        out = self.core.tick(now)
-        for c in out.commands:
-            if c.command.startswith("MOVE "):
-                self.last[c.robot] = c.command
-        for ack in out.acks:
-            schemas.parse_ack(schemas.dumps(ack))
-            if ack["mission_id"]:
-                self.ids[ack["ref"]] = ack["mission_id"]
-        if out.state:
-            schemas.parse_fleet_state(schemas.dumps(out.state))
-        for card in out.cards:
-            schemas.parse_decision_req(schemas.dumps(card))
-        for e in out.events:
-            schemas.parse_event(schemas.dumps(e))
-        return out
-
-    def patient(self, ref="p", pickup="A", dest="C", level=2):
-        self.pending.append(("/ui/mission_req", json.dumps({
-            "v": 1, "req_id": ref, "type": "PATIENT_TRANSPORT", "pickup": pickup, "destination": dest,
-            "level": level, "patient": {"name": "테스트", "chart_no": "TEST"}, "requested_by": "nurse"}), None))
-
-    def call(self, ref, zone="A", level=1):
-        self.pending.append(("/ui/mission_req", json.dumps({
-            "v": 1, "req_id": ref, "type": "CALL", "level": level, "destination": zone,
-            "requested_by": "nurse"}), None))
-
-    def battery(self, robot, pct):
-        self.pending.append(("battery", pct, robot))
-
-    def med(self, ref="m", stops=("F", "E", "B"), level=3):
-        self.pending.append(("/ui/mission_req", json.dumps({
-            "v": 1, "req_id": ref, "type": "MED_ROUND", "level": level,
-            "stops": [{"zone": z, "item": "테스트 물품"} for z in stops], "requested_by": "nurse"}), None))
-
-    def cmd(self, name, **fields):
-        self.seq += 1
-        self.pending.append(("/ui/operator_cmd", json.dumps({
-            "v": 1, "cmd": name, "cmd_id": f"c-{self.seq}", "by": "nurse", **fields}), None))
-
-    def choose(self, card, choice):
-        self.pending.append(("/ui/decision", json.dumps({"v": 1, "card_id": card["card_id"],
-                                                        "by": "nurse", "choice": choice}), None))
-
-    def event(self, robot, name, **fields):
-        f = self.frames[robot]
-        if name == "MISSION_ACCEPTED":
-            _, zone, _, tag = self.last[robot].split()
-            f.update(mission_id=tag[3:], destination=zone, state="MOVING", percent=0)
-            fields.update(destination=zone)
-        if name == "ARRIVED":
-            fields.update(destination=f["destination"], pose=self.pose(f["destination"]))
-            f.update(state="COMPLETE", pose=fields["pose"], percent=100)
-        if name in ("PAUSED", "RESUMED", "MISSION_FAILED", "MISSION_CANCELED"):
-            f["state"] = {"PAUSED": "PAUSED", "RESUMED": "MOVING", "MISSION_FAILED": "FAILED",
-                          "MISSION_CANCELED": "CANCELED"}[name]
-        self.pending.append(("status", json.dumps({"type": "STATUS", "event": name, "robot_id": f["robot_id"],
-                                                  "mission_id": f["mission_id"], **fields}), robot))
-
-    def confirm(self, r, ref, result="OK"):
-        self.cmd("CONFIRM_STEP", robot=r, mission_id=self.ids[ref], result=result)
-
-    def state(self, robot):
-        return self.core.snapshot(self.now)["robots"][robot]["state"]
 
 
 @pytest.fixture
@@ -506,7 +413,8 @@ def test_15_26_concurrent_transport_round_and_queues(sim):
     assert sim.core.resources.snapshot()["ROOM_E"]["state"] == "FREE"
     db = sim.core.store.db
     assert {r[0] for r in db.execute("SELECT id FROM missions WHERE status='DONE'")} == {sim.ids["p"], sim.ids["m"]}
-    assert db.execute("SELECT count(*) FROM patients").fetchone()[0] == 2
+    assert db.execute("SELECT count(*) FROM patients").fetchone()[0] == 1
+    assert db.execute("SELECT count(DISTINCT patient_id) FROM missions").fetchone()[0] == 1
     for key in ("p", "m"):
         trip = sim.core.store.metrics()["missions"][sim.ids[key]]
         assert trip["departure"] is not None and trip["arrival"] is not None
@@ -756,7 +664,7 @@ def test_35_lost_monitor_pauses_only_target_and_requires_manual_resume(sim):
     events, wire = bed_frames(sim, 8, 2)
     assert not wire and [e["type"] for e in events].count("BED_MONITOR_BACK") == 1
     closed, = [e for e in events if e["type"] == "CARD_CLOSED"]
-    assert closed["detail"]["card_id"] == card["card_id"] and closed["detail"]["reason"] == "resolved"
+    assert closed["detail"]["card_id"] == card["card_id"] and closed["detail"]["closed_by"] == "resolved"
     assert sim.state(A) == "SAFE_PAUSE" and sim.state(B) == "MOVING"
     assert sim.core.service("/robot/resume", 10.1)[0]
     assert commands(sim.tick(10.1)) == {A: "RESUME"}
@@ -826,3 +734,215 @@ def test_36_low_rate_and_hold(sim):
     assert not sim.core.service("/robot/resume", 7.3)[0]
     assert not sim.tick(7.3).cards
     assert sim.core.snapshot(7.3)["bed_exit"]["monitor"]["bypass"] is False
+
+
+def test_37_stop_journal_and_request_replay(shared):
+    s = shared
+    db = s.core.store.db
+    def statuses(mid):
+        return [tuple(row) for row in db.execute(
+            "SELECT seq,status,arrived_at,confirmed_at,confirmed_by FROM mission_stops WHERE mission_id=? ORDER BY seq", (mid,))]
+    s.battery(A, 20)
+    s.battery(B, 20)
+    s.patient(pickup="D", dest="A")
+    request = s.pending[-1]
+    s.pending.append(request)
+    first = s.tick(0)
+    mid = s.ids["p"]
+    assert len(first.acks) == 2 and first.acks[0] == first.acks[1]
+    assert [r[1] for r in statuses(mid)] == ["PENDING", "PENDING"]
+    s.battery(A, 80)
+    s.tick(1)
+    assert [r[1] for r in statuses(mid)] == ["ACTIVE", "PENDING"]
+    assert tuple(db.execute("SELECT assigned_at,started_at FROM missions").fetchone()) == (1, None)
+    s.event(A, "MISSION_ACCEPTED")
+    s.tick(1.1)
+    s.event(A, "ARRIVED")
+    s.tick(1.2)
+    assert statuses(mid)[0] == (1,"ARRIVED",1.2,None,None)
+    s.confirm(A, "p", "MISMATCH")
+    mismatch = s.tick(1.3)
+    assert statuses(mid)[0][1] == "MISMATCH"
+    s.choose(mismatch.cards[0], "recheck")
+    s.tick(1.4)
+    assert statuses(mid)[0][1] == "ARRIVED"
+    assert db.execute("SELECT [by] FROM events WHERE type='CARD_CLOSED' AND mission_id=?", (mid,)).fetchone()[0] == "nurse"
+    s.confirm(A, "p")
+    s.tick(1.5)
+    assert statuses(mid) == [(1,"CONFIRMED",1.2,1.5,"nurse"),(2,"ACTIVE",None,None,None)]
+    s.event(A, "MISSION_ACCEPTED")
+    s.tick(1.6)
+    s.event(A, "ARRIVED")
+    s.tick(1.7)
+    s.confirm(A, "p")
+    s.tick(1.8)
+    assert statuses(mid)[1] == (2,"CONFIRMED",1.7,1.8,"nurse")
+    assert tuple(db.execute("SELECT status,req_id,started_at,finished_at FROM missions").fetchone()) == ("DONE","p",1.1,1.8)
+    assert db.execute("SELECT count(*) FROM events WHERE type='CONFIRM_STEP' AND [by]='nurse'").fetchone()[0] == 3
+    # A new controller has no in-memory ACK cache.
+    other = Simulation(s.cfg)
+    try:
+        other.pending.append(request)
+        assert other.tick(2).acks == [first.acks[0]]
+        assert db.execute("SELECT count(*) FROM missions").fetchone()[0] == 1
+    finally:
+        other.core.store.close()
+
+
+def test_37_cancel_after_first_confirmation_preserves_stop(sim):
+    sim.patient(pickup="D", dest="A")
+    sim.tick(0)
+    sim.event(A, "MISSION_ACCEPTED")
+    sim.event(A, "ARRIVED")
+    sim.tick(.1)
+    sim.confirm(A, "p")
+    sim.tick(.2)
+    sim.cmd("CANCEL_MISSION", mission_id=sim.ids["p"])
+    assert sim.tick(.3).acks[0]["ok"]
+    db = sim.core.store.db
+    assert [r[0] for r in db.execute("SELECT status FROM mission_stops ORDER BY seq")] == ["CONFIRMED","SKIPPED"]
+    assert tuple(db.execute("SELECT cancel_reason,finished_at FROM missions").fetchone()) == ("운영자 임무 취소", .3)
+    assert db.execute("SELECT [by] FROM events WHERE type='MISSION_CANCELED'").fetchone()[0] == "nurse"
+
+
+@pytest.mark.parametrize("via_service", [False, True])
+def test_42_global_actions_record_actor_and_share_safety_rules(sim, via_service):
+    def action(name, t, ok=True):
+        if via_service:
+            assert sim.core.service("/robot/" + name, t)[0] == ok
+        else:
+            sim.cmd(name.upper() + "_ALL", by="당직자")
+        out = sim.tick(t)
+        if not via_service:
+            assert out.acks[0]["ok"] == ok
+        return out
+
+    actor = "ROS 서비스" if via_service else "당직자"
+    sim.patient()
+    sim.tick(0)
+    for kind, time in (("pause", .1), ("resume", .2)):
+        events = [e for e in action(kind, time).events if e["type"] == kind.upper()]
+        assert {e["robot"] for e in events} == {A, B}
+        assert next(e for e in events if e["robot"] == A)["mission_id"] == sim.ids["p"]
+    sim.core.enqueue("/patient/bed_exit", True, .3)
+    sim.tick(.3)
+    action("resume", .4, False)
+    sim.core.enqueue("/patient/bed_exit", False, .5)
+    sim.tick(.5)
+    sim.tick(4)
+    action("resume", 4.1, False)
+    db = sim.core.store.db
+    assert [r[0] for r in db.execute('SELECT "by" FROM events WHERE type="RESUME_REJECTED"')] == [actor, actor]
+    assert [r[0] for r in db.execute('SELECT "by" FROM events WHERE type IN ("PAUSE","RESUME") AND ts<.3')] == [actor]*4
+
+
+def start_inspection(sim):
+    sim.patient(pickup="C")
+    sim.tick(0)
+    sim.tick(1)
+    sim.event(A, "MISSION_ACCEPTED")
+    sim.frames[A]["pose"] = sim.pose((-1.55, -1.7))
+    sim.tick(2)
+    assert not sim.tick(11.9).inspections
+    out = sim.tick(12)
+    assert out.inspections == [A] and not out.cards
+    assert [e["type"] for e in out.events].count("OBSTACLE_INSPECT") == 1
+    assert sim.core.snapshot(12)["robots"][A]["obstacle_pending"]
+
+
+def camera_answer(label):
+    return json.dumps({"status":"ok", "obstacle_present":label is not None,
+                       "detections":([] if label is None else [
+                           {"label":label,"confidence":.82,"pose":{"x":-1.55,"y":-2.7,"z":0}}])})
+
+
+@pytest.mark.parametrize("label,kind,reason", [
+    ("person","PERSON","사람 감지 (로봇 앞 약 1.0 m)"), ("chair","OBJECT","의자 (로봇 앞 약 1.0 m)"),
+    (None,"NONE","카메라에는 장애물이 보이지 않음"), ("silent","UNKNOWN","장애물 분류 불가")])
+def test_39_classification_changes_only_block_timing(sim,label,kind,reason):
+    start_inspection(sim)
+    if label != "silent":
+        sim.core.enqueue("obstacle_result",camera_answer(label),12.9,robot=A)
+    out = sim.tick(13)
+    if label == "silent":
+        out = sim.tick(18)
+    result, = [e["detail"] for e in out.events if e["type"] == "OBSTACLE_RESULT"]
+    assert result["kind"] == kind and result["applied"] and not out.inspections
+    assert sim.core.snapshot(sim.now)["robots"][A]["obstacle"]["kind"] == kind
+    assert not out.commands
+    if kind != "OBJECT":
+        assert not out.cards and not sim.core.resources.snapshot()["CORRIDOR"]["blocked"]
+        sim.core.enqueue("obstacle_result",camera_answer("chair"),19,robot=A)
+        ignored, = [e for e in sim.tick(19).events if e["type"] == "OBSTACLE_RESULT"]
+        assert not ignored["detail"]["applied"]
+        assert not sim.tick(31.9).cards
+        out = sim.tick(32)
+    assert {e["type"] for e in out.events} >= {"STALL_LONG","BLOCKED","CARD_OPEN"}
+    card, = out.cards
+    assert card["kind"] == "BLOCKED" and reason in card["reason"]
+    assert sim.core.resources.snapshot()["CORRIDOR"]["blocked"]
+    sim.med(stops=["A"])
+    sim.tick(33)
+    assert not sim.tick(34).commands and sim.state(B) == "HOLD"
+    sim.frames[A]["pose"] = sim.pose((-1.55, -2.1))
+    moved = sim.tick(35)
+    assert commands(moved)[B].startswith("MOVE")
+    assert moved.state["robots"][A]["obstacle"] is None
+    assert sim.tick(45).inspections == [A]
+
+
+@pytest.mark.parametrize("interruption", ["failure","safety","motion"])
+def test_39_inflight_answer_cannot_override_changed_conditions(sim,interruption):
+    start_inspection(sim)
+    sim.core.enqueue("obstacle_result",camera_answer("chair"),12.9,robot=A)
+    if interruption == "failure":
+        sim.event(A,"MISSION_FAILED",reason="Nav2: ABORTED")
+    elif interruption == "safety":
+        sim.cmd("PAUSE_ALL")
+    else:
+        sim.frames[A]["percent"] = 10
+    out = sim.tick(13)
+    assert out.state["robots"][A]["obstacle"] is None
+    assert not sim.core.resources.snapshot()["CORRIDOR"]["blocked"]
+    assert not next(e for e in out.events if e["type"]=="OBSTACLE_RESULT")["detail"]["applied"]
+
+
+def test_39_response_received_before_deadline_survives_tick_delay(sim):
+    start_inspection(sim)
+    sim.core.enqueue("obstacle_result",camera_answer("person"),18,robot=A)
+    sim.core.enqueue("obstacle_result",camera_answer("chair"),18.1,robot=A)
+    out = sim.tick(18.2)
+    assert [e["detail"]["applied"] for e in out.events if e["type"] == "OBSTACLE_RESULT"] == [True,False]
+    assert out.state["robots"][A]["obstacle"]["kind"] == "PERSON" and not out.cards
+
+
+def test_39_retry_opens_a_new_inspection_window(sim):
+    start_inspection(sim)
+    sim.core.enqueue("obstacle_result", camera_answer("chair"), 13, robot=A)
+    card, = sim.tick(13).cards
+    sim.event(A, "PAUSED")
+    sim.choose(card, "retry")
+    assert commands(sim.tick(14))[A] == "RESUME"
+    assert sim.core.snapshot(14)["robots"][A]["obstacle"] is None
+    sim.event(A, "RESUMED")
+    sim.tick(15)
+    assert not sim.tick(24.9).inspections
+    assert sim.tick(25).inspections == [A]
+
+
+def test_39_inflight_inspection_is_per_robot_across_short_stops(sim):
+    sim.core.config = replace(sim.cfg, obstacle=replace(sim.cfg.obstacle, inspect_at_s=2, timeout_s=20))
+    sim.patient(pickup="C")
+    sim.tick(0)
+    sim.tick(1)
+    sim.event(A, "MISSION_ACCEPTED")
+    sim.tick(2)
+    assert sim.tick(7).inspections == [A]
+    sim.frames[A]["percent"] = 10
+    sim.tick(8)
+    assert not sim.tick(13).inspections
+    sim.core.enqueue("obstacle_result",camera_answer("chair"),13.5,robot=B)
+    assert not sim.tick(13.5).cards
+    sim.core.enqueue("obstacle_result",camera_answer("chair"),14,robot=A)
+    out = sim.tick(14)
+    assert out.inspections == [A] and not out.cards and out.state["robots"][A]["obstacle"] is None

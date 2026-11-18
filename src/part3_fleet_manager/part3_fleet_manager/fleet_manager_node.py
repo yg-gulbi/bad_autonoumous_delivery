@@ -33,7 +33,7 @@ class FleetManagerNode(Node):
                          safety=replace(config.safety, bed_monitor=replace(monitor, require_at_start=required)))
         db_path = self.declare_parameter("db_path", "").value
         self.core = FleetCore(replace(config, db_path=db_path) if db_path else config)
-        self.links = {r: RobotLink(self, r, unit.ns, config.robot_link, self.core.enqueue, self.now)
+        self.links = {r: RobotLink(self, r, unit.ns, config.robot_link, self.core.enqueue, self.now, config.obstacle)
                       for r, unit in config.robots.items()}
         self.outputs = {name: self.create_publisher(String, name, 100) for name in
                         ("/fleet/state", "/fleet/decision_req", "/mission/event", "/ui/ack")}
@@ -61,6 +61,8 @@ class FleetManagerNode(Node):
         out = self.core.tick(self.now())
         for motion in out.commands:
             self.links[motion.robot].send(motion.command)
+        for robot in out.inspections:
+            self.links[robot].request_inspection()
         for event in out.events:
             self.publish_json("/mission/event", event)
             if event["type"] == "WARNING":

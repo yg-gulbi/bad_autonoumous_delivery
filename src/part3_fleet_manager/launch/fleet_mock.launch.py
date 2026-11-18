@@ -30,6 +30,9 @@ def launch_nodes(context):
             params["speed_mps"] = ParameterValue(speed, value_type=float)
         mocks.append(Node(package=package, executable="mock_hospital_nav", namespace=unit.ns, output="screen",
                           parameters=[params]))
+        if config.obstacle.enabled:
+            mocks.append(Node(package=package, executable="mock_obstacle_classifier", namespace=unit.ns,
+                              output="screen", parameters=[{"config_file": path}]))
     return [manager, *mocks]
 
 

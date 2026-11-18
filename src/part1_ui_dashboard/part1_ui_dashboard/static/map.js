@@ -241,13 +241,25 @@ function paint() {
     }
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
+    const markers = [];
+    for (const [,r] of units) {
+        for (const d of r.obstacle?.detections || []) {
+            if (!d.pose) continue;
+            const [x,y] = screen(d.pose.x,d.pose.y);
+            markers.push({x,y,label:d.label_ko || d.label});
+            dot(x,y,7,"#C62839");
+            ctx.fillStyle = "#FFFFFF";
+            ctx.font = "bold 12px sans-serif";
+            ctx.fillText("!",x,y);
+        }
+    }
     const center = cfg.polygon.reduce(([x,y],[u,v]) => [x+u/cfg.polygon.length,y+v/cfg.polygon.length],[0,0]);
     const [cx,cy] = screen(...center), corridor = S?.resources.CORRIDOR;
     let caption = plan?.labels?.corridor || "복도";
     if (corridor?.state === "UNKNOWN") caption += " · 점유 불명";
     else if (corridor?.blocked) caption += " · 막힘 " + duration(S.stamp-(corridor.blocked_since ?? S.stamp));
     const walls = (plan?.walls || []).map(([x,y,u,v]) => [screen(x,y),screen(u,v),3]);
-    const placed = [];
+    const placed = markers.map(({x,y}) => ({l:x-8,r:x+8,t:y-8,b:y+8}));
     const tagFont = '600 12px "Noto Sans CJK KR",sans-serif';
     const directions = (x,y,dy,side) => [[x,y+dy],[x,y-dy],[x+side,y],[x-side,y]];
     function place(candidates, half, height, captionOnly=false) {
@@ -284,6 +296,12 @@ function paint() {
         const slot = place(directions(x,y,"DEF".includes(z) ? -26 : 26,half+8),half,12);
         tag(slot.x,slot.y,zn(z),slot.fallback ? "#FFFFFFBF" : bg,"#263651",border);
         hits.push({x:slot.x,y:slot.y,w:half,h:12,z});
+    }
+    for (const {x,y,label} of markers) {
+        ctx.font = tagFont;
+        const half = ctx.measureText(label).width/2 + 8;
+        const slot = place(directions(x,y,-22,half+10),half,12);
+        tag(slot.x,slot.y,label,slot.fallback ? "#FFF3F3BF" : "#FFF3F3","#A71F30");
     }
     const ends = [[0,1],[2,3]].map(([a,b]) => screen(
         (cfg.polygon[a][0]+cfg.polygon[b][0])/2, (cfg.polygon[a][1]+cfg.polygon[b][1])/2

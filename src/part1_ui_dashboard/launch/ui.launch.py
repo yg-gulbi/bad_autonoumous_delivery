@@ -7,7 +7,7 @@ from launch_ros.actions import Node
 
 def start(context):
     params = {"ui_config": LaunchConfiguration("ui_config").perform(context)}
-    for key in ("map_yaml", "fleet_yaml", "dev_tools", "demo"):
+    for key in ("map_yaml", "fleet_yaml", "db_path", "dev_tools", "demo"):
         value = LaunchConfiguration(key).perform(context)
         if value:
             params[key] = (value.lower() == "true") if key in ("demo", "dev_tools") else value
@@ -17,5 +17,5 @@ def start(context):
 def generate_launch_description():
     path = get_package_share_path("part1_ui_dashboard") / "config/ui.yaml"
     return LaunchDescription([DeclareLaunchArgument("ui_config", default_value=str(path)),
-                              *[DeclareLaunchArgument(k, default_value="") for k in ("fleet_yaml", "map_yaml", "dev_tools", "demo")],
+                              *[DeclareLaunchArgument(k, default_value="") for k in ("fleet_yaml", "map_yaml", "db_path", "dev_tools", "demo")],
                               OpaqueFunction(function=start)])

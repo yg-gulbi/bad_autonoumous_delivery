@@ -1,6 +1,6 @@
 # PART 05(침상 이탈 감지)에 요구하는 변경
 
-기준 코드: `feat/part5-imsohy` (0dc450f, 11/17) `src/part5_bed_exit/part5_bed_exit/bed_exit_node.py`, `bed_exit_state.py`
+기준 코드: `part5-refactoring` (64e57ce, 11/18 14:47) `src/part5_bed_exit/part5_bed_exit/bed_exit_node.py`, `bed_exit_state.py`. 그 전 `feat/part5-imsohy`(0dc450f)도 같은 문제가 있다. 리팩터링 뒤에도 `process_frame()`의 `self.publisher.publish(Bool(data=unsafe))` 앞에 같은 확인이 없다.
 
 ## 관제가 이 토픽을 어떻게 쓰나
 

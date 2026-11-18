@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from math import dist, inf
 
 from . import geometry as g
+from .decisions import CONFIRM_REASONS, DONE_REASON
 from .robot_protocol import DONE
 
 
@@ -23,6 +24,15 @@ class Mission:
     requested_by: str | None = None
     department: str | None = None
     sends: int = 0
+
+    req_id: str | None = None
+    assigned_at: float | None = None
+    cancel_reason: str | None = None
+    stop_log: list = field(init=False)
+
+    def __post_init__(self):
+        self.stop_log = [{"status": "PENDING", "arrived_at": None, "confirmed_at": None, "confirmed_by": None}
+                         for _ in self.stops]
 
     @property
     def journal_id(self):
@@ -74,6 +84,8 @@ class MissionManager:
             stops = request["stops"]
         patient = request["patient"] if kind == "PATIENT_TRANSPORT" else None
         job = Mission(self.next_id(), robot, kind, request["level"], stops, patient, now)
+        job.req_id = request.get("req_id")
+        job.assigned_at = now if robot is not None else None
         job.requested_by = request.get("requested_by")
         job.department = request.get("requesting_department")
         if robot is None:
@@ -82,7 +94,7 @@ class MissionManager:
             self.robots[robot].queue.append(job)
             self.ready[robot] = None
         self.dirty[job.id] = job
-        self.record("MISSION_CREATED", now, "임무 접수", robot=robot, mission_id=job.id, mission_type=kind)
+        self.record("MISSION_CREATED", now, "임무 접수", robot=robot, mission_id=job.id, mission_type=kind, by=job.requested_by)
         return job.id
 
     def _interruptible_return(self, robot):
@@ -118,7 +130,7 @@ class MissionManager:
             self.record("MISSION_ASSIGNED", now, "배터리와 첫 정류장 거리로 배정", robot=robot,
                         mission_id=job.id, candidates=list(available), battery_pct=self.links[robot].battery)
             available.remove(robot)
-            job.robot = robot
+            job.robot, job.assigned_at = robot, now
             self.dirty[job.id] = job
             self.robots[robot].queue.append(job)
             self.ready[robot] = None
@@ -128,7 +140,7 @@ class MissionManager:
         if leg:
             self.resources.finish(leg, now)
 
-    def complete(self, robot, now, canceled=False, *, selected_card=None):
+    def complete(self, robot, now, canceled=False, *, selected_card=None, by=None):
         r = self.robots[robot]
         job = r.job
         self.finish_leg(robot, now)
@@ -136,10 +148,12 @@ class MissionManager:
             self.links[robot].forget()
         self.decisions.resolve(robot, now, except_id=selected_card)
         if not r.returning:
-            job.status, job.finished_at = ("CANCELED" if canceled else "DONE"), now
+            if canceled:
+                self._cancel_job(job, now, "운영자 임무 취소", by)
+            else:
+                job.status, job.finished_at = "DONE", now
+                self.record("MISSION_DONE", now, DONE_REASON, result=job.status, robot=robot, mission_id=job.id)
             self.dirty[job.id] = job
-            self.record("MISSION_CANCELED" if canceled else "MISSION_DONE", now, job.status,
-                        robot=robot, mission_id=job.id)
         r.job, r.state, r.target_override = None, "IDLE", None
         r.replacing = r.fault_stop = r.resume_due = False
         if not canceled and job.kind in ("CALL", "PATIENT_TRANSPORT", "MED_ROUND") and self.config.mission.return_home:
@@ -156,6 +170,8 @@ class MissionManager:
         if r.job.index == len(r.job.stops):
             self.complete(robot, now)
         else:
+            r.job.stop_log[r.job.index]["status"] = "ACTIVE"
+            self.dirty[r.job.id] = r.job
             r.state = "HOLD"
             self.ready[robot] = None
 
@@ -177,7 +193,8 @@ class MissionManager:
                 continue
             if r.job is None and r.queue:
                 r.job = r.queue.popleft()
-                r.job.started_at, r.job.status, r.state = now, "ACTIVE", "HOLD"
+                r.job.status, r.state = "ACTIVE", "HOLD"
+                r.job.stop_log[r.job.index]["status"] = "ACTIVE"
                 self.dirty[r.job.id] = r.job
                 self.safety.protect(robot, now)
             if (r.job is None or r.state != "HOLD" or r.replacing
@@ -196,12 +213,12 @@ class MissionManager:
         self.links[leg.robot].go(f"L-{job.id.removeprefix('M-')}-{job.sends}", leg.destination, leg.level)
         r.state = "SENDING"
 
-    def fault(self, robot, kind, reason, now):
+    def fault(self, robot, kind, reason, now, diagnostic=None):
         r = self.robots[robot]
         if not r.job:
             return
         self.decisions.resolve(robot, now, {"BLOCKED"})
-        self.record(kind, now, reason, robot=robot, mission_id=r.job.journal_id)
+        self.record(kind, now, reason, diagnostic=diagnostic, robot=robot, mission_id=r.job.journal_id)
         self.record("FAULT", now, reason, robot=robot, mission_id=r.job.journal_id)
         r.state, r.fault_stop = "FAULT", True
         self.decisions.open(kind if kind != "WARNING" else "NAV_FAILED", robot, r.job.journal_id, reason, now)
@@ -210,14 +227,14 @@ class MissionManager:
         r, link = self.robots[robot], self.links[robot]
         event = data["event"]
         if event == "WARNING":
-            self.record("WARNING", now, data["reason"], robot=robot)
+            self.record("WARNING", now, "로봇 상태 또는 명령 응답을 확인하세요.", diagnostic=data["reason"], robot=robot)
             return
         if r.canceling:
             if r.returning and event == "MISSION_FAILED":
                 return  # Wait for the terminal STATE or cancel reply.
             if r.returning and event == "ARRIVED":
                 r.zone = data["destination"]
-                self.record("ARRIVE", now, f"{r.zone} 도착", robot=robot, destination=r.zone, return_home=True)
+                self.record("ARRIVE", now, f"{self.resources.zone_label(r.zone)} 도착", robot=robot, destination=r.zone, return_home=True)
             if r.returning and event == "CANCEL_CONFIRMED" and data.get("at_home"):
                 r.zone = self.config.robots[robot].start_zone
             if event in {"CANCEL_CONFIRMED", "ARRIVED", "MISSION_FAILED", "MISSION_CANCELED"}:
@@ -241,14 +258,20 @@ class MissionManager:
         leg = self.resources.active.get(robot)
         if event == "MISSION_ACCEPTED" and r.state == "SENDING" and leg:
             r.state = "MOVING"
-            self.record("LEG_START", now, f"{leg.destination}행 구간 수락", robot=robot,
-                        mission_id=r.job.journal_id, destination=leg.destination, return_home=r.returning)
+            if not r.returning and r.job.started_at is None:
+                r.job.started_at = now
+                self.dirty[r.job.id] = r.job
+            self.record("LEG_START", now, f"{self.resources.zone_label(leg.destination)} 이동 시작", robot=robot,
+                        mission_id=r.job.journal_id, destination=leg.destination, return_home=r.returning,
+                        by=r.job.requested_by if r.job.kind == "GO_ZONE" else None)
         elif event in ("MISSION_FAILED", "MOVE_REJECTED", "MISSION_CANCELED"):
             kind = {"MISSION_FAILED": "NAV_FAILED", "MOVE_REJECTED": "MOVE_REJECTED",
                     "MISSION_CANCELED": "WARNING"}[event]
-            self.fault(robot, kind, str(data.get("reason") or event), now)
+            reason = {"NAV_FAILED": "목적지까지 주행하지 못했습니다.", "MOVE_REJECTED": "로봇이 이동 요청을 거절했습니다.",
+                      "WARNING": "로봇에서 주행이 취소됐습니다."}[kind]
+            self.fault(robot, kind, reason, now, diagnostic=data.get("reason") or event)
         elif event == "ARRIVED" and leg and data.get("destination") == leg.destination:
-            self.record("ARRIVE", now, f"{leg.destination} 도착", robot=robot,
+            self.record("ARRIVE", now, f"{self.resources.zone_label(leg.destination)} 도착", robot=robot,
                         mission_id=r.job.journal_id, destination=leg.destination, return_home=r.returning)
             r.zone = leg.destination
             link.forget()
@@ -266,27 +289,34 @@ class MissionManager:
                     r.state, r.fault_stop = "FAULT", True
                     self.record("FAULT", now, "이전 구역에 복귀하여 원래 구간의 재시도를 기다립니다.",
                                 robot=robot, mission_id=r.job.journal_id)
-            elif r.job.kind == "CALL" or (self.config.mission.confirm_at_stops
-                                          and r.job.kind in ("PATIENT_TRANSPORT", "MED_ROUND")):
-                r.state = "WAIT_CONFIRM"
             else:
-                self.advance(robot, now)
+                if not r.returning:
+                    r.job.stop_log[r.job.index].update(status="ARRIVED", arrived_at=now)
+                    self.dirty[r.job.id] = r.job
+                if r.job.kind == "CALL" or (self.config.mission.confirm_at_stops
+                                           and r.job.kind in ("PATIENT_TRANSPORT", "MED_ROUND")):
+                    r.state = "WAIT_CONFIRM"
+                else:
+                    self.advance(robot, now)
 
-    def cancel(self, mission_id, now, *, selected_card=None):
+    def _cancel_job(self, job, now, reason, by):
+        job.status, job.finished_at, job.cancel_reason = "CANCELED", now, reason
+        for stop in job.stop_log[job.index:]:
+            stop["status"] = "SKIPPED"
+        self.dirty[job.id] = job
+        self.record("MISSION_CANCELED", now, reason, robot=job.robot, mission_id=job.id, by=by)
+
+    def cancel(self, mission_id, now, *, selected_card=None, by=None):
         for job in self.unassigned:
             if job.id == mission_id:
                 self.unassigned.remove(job)
-                job.status, job.finished_at = "CANCELED", now
-                self.dirty[job.id] = job
-                self.record("MISSION_CANCELED", now, "공용 대기열에서 취소", mission_id=job.id)
+                self._cancel_job(job, now, "공용 대기열에서 취소", by)
                 return
         for robot, r in self.robots.items():
             for job in r.queue:
                 if job.id == mission_id:
                     r.queue.remove(job)
-                    job.status, job.finished_at = "CANCELED", now
-                    self.dirty[job.id] = job
-                    self.record("MISSION_CANCELED", now, "대기 임무 취소", robot=robot, mission_id=job.id)
+                    self._cancel_job(job, now, "대기 임무 취소", by)
                     return
             if not r.job or r.job.id != mission_id:
                 continue
@@ -305,7 +335,7 @@ class MissionManager:
                 r.canceling = True
                 link.cancel()
             # The clinical mission ends now. Confirm the old motion stopped before the next dispatch.
-            self.complete(robot, now, canceled=True, selected_card=selected_card)
+            self.complete(robot, now, canceled=True, selected_card=selected_card, by=by)
             return
         raise ValueError("E-409: 취소할 임무가 없습니다.")
 
@@ -332,16 +362,20 @@ class MissionManager:
         if r.target_override is None:
             self.deadlock.retry_detour(robot, now)
 
-    def confirm(self, robot, mission_id, result, now):
+    def confirm(self, robot, mission_id, result, now, *, by=None):
         r = self.robots[robot]
         if (not r.job or r.job.id != mission_id or r.state != "WAIT_CONFIRM"
                 or self.safety.causes[robot] or any(c["robots"] == [robot] and c["kind"] == "STOP_MISMATCH"
                                                     for c in self.decisions.cards.values())):
             raise ValueError("E-409: 확인할 정류장이 없습니다.")
-        self.record("CONFIRM_STEP", now, result, robot=robot, mission_id=mission_id, destination=r.zone)
+        self.record("CONFIRM_STEP", now, CONFIRM_REASONS[result], result=result, robot=robot, mission_id=mission_id, destination=r.zone, by=by)
+        stop = r.job.stop_log[r.job.index]
+        self.dirty[mission_id] = r.job
         if result == "MISMATCH":
+            stop["status"] = "MISMATCH"
             self.decisions.open("STOP_MISMATCH", robot, mission_id, "정류장 확인 결과가 불일치합니다.", now)
         else:
+            stop.update(status="CONFIRMED", confirmed_at=now, confirmed_by=by)
             self.advance(robot, now)
 
     def wire_step(self, robot, now, corridor_command=None):
@@ -363,5 +397,5 @@ class MissionManager:
         if command == "RESUME" or (not stop and link.state == "MOVING" and link.control_sent != "PAUSE"):
             r.resume_due = False
         if error:
-            self.fault(robot, "MOVE_REJECTED", error, now)
+            self.fault(robot, "MOVE_REJECTED", "이동 명령 수락을 확인하지 못했습니다.", now, diagnostic=error)
         return command

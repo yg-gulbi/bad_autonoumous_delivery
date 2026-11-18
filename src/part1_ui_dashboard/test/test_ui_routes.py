@@ -157,3 +157,23 @@ def test_ui_starting_after_monitor_outage_recovers_pending_card():
     feed.receive("event", {"type": "CARD_CLOSED", "detail": {"card_id": "K-camera"}})
     feed.receive("state", state)
     assert not feed.cards
+
+
+@pytest.mark.parametrize("cmd", ["PAUSE_ALL", "RESUME_ALL"])
+def test_42_global_dashboard_commands_include_operator(monitor,cmd):
+    client, messages, services, _ = monitor
+    assert client.post("/api/command",json={"cmd":cmd,"operator":"김당직"}).status_code == 202
+    [(topic,payload)] = messages
+    data = json.loads(payload)
+    assert topic == "/ui/operator_cmd" and (data["cmd"],data["by"]) == (cmd,"김당직") and not services
+
+
+def test_39_per_robot_mock_classifier_control():
+    messages = []
+    client = create_app(Feed(),{},lambda *m: messages.append(m),None,dev_tools=True).test_client()
+    for robot,kind in (("robot_a","person"),("robot_b","silent")):
+        assert client.post("/api/test/obstacle",json={"robot":robot,"kind":kind}).status_code == 200
+        topic,text = messages[-1]
+        assert topic == "/mock/control" and json.loads(text) == {"robot":robot,"action":"obstacle","kind":kind}
+    assert client.post("/api/test/obstacle",json={"robot":"robot_a","kind":"invalid"}).status_code == 400
+    assert len(messages) == 2

@@ -99,7 +99,7 @@ namespace는 PART 04 `keyboard_control.py` 예시(`--robots robot2 robot3`)를 �
 
 ### 1.2 이번 범위에서 뺀 것
 
-로봇 오류 시 대타, 진행 중 응급 격상, 배터리 부족 대응, 관제 통신 두절, 카메라 기반 장애물 분류(PART 05 최종본에 없음), QR, 맵 개조.
+로봇 오류 시 대타, 진행 중 응급 격상, 배터리 부족 대응, 관제 통신 두절, QR, 맵 개조.
 
 ---
 
@@ -149,7 +149,28 @@ namespace는 PART 04 `keyboard_control.py` 예시(`--robots robot2 robot3`)를 �
 - 실제 코드(`bed_exit_node.py`): 타이머가 `capture_fps`(기본 30 Hz)마다 한 프레임을 처리하고, 판정이 되면 **매 프레임** `True`/`False`를 발행한다. 카메라 읽기나 판정이 실패하면 5프레임 이력을 비우고 그 프레임은 발행하지 않는다.
 - 그래서 관제는 **이 토픽이 끊기면 감시가 끊긴 것**으로 본다 (5.6절 "침상 감시 끊김", 단계 3S).
 - 빈틈 하나: 이력을 비운 직후 5프레임이 모이기 전에는 `False`(정상)를 발행한다 (`BedExitState.update`가 5개 미만이면 `False`를 돌려줌). 카메라가 몇 프레임마다 실패하면 이력이 계속 비워져, 환자가 침대를 떠나도 `False`만 나간다. PART 05에 고쳐 달라고 요구한다 (11장 P5-R1).
-- 최종본(`feat/part5-imsohy`)에는 장애물 분류기가 없다. ICD의 IF-P4-03(`inspect_image`)과 IF-P5-02(`obstacle/report`)는 생기지 않는다. 장애물은 관제가 멈춘 시간으로 판단한다 (5.5절).
+- 11/18 14:47 `part5-refactoring` 브랜치(64e57ce)는 코드 정리다. 토픽·발행 방식·5프레임 규칙은 같고, 위 빈틈(P5-R1)도 그대로 남아 있다.
+
+### 3.2a PART 06 장애물 분류 → 관제 (단계 3O)
+
+기준 코드: 브랜치 `part6` (50ff680, 11/18 14:51, 아직 main 아님) `src/part6_obstacle_classifier/`. 로봇 OAK-D 카메라로 한 번 찍어 YOLO11n으로 분류한다. PART 06 문서에 "Part 3·4와 자동 정지/재개는 연결하지 않았다"고 적혀 있다. 그래서 언제 찍을지, 결과로 무엇을 할지는 관제가 정한다.
+
+| 방향 | 토픽 | 타입 | 뜻 |
+|---|---|---|---|
+| 관제 → PART 06 | `/<ns>/obstacle/inspect_image` | `std_msgs/Empty` | 한 번 보내면 RGB·깊이 한 쌍을 받아 한 번 분류한다 (`capture_timeout_sec` 3초) |
+| PART 06 → 관제 | `/<ns>/obstacle_classifier/result` | `std_msgs/String` (JSON) | 아래 |
+
+```json
+{"status": "ok", "obstacle_present": true, "header": {"stamp": 1794985000.1, "frame_id": "oakd_rgb_camera_optical_frame"},
+ "detections": [{"label": "person", "confidence": 0.82, "bbox": [210, 80, 400, 470], "pose": {"x": -1.52, "y": -2.31, "z": 0.0}},
+                {"label": "chair", "confidence": 0.41, "bbox": [10, 200, 90, 300]}]}
+```
+
+- `status`: `ok` | `image_timeout` | `processing_error`. `ok`가 아니면 `obstacle_present`는 `null`이다 ("모름").
+- `obstacle_present: false`는 "찍었는데 아무것도 없음"이다. "모름"과 다르다.
+- `label`은 COCO 영어 이름이다 (`person`, `chair`, `suitcase` …). `pose`는 깊이가 유효할 때만 있고 map 좌표다.
+- 요청 ID가 없다. 관제는 로봇마다 한 번에 요청 하나만 내고, 요청 뒤 `obstacle.timeout_s`(6초) 안에 온 첫 결과를 그 답으로 본다. 늦게 온 결과는 기록만 하고 판단에 쓰지 않는다.
+- PART 06이 안 떠 있으면 결과가 오지 않는다. 그때는 "분류 불가"로 보고 5.5절의 시간 규칙대로만 한다 (지금과 같음).
 
 ### 3.3 관제 ↔ PART 04 — 실제 코드 기준
 
@@ -284,6 +305,7 @@ PART 04는 로봇마다 `hospital_nav`(CommandReceiver + MissionManager + Naviga
 | `PAUSE_ROBOT` · `RESUME_ROBOT` | `robot` | 로봇 한 대만 정지·재개 |
 | `GO_ZONE` | `robot`, `zone` | 지정 구역으로 보내기 (임무 없는 로봇만. 자원 규칙은 똑같이 적용) |
 | `RESOURCE_CLEAR_CONFIRM` | `resource` | 점유 불명(`UNKNOWN`) 자원을 사람이 확인하고 비움 |
+| `PAUSE_ALL` · `RESUME_ALL` | 없음 | 화면의 [안전 정지 요청]·[전체 재개]. 4.7절 `/robot/pause`·`/robot/resume`과 같은 동작·같은 거절 조건이고, `by`를 기록에 남긴다 (단계 3O) |
 
 모든 명령에 `/ui/ack`로 응답한다.
 
@@ -296,7 +318,7 @@ PART 04는 로봇마다 `hospital_nav`(CommandReceiver + MissionManager + Naviga
 ### 4.4 `/ui/ack`
 
 ```json
-{"v": 1, "ref": "ui-20261118-0007", "ok": true, "code": null, "message": "M-0007 접수, robot_a 배정", "mission_id": "M-0007"}
+{"v": 1, "ref": "ui-20261118-0007", "ok": true, "code": null, "message": "M-0007 접수 · Robot A 배정", "mission_id": "M-0007"}
 ```
 
 `ref`는 받은 `req_id`·`cmd_id`·`card_id`다. JSON이 깨져 ID를 읽을 수 없으면 `ref: null`로 보낸다 (단계 0 결정). 에러 코드: `E-400` 잘못된 요청, `E-409` 지금 상태에서 할 수 없음, `E-423` 자원 잠김·점유 불명.
@@ -333,6 +355,7 @@ PART 04는 로봇마다 `hospital_nav`(CommandReceiver + MissionManager + Naviga
   - `resources.<id>.reason`, `resources.<id>.decided_at`: 그 자원에 대한 가장 최근 판단 문장과 시각 (허가·대기·양보·점유 불명·해제). `resource_manager`가 만든 문장을 그대로 넣는다.
   - `resources.<id>.queue_detail`: `[{"robot": "robot_a", "level": 1, "mission_id": "M-0005", "since": 1794963590.1}]`. `queue`(이름 목록)는 그대로 둔다.
   - `missions[]`: `patient`, `items`(정류장별 품목), `requested_by`, `created_at`, `finished_at`, `wait_reason`을 더한다. 끝난 임무도 최근 20건까지 넣는다 (기존 `status` 값으로 구분).
+  - `robots.<id>.obstacle` (단계 3O): 이번 멈춤에서 받은 장애물 분류. 멈춤이 없으면 `null`. `{"kind": "PERSON"|"OBJECT"|"NONE"|"UNKNOWN", "labels": ["person"], "detections": [{"label", "confidence", "pose"}], "at": 1794985001.2}`
   - `last_decision`: 가장 최근 통행 판단 하나. 4.8절 판단 이벤트의 `type`, `ts`, `robot`, `detail`을 그대로 담는다. 없으면 `null`.
 
 ### 4.6 `/fleet/decision_req`
@@ -350,6 +373,8 @@ PART 04는 로봇마다 `hospital_nav`(CommandReceiver + MissionManager + Naviga
 
 ### 4.7 `/robot/pause`, `/robot/resume` (Trigger)
 
+- 화면 버튼은 이 서비스 대신 4.2절 `PAUSE_ALL`·`RESUME_ALL`을 쓴다. `Trigger`는 인자가 없어 누른 사람을 남길 수 없기 때문이다 (단계 3O). 이 서비스는 ROS 명령줄용으로 남기고, 기록의 `by`는 "ROS 서비스"로 둔다.
+
 - `pause`: 항상 `success:true`로 바로 응답하고, 실제 정지는 다음 tick에 한다.
 - `resume`: 침상 이탈이 아직 `true`면 `success:false, message:"침상 이탈 해제 전에는 재개할 수 없습니다"`. 아니면 `success:true`로 응답하고 다음 tick에 재개한다.
 
@@ -360,7 +385,13 @@ PART 04는 로봇마다 `hospital_nav`(CommandReceiver + MissionManager + Naviga
  "detail": {"resources": ["CORRIDOR", "ROOM_E"], "reason": "통로 비어 있음 + Level 3 > Level 2 → Robot B 허가"}}
 ```
 
-이벤트 종류: `MISSION_CREATED`, `MISSION_REJECTED`, `LEG_START`, `ARRIVE`, `CONFIRM_STEP`, `MISSION_DONE`, `MISSION_CANCELED`, `RESOURCE_REQUEST`, `RESOURCE_GRANT`, `RESOURCE_HOLD`, `RESOURCE_ENTER`, `RESOURCE_RELEASE`, `RESOURCE_UNKNOWN`, `RESOURCE_CLEAR_CONFIRM`, `DEADLOCK_DETECTED`, `YIELD_START`, `YIELD_DONE`, `CORRIDOR_YIELD_START`, `CORRIDOR_YIELD_END`, `CORRIDOR_YIELD_TIMEOUT`, `STALL_SHORT`, `STALL_LONG`, `BLOCKED`, `UNBLOCKED`, `PAUSE`, `RESUME`, `RESUME_REJECTED`, `BED_EXIT`, `BED_EXIT_CLEAR`, `BUMP`, `MOVE_REJECTED`, `NAV_FAILED`, `FAULT`, `CARD_OPEN`, `CARD_CLOSED`, `LINK_LOST`, `LINK_BACK`, `WARNING`, `BED_MONITOR_WARN`, `BED_MONITOR_LOST`, `BED_MONITOR_BACK`, `BED_MONITOR_BYPASS` (단계 3S).
+이벤트 종류: `MISSION_CREATED`, `MISSION_REJECTED`, `LEG_START`, `ARRIVE`, `CONFIRM_STEP`, `MISSION_DONE`, `MISSION_CANCELED`, `RESOURCE_REQUEST`, `RESOURCE_GRANT`, `RESOURCE_HOLD`, `RESOURCE_ENTER`, `RESOURCE_RELEASE`, `RESOURCE_UNKNOWN`, `RESOURCE_CLEAR_CONFIRM`, `DEADLOCK_DETECTED`, `YIELD_START`, `YIELD_DONE`, `CORRIDOR_YIELD_START`, `CORRIDOR_YIELD_END`, `CORRIDOR_YIELD_TIMEOUT`, `STALL_SHORT`, `STALL_LONG`, `BLOCKED`, `UNBLOCKED`, `PAUSE`, `RESUME`, `RESUME_REJECTED`, `BED_EXIT`, `BED_EXIT_CLEAR`, `BUMP`, `MOVE_REJECTED`, `NAV_FAILED`, `FAULT`, `CARD_OPEN`, `CARD_CLOSED`, `LINK_LOST`, `LINK_BACK`, `WARNING`, `BED_MONITOR_WARN`, `BED_MONITOR_LOST`, `BED_MONITOR_BACK`, `BED_MONITOR_BYPASS` (단계 3S), `OBSTACLE_INSPECT`, `OBSTACLE_RESULT` (단계 3O).
+
+`detail.reason` 규칙 (단계 3O, 3L 검토):
+
+- `reason`은 화면에 그대로 보이는 한국어 문장이다. `OK`·`MISMATCH`·`DONE`·`selected`·`timeout`·`resolved` 같은 코드 값은 `reason`에 넣지 않고 `detail.result`·`detail.choice`·`detail.closed_by` 같은 별도 칸에 둔다.
+- 문장 속 로봇은 표시 이름(`Robot A`)으로 쓴다. `robot_a` 같은 ID를 쓰지 않는다. 로봇 이름 뒤에 조사를 붙이지 않는다. 예: "Robot A — A 구역으로 가는 구간 요청", "복도 비어 있음 + 실효 Level 1, 먼저 요청 → Robot A 허가".
+- 이 규칙은 `/ui/ack`의 `message`, 카드 제목·이유, `wait_reason`에도 똑같이 쓴다.
 
 통행 판단 이벤트(`RESOURCE_GRANT`, `RESOURCE_HOLD`, `CORRIDOR_YIELD_START`)의 `detail`에는 판단 근거를 같이 넣는다 (단계 3D):
 
@@ -548,16 +579,34 @@ PART 04는 로봇마다 `hospital_nav`(CommandReceiver + MissionManager + Naviga
 - 지표: 교착 횟수, 해소 시간. 해소 시간은 교착 확정부터 비킨 로봇이 원래 방 점유를 실제로 해제한 tick까지다. 카드 ID는 `K-` 뒤에 UUID (단계 1 결정).
 - 대기 그래프의 간선은 **자리가 다 찬 자원**의 보유 로봇들로만 잇는다. `SHARED_YIELD`에서 통로에 한 대만 있으면 통로를 기다리는 간선은 생기지 않는다.
 
-### 5.5 `stall` — 멈춤 판단 (카메라 없이 시간으로)
+### 5.5 `stall` — 멈춤 판단 (시간 + PART 06 장애물 분류)
 
 - **진행 없음**: 로봇이 `MOVING`인데 `stall_window_s`(5초) 동안 위치 변화가 `stall_move_m`(0.05 m)보다 작고 PART 04 `percent`도 늘지 않으면 멈춘 것으로 본다. 멈춘 시간 `stall_s`를 센다.
 - `stall_s ≥ stall_short_s`(10초): `STALL_SHORT` 기록, UI에 대기 시간 표시. 동작은 안 바꾼다 (지나가는 사람 등은 보통 비켜 준다. Nav2가 스스로 돌아가는 길도 찾는다).
 - `stall_s ≥ stall_long_s`(30초): `STALL_LONG` + 로봇이 있는 영역(통로면 `CORRIDOR`)에 `blocked=true` 표시 → **다른 로봇의 새 허가에서 그 자원을 뺀다** (막힘 정보 공유). 카드 `BLOCKED`: [치웠음, 다시 출발] [되돌아가기] [임무 보류], `default: null` (무엇이 막고 있는지 모르므로 저절로 움직이지 않는다).
   - [치웠음, 다시 출발]: 로봇 쪽 상태에 맞게 `RESUME` 또는 `MOVE` 재전송, `blocked` 해제
+  - 이 버튼 글은 장애물 분류(5.5절)에 맞춘다 (단계 4P): `PERSON` → [비켜 줌, 다시 출발], `OBJECT` → [치웠음, 다시 출발], `NONE`·`UNKNOWN`·분류 없음 → [확인함, 다시 출발]. 선택지 ID와 동작은 같다.
   - [되돌아가기]: `CANCEL` → 이전 구역으로 `MOVE`
   - [임무 보류]: `PAUSE`, 임무는 `FAULT`로
 - 다시 움직이면 `stall_s = 0`, 카드가 열려 있으면 "상황 해소"로 닫고, `blocked`를 해제한다 (`UNBLOCKED`).
 - 진행 없음 중에 Nav2가 포기하면 `MISSION_FAILED`가 오고, 5.1절 실패 규칙이 우선한다.
+- **장애물 분류 (단계 3O, 3.2a절)**
+  - `stall_s ≥ obstacle.inspect_at_s`(10초)가 되면 그 로봇에 `inspect_image`를 한 번 보낸다. `OBSTACLE_INSPECT` 이벤트.
+  - 결과를 종류로 나눈다.
+    - `PERSON`: `person`이 하나라도 있음.
+    - `OBJECT`: `person`은 없고 다른 물체가 있음.
+    - `NONE`: `status: ok`, `obstacle_present: false`.
+    - `UNKNOWN`: `ok`가 아님, 시간 초과, 깨진 JSON.
+  - `OBSTACLE_RESULT` 이벤트에 종류·라벨·신뢰도·위치를 남기고, `robots.<id>.obstacle`에 넣는다.
+  - 종류별 동작
+    - `PERSON`: 지금처럼 30초까지 기다린다. 사람은 보통 비켜 준다. 30초 카드의 이유에 "사람 감지 (로봇 앞 약 1.2 m)"를 붙인다.
+    - `OBJECT`: 물건은 저절로 치워지지 않는다. **결과를 받는 즉시** 30초 막힘과 같은 처리를 한다: `STALL_LONG`, `blocked=true`, 카드 `BLOCKED`. 카드 이유는 "물건이 길을 막고 있음: 의자 (로봇 앞 약 0.8 m)".
+    - `NONE`: 30초 규칙 그대로. 카드 이유에 "카메라에는 장애물이 보이지 않음 — 주행 문제일 수 있음".
+    - `UNKNOWN`: 30초 규칙 그대로. 카드 이유에 "장애물 분류 불가".
+  - 분류 결과로 로봇을 저절로 움직이지 않는다. 멈추고 알리는 것만 앞당긴다.
+  - 거리는 `pose`가 있는 탐지와 로봇 위치 사이의 거리다. `pose`가 없으면 거리를 쓰지 않는다.
+  - 한 번 멈춤에 한 번만 찍는다. 다시 움직였다가 또 멈추면 새로 찍는다. [치웠음, 다시 출발] 뒤에 또 멈춰도 새로 찍는다.
+  - 라벨은 화면과 문장에서 한국어로 쓴다 (`person` 사람, `chair` 의자, `suitcase` 가방, `backpack` 가방, `bottle` 병, `bed` 침대, `couch` 소파, `dining table` 탁자, `potted plant` 화분, `dog` 개, `cat` 고양이. 표에 없으면 영어 그대로). 표는 `fleet.yaml obstacle.label_ko`에 둔다.
 
 ### 5.6 `safety` — 침상 이탈과 수동 정지
 
@@ -659,6 +708,7 @@ src/part1_ui_dashboard/
 - bed_exit 흉내는 `ros2 topic pub /patient/bed_exit std_msgs/msg/Bool "{data: true}" --once`로 한다.
 - 단계 3D: `/mock/control`(`std_msgs/String` JSON)을 받아 실행 중에 시험 파라미터를 바꾼다. 예 `{"robot": "robot_a", "action": "stall", "seconds": 40}`. `action`: `stall`(지금 위치에서 N초 멈춤), `fail_next`, `reject_next`, `drop_link`(N초), `battery`(`value` %). 관제 화면의 시험 도구(14.6절)가 쓴다.
 - `IDLE`·`COMPLETE`·`FAILED`·`CANCELED`에서 받은 `CANCEL`은 PART 04처럼 로그만 남기고 버린다 (5.1절 복귀).
+- 단계 3O: `mock_obstacle_classifier.py`를 더한다. 로봇마다 `/<ns>/obstacle/inspect_image`를 받으면 1초 뒤 3.2a절 형식의 결과를 낸다. 낼 결과는 `/mock/control`의 `{"robot": "robot_a", "action": "obstacle", "kind": "person"|"object"|"none"|"error"|"silent"}`로 정한다 (기본 `none`). `person`·`object`의 `pose`는 로봇 앞 1 m. `fleet_mock.launch.py`에 함께 띄운다.
 
 ## 8. 설정 `config/fleet.yaml` 기본값
 
@@ -723,6 +773,16 @@ stall:
   move_m: 0.05
   short_s: 10.0
   long_s: 30.0
+
+obstacle:                       # PART 06 장애물 분류 (3.2a·5.5절, 단계 3O)
+  enabled: true
+  inspect_topic: "/{ns}/obstacle/inspect_image"
+  result_topic: "/{ns}/obstacle_classifier/result"
+  inspect_at_s: 10.0
+  timeout_s: 6.0                # PART 06 촬영 제한 3초 + 추론 여유
+  object_blocks_now: true       # OBJECT면 30초를 기다리지 않고 바로 막힘 처리
+  min_confidence: 0.4           # 이보다 낮은 탐지는 종류 판단에서 뺀다 (기록에는 남김)
+  label_ko: {person: 사람, chair: 의자, suitcase: 가방, backpack: 가방, bottle: 병, bed: 침대, couch: 소파, dining table: 탁자, potted plant: 화분, dog: 개, cat: 고양이}
 
 safety:
   bed_exit_pause_targets: [robot_a]   # 팀 확정 필요: [robot_a] 또는 [robot_a, robot_b]
@@ -797,6 +857,10 @@ db:
 36. **감시 없이 운행과 시작 조건**: 카드에서 `bypass` → 재개 허용, `BED_MONITOR_BYPASS`에 고른 사람, 신호가 돌아오면 `bypass` 풀림. `require_at_start: true`이고 한 번도 신호가 없으면 Robot A 임무가 `SAFE_PAUSE`로 시작, `false`면 경고만. 수신 속도가 10 Hz 아래로 3초 떨어지면 "불안정" 경고
 37. **정류장 테이블** (PART 03): 환자 이송 등록 → `mission_stops` 2줄 `PENDING` → 배정 시 1번 `ACTIVE` → 도착 `ARRIVED`·`arrived_at` → 확인 `CONFIRMED`·`confirmed_by` → 마지막 확인 뒤 `missions.status = DONE`. 취소하면 남은 정류장 `SKIPPED`. 같은 `req_id`가 두 번 와도 임무는 하나. 옛 DB 파일(칸이 모자란 것)을 열면 칸이 더해지고 기존 줄은 남는다
 38. **기록 조회** (PART 01): 시험용 `bad.db`를 만들어 `/api/missions`·`/api/missions/<id>`·`/api/events`·`/api/cards`·`/api/kpi`·`/api/events.csv`가 거르기·쪽 나눔대로 답한다. 화면 서버가 `bad.db`에 쓰려고 하면 실패한다 (읽기 전용으로 열었는지). DB 파일이 없으면 기록 주소는 503, 나머지는 정상
+39. **장애물 분류 연결**: 10초 멈춤 → `inspect_image` 한 번. `person` 결과 → 카드 없음, 30초에 `BLOCKED` 카드(이유에 "사람"). `chair` 결과 → 받는 즉시 `STALL_LONG` + `blocked` + 카드(이유에 "의자"), 다른 로봇의 새 허가에서 그 자원이 빠짐. `false` 결과·시간 초과 → 30초 규칙, 이유 문구. 6초 뒤 늦게 온 결과는 판단에 안 씀. 다시 움직이면 `obstacle`이 `null`이 되고, 또 멈추면 새로 찍음. 신뢰도 0.4 미만 탐지는 종류 판단에서 빠짐
+40. **장애물 결과 JSON**: 3.2a절 예시(사람+의자, pose 있음·없음), `obstacle_present: false`, `image_timeout`, `processing_error`, 깨진 JSON이 각각 PERSON·OBJECT·NONE·UNKNOWN으로 나뉘고, 라벨이 한국어로 바뀐다
+41. **기록 문장** (PART 01·03): 4.8절 이벤트 종류마다 관제가 실제로 만드는 이벤트를 화면 문장 함수에 넣으면, 제목과 보조 문장에 `robot_a`·`robot_b`, `OK`·`MISMATCH`·`DONE` 같은 대문자 코드 값, `selected`·`timeout`·`resolved`가 나오지 않는다. 같은 이벤트를 시험용 `bad.db`에 쓰고 기록 조회로 읽어 그려도 실시간과 같은 문장이다. 옛 형식(`reason`이 코드 값)의 행도 14.8절 문장으로 바뀐다
+42. **전체 정지·재개 기록**: 화면의 [안전 정지 요청]·[전체 재개]가 `PAUSE_ALL`·`RESUME_ALL`과 조작자 이름을 보내고 `events.by`에 그 이름이 남는다. 침상 이탈·감시 끊김 중 `RESUME_ALL`은 `/robot/resume`과 같이 거절되고 `RESUME_REJECTED`에 이름이 남는다. `/robot/pause`·`/robot/resume` 서비스는 그대로 동작하고 `by`는 "ROS 서비스"
 
 ## 10. 단계 (끝날 때마다 멈추고 보고)
 
@@ -813,7 +877,21 @@ db:
 | 3D-3 | 지도 글자 자리 정하기 (14.7절 "글자 자리 정하기"), 화면·관제 문장의 "통로" → "복도" 통일 (14.8절) | 기존 테스트 전부 통과 (문장이 바뀐 테스트는 새 문장으로). 평상시·복도 양보 중·막힘 캡처에서 글자가 벽·로봇·다른 글자와 겹치지 않음 |
 | 3S | 침상 감시 끊김 (5.6·5.7절): 끊김 감지·정지·카드·감시 없이 운행, `/fleet/state`의 `bed_exit.monitor`, 화면 표시(14.3절)와 가짜 침상 감시(14.6절). PART 05 요구 문서(11장 P5-R1) | 테스트 35, 36 통과, 기존 테스트 전부 통과. 화면에서 가짜 침상 감시를 끊어 Robot A 정지 → 카드 → 복구 → 재개를 확인 |
 | 3L | 화면·DB·로직 설계 반영 (`WEB_DB_DESIGN.md`): `mission_stops`와 칸 정리(`bad.db`), 화면 서버의 기록 조회 주소(읽기 전용)와 DB 기준 표 | 테스트 37·38 통과, 기존 테스트 전부 통과. 시나리오 5(CALL 세 건)를 끝까지 진행한 뒤 이송 작업 완료 탭·상세의 정류장 표·운영 기록이 DB에서 보이고, 화면 서버를 껐다 켜도 남아 있다 |
+| 3O | 먼저 3L 검토 두 건: 기록 문장(4.8·14.8절), 전체 정지·재개의 누른 사람 기록(4.2·4.7절). 그다음 PART 06 장애물 분류 연결 (3.2a·5.5절): 멈춤 10초에 촬영 요청, 결과 종류별 처리, `robots.<id>.obstacle`, mock 분류기, 화면 표시(14.4·14.7절) | 테스트 39~42 통과, 기존 테스트 전부 통과. 운영 기록과 작업 상세 캡처에 영문 코드 값·`robot_a`가 보이지 않고, [안전 정지 요청]·[전체 재개] 줄의 "누가"에 조작자 이름이 있다. 시나리오 4(막힘)를 mock 분류 결과 `person`·`object`·`none`으로 한 번씩 돌려 차이를 화면 캡처로 보임 |
+| 4P | 실제 연결 준비 (10.1절): mock 없는 실행 파일, 연결 점검 도구, 현장 순서 문서. 덤으로 막힘 카드 버튼 글을 분류에 맞춤 (5.5절) | 실행 파일에 mock 노드가 없다. 관제·화면은 그대로 두고 mock 노드만 별도 프로세스로 띄웠을 때 점검 도구가 두 로봇을 모두 OK로 판정한다. mock 노드를 띄우지 않으면 빠진 항목을 짚는다. 기존 테스트 전부 통과, `demo_mock.launch.py` 동작 그대로 |
 | 4 | 실제 로봇 연결 (PART 04와 함께). 화면은 같은 토픽이라 그대로 붙는다 | 실제 로봇 2대로 시나리오 1·2를 화면에서 진행 |
+
+### 10.1 실제 연결 준비 (단계 4P)
+
+- **네트워크는 실행 파일에서 정하지 않는다.** 강의실 TurtleBot4는 Fast DDS 발견 서버(`ROS_DISCOVERY_SERVER`)를 쓴다 (`docs/part3/troubleshooting/2026-11-18-mock-discovery.md`). 관제 노트북은 PART 04 노트북과 같은 `ROS_DOMAIN_ID`·`ROS_DISCOVERY_SERVER`·`RMW_IMPLEMENTATION`을 셸에서 그대로 쓴다. 두 로봇의 발견 서버가 모두 들어 있어야 한다. 실행 파일과 코드는 이 값들을 바꾸지 않는다. mock 시험용 `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`·격리 도메인은 실제 실행에서 쓰지 않는다.
+- **실행 파일** `part1_ui_dashboard/launch/real.launch.py`: 관제 + 화면만 띄운다 (mock 로봇·mock 분류기 없음, 시험 도구 끔, 시연 모드 표시 끔). 인자: `config_file`, `map_yaml`(PART 04가 쓰는 같은 맵), `db_path`(기본은 시연 DB와 다른 파일, 예: `bad_real.db`), `bed_monitor_require_at_start`(기본은 `fleet.yaml` 값).
+- **연결 점검 도구** `ros2 run part3_fleet_manager preflight` (읽기만 하고 아무 명령도 보내지 않는다):
+  - 셸 환경 출력: `ROS_DOMAIN_ID`, `ROS_DISCOVERY_SERVER`, `ROS_AUTOMATIC_DISCOVERY_RANGE`, `RMW_IMPLEMENTATION`. LOCALHOST 범위면 경고.
+  - 로봇마다 10초 동안: `hospital_nav/status`의 STATE 수신과 그 `state`, `amcl_pose`, `battery_state`(%), `dock_status`(도킹 여부), `hazard_detection`, Nav2 `navigate_to_pose` 액션 서버. 항목별 OK·없음 표.
+  - 침상 감시 `/patient/bed_exit` 수신 속도, 장애물 분류 결과 토픽 발행자 유무 (없어도 실패 아님, "없음 — 30초 규칙으로 동작" 표시).
+  - `fleet.yaml zones`와 PART 04 `goal_manager.py`의 `GOALS` 비교 (PART 04 파일은 읽기만). 0.05 m 넘게 다르면 경고와 두 값.
+  - 끝에 "실제 실행 가능 / 안 됨"과 안 되는 이유 한 줄씩.
+- **현장 순서 문서** `docs/part3/REAL_TEST.md`: 팀원에게 부탁할 것(로봇별 Nav2·명령 노드 실행, 초기 위치 지정, 도크에서 떼어 두기 — R3 반영 전), 관제 노트북 순서(환경 확인 → preflight → real.launch), 침상 감시(PART 05 실행 또는 카드의 [감시 없이 운행]), 시험 순서(로봇 한 대 짧은 이동 → 정지·재개 → 호출 1건 → 두 대 동시(시나리오 1) → 복도 양보(시나리오 2)), 비상시(화면 [안전 정지 요청], 로봇 옆 사람), 끝나고 모을 것(DB 파일, 화면 캡처, 로그).
 
 ## 11. PART 04에 요구한 변경
 
@@ -835,6 +913,14 @@ db:
 | # | 변경 | 이유 | 반영 전 관제 |
 |---|---|---|---|
 | P5-R1 | 이력이 5프레임 모이기 전(시작 직후, 실패로 이력을 비운 직후)에는 아무것도 발행하지 않는다 | 지금은 그 사이 `False`(정상)를 발행한다. 카메라가 몇 프레임마다 실패하면 이력이 계속 비워져 환자가 침대를 떠나도 `False`만 나간다. 관제는 이것을 신호가 살아 있는 것으로 볼 수밖에 없다 | 끊김은 잡지만 "간헐 실패 중 거짓 정상"은 못 잡는다 |
+
+### 11.2 PART 06과 맞출 것
+
+PART 06은 아직 `part6` 브랜치에만 있다. 관제는 지금 코드 그대로 받아 쓰고, 아래는 통합할 때 확인할 것이다.
+
+- 어디서 띄우나: 로봇 OAK-D 토픽을 서버 너머로 받으므로 PC에서 띄우는지, namespace(`robot2`·`robot3`)마다 하나씩 띄우는지.
+- 결과에 요청 짝짓기 값(트리거 받은 시각이나 순번)을 넣어 줄 수 있는지. 있으면 늦게 온 결과를 더 정확히 거른다. 없어도 관제는 동작한다.
+- 병원 시연에서 의미 있는 라벨만 남길지 (COCO 80종 중 사람·의자·가방 등). 관제는 표에 없는 라벨도 영어 그대로 보여 준다.
 
 ## 12. 아직 정해지지 않은 것 (코드는 설정값으로)
 
@@ -988,7 +1074,7 @@ ack_timeout_s: 3.0
 | 상황 띠 | 제목은 상황 종류 ("응급 의료물품 우선 통행 중", "통로 양보 중", "교착 해소 대기", "통로 점유 불명" 등). 본문은 `last_decision.detail.reason` 또는 대기 로봇의 `wait_reason`을 그대로 쓴다. 아무 일 없으면 띠를 숨긴다 | [판단 근거] → 통행 판단 상세 창 |
 | 병원 구역 지도 | 14.7절 | 로봇 원 → 그 로봇 카드 강조. 구역 → 작은 창 "이 구역으로 보내기: [Robot A] [Robot B]" (임무 없는 로봇만 활성, `GO_ZONE`). [−][+] 확대·축소, 끌어서 이동, 더블클릭으로 원래 크기 |
 | 복도 | 아래 목록 | [통행 판단 상세] → 판단 창. 점유 불명이면 [현장 확인 후 통로 비움] (`RESOURCE_CLEAR_CONFIRM`, 확인 창) |
-| 로봇 카드 2개 | 이름, 상태 배지(14.8절), 연결 상태와 `ns`, 임무 한 줄 ("M-0007 · 촬영실 이동"), 현재 (대기 사유 또는 영역), 목적지 (`leg` from → to), 배터리, 멈춘 시간 | [작업 상세] → 이송 작업 페이지에서 그 임무 열기. 상태별 버튼은 아래 표 |
+| 로봇 카드 2개 | 이름, 상태 배지(14.8절), 연결 상태와 `ns`, 임무 한 줄 ("M-0007 · 촬영실 이동"), 현재 (대기 사유 또는 영역), 목적지 (`leg` from → to), 배터리, 멈춘 시간. 멈춤 중 장애물 분류가 있으면 "앞에 사람 감지"·"앞에 의자 감지"·"장애물 분류 중…" (단계 3O) | [작업 상세] → 이송 작업 페이지에서 그 임무 열기. 상태별 버튼은 아래 표 |
 | 이송 작업 표 | 진행 중 · 배정 대기 탭. 열: 작업/대상, 이송 경로 (구역 이름 → …), 응급도, 현재 상태 (로봇 · 상태), 다음 업무 | 줄 → 이송 작업 페이지에서 그 임무. [전체 작업] → 이송 작업 페이지 |
 | 최근 운영 기록 | 최근 이벤트 8개: 시각, 제목 (14.8절), 보조 문장 (`detail.reason` 등) | 제목 → 운영 기록 페이지 |
 
@@ -1046,7 +1132,7 @@ ack_timeout_s: 3.0
 
 **이송 작업** (`#/missions`)
 
-- 표: 진행 중 / 배정 대기 / 완료 / 취소 탭. 종류·로봇·Level로 거른다. 완료·취소 탭과 상세의 정류장·기록 표는 `bad.db`에서 읽는다 (단계 3L, `WEB_DB_DESIGN.md` L17).
+- 표: 진행 중 / 배정 대기 / 완료 / 취소 탭. 종류·로봇·Level로 거른다. 완료·취소 탭과 상세의 정류장·기록 표는 `bad.db`에서 읽는다 (단계 3L, `WEB_DB_DESIGN.md` L14).
 - 줄을 누르면 오른쪽에 상세를 연다.
   - 종류, 요청자, 접수 시각, 환자 또는 품목
   - 정류장 목록: 지난 곳 ✓, 지금 곳 강조, 남은 곳
@@ -1101,6 +1187,7 @@ ack_timeout_s: 3.0
 - 버튼
   - **가짜 침상 감시** (단계 3S): [끄기] / [정상 송신] / [이탈 송신] 셋 중 하나. 송신 중이면 화면 서버가 `/patient/bed_exit`를 10 Hz로 계속 발행한다. [끄기]를 누르면 발행을 멈춰 끊김을 흉내 낸다. 단계 3D의 한 번만 보내는 [침상 이탈 켜기]/[끄기]는 이것으로 바꾼다.
   - 로봇별 [장애물 놓기 (N초 멈춤)], [다음 주행 실패], [연결 끊기 10초], [배터리 n%] → `/mock/control` (7장)
+  - 로봇별 [분류 결과: 사람 / 물건 / 없음 / 오류 / 응답 없음] → `/mock/control` `obstacle` (단계 3O)
   - 시나리오 1~5 버튼: 그 시나리오의 첫 요청들을 한 번에 넣는다 (`docs/part3/stage3-scenarios.md` 순서). 이후 확인과 카드 선택은 사람이 화면에서 누른다.
 
 ### 14.7 지도
@@ -1181,6 +1268,7 @@ labels:
 - 맞는 자리가 없으면: 상태 글과 이름표는 첫 후보에 그리되 반투명 흰 바탕을 깐다. "복도"는 그리지 않는다 (복도 칸과 로봇이 이미 보여 준다).
 - 계산은 JS(`map.js`) 안에서 한다. 판단이 아니라 그리기라서 서버로 옮기지 않는다.
 - 계획 경로 선 (`route`): 로봇 색, 3px, 끝에 작은 화살촉.
+- 장애물 표시 (단계 3O): `robots.<id>.obstacle.detections` 중 `pose`가 있는 것을 작은 빨간 원(지름 14px, 가운데 "!")과 한국어 라벨로 그린다. 멈춤이 풀리면 지운다. 글자 자리 정하기의 대상에 넣는다.
 - 그리는 순서: 바닥 → (실제 맵) → 벽·문 → 경로 → 구역 점 → 로봇 원 → 글.
 - 아래 범례: Robot A · Robot B · 계획 경로. 오른쪽에 "구역 6 · 복도 1".
 
@@ -1244,9 +1332,15 @@ map_padding_m: 0.25
   - `RESOURCE_RELEASE` → "{로봇} 통로 통과 완료"
   - `CORRIDOR_YIELD_START` → "{로봇} 통로 양보 시작"
   - `MISSION_CREATED` → "{종류} 요청 등록"
-  - `ARRIVE` → "{로봇} {구역} 도착"
+  - `ARRIVE` → "{로봇} · {구역} 도착"
   - `CONFIRM_STEP` → "{구역} 확인 완료"
 - 보조 문장은 `detail.reason`이 있으면 그대로 쓰고, 없으면 비운다.
+- 실시간 화면과 DB 기록 조회(운영 기록, 작업 상세의 작업 기록)가 같은 문장 함수를 쓴다 (단계 3O).
+- 옛 기록처럼 `reason`이 코드 값이거나 로봇 ID가 들어 있으면 그대로 보이지 않는다. 종류별 문장으로 바꾸고, ID는 표시 이름으로 바꾼다:
+  - `CONFIRM_STEP` `OK` → "확인 완료", `MISMATCH` → "내용 불일치 — 운영자 결정 대기"
+  - `CARD_CLOSED` `selected` → "'{고른 선택지}' 선택", `timeout` → "시간 초과 — 기본 선택으로 진행", `resolved` → "상황이 풀려 닫힘"
+  - `MISSION_DONE` `DONE` → "모든 정류장 확인 완료"
+  - 그 밖에 표에 없는 코드 값은 보조 문장을 비운다.
 
 **이름**
 

@@ -136,7 +136,7 @@ def test_only_continuous_cycle_counts_and_stale_card_closes(cfg):
     assert swap.deadlock.card is None and not swap.deadlock.yielding
     with pytest.raises(ValueError, match="E-409"):
         swap.deadlock.choose(card_id, "yield_b", "nurse01", 5)
-    assert any(e["type"] == "CARD_CLOSED" and e["detail"]["reason"] == "resolved"
+    assert any(e["type"] == "CARD_CLOSED" and e["detail"]["closed_by"] == "resolved"
                for e in swap.resources.events)
 
 

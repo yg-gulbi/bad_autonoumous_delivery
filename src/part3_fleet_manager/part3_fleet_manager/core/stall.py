@@ -9,6 +9,8 @@ class Stall:
         self.reset()
 
     def reset(self):
+        self.requested_at = None
+        self.obstacle = None
         self.samples = deque()
         self.last_progress = None
         self.seconds = 0.0

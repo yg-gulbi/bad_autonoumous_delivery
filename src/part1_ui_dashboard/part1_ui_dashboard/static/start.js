@@ -8,6 +8,7 @@ async function start() {
     loadPage();
     const source = new EventSource("/events"), on = (name, f) => source.addEventListener(name, e => f(JSON.parse(e.data)));
     on("snapshot", s => {
+        historySlots.clear();
         S = s.state;
         received = performance.now() - (s.age ?? 0) * 1000;
         E = s.events;
@@ -25,6 +26,7 @@ async function start() {
     } renderTop(); });
     on("ack", remember);
     on("event", e => {
+        historyChanged(e);
         E.push(e);
         if (E.length > cfg.event_limit)
             E.shift();

@@ -14,7 +14,7 @@ def generate_launch_description():
     args = {k: LaunchConfiguration(k) for k in defaults}
     fleet_args = {k: args[k] for k in defaults if k not in ("fleet_yaml", "ui_config", "map_yaml")}
     fleet_args["config_file"] = args["fleet_yaml"]
-    ui_args = {k: args[k] for k in ("fleet_yaml", "ui_config", "map_yaml")}
+    ui_args = {k: args[k] for k in ("fleet_yaml", "ui_config", "map_yaml", "db_path")}
     ui_args["dev_tools"] = ui_args["demo"] = "true"
     return LaunchDescription([
         *[DeclareLaunchArgument(k, default_value=v) for k, v in defaults.items()],

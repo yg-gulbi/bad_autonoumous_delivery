@@ -18,8 +18,8 @@
 | 항목 | 상태 | 이 문서에서 정한 것 |
 |---|---|---|
 | 페이지 5장 (종합 관제, 이송 작업, 환자 등록, 의료물품 요청, 운영 기록) | 만들어짐 (단계 3D) | 블록·표·버튼과 데이터 출처를 정리 |
-| 운영 DB `bad.db` | 테이블 4개 (patients, missions, events, cards) | `mission_stops`를 더하고 칸을 정리해 5개로 (3.2절) |
-| 화면이 지난 기록을 DB에서 읽기 | 없음 (화면 서버 메모리의 최근 이벤트만) | 화면 서버가 `bad.db`를 읽기 전용으로 연다 (L14) |
+| 운영 DB `bad.db` | 테이블 5개 (patients, missions, mission_stops, events, cards). 단계 3L에서 반영 | 3.2절 |
+| 화면이 지난 기록을 DB에서 읽기 | 화면 서버가 `bad.db`를 읽기 전용으로 연다. 화면 서버를 껐다 켜도 기록이 남는다 (단계 3L 확인) | L14 |
 | 누가 눌렀는지 (`by`) | 화면 왼쪽 아래 "조작자" 칸에 적은 이름 | 그대로 둔다. 로그인은 만들지 않는다 (시연용 관제 화면) |
 
 ---
@@ -298,7 +298,6 @@ erDiagram
 ```mermaid
 stateDiagram-v2
   [*] --> QUEUED: 접수 (L2·L3)
-  [*] --> REJECTED: 검증 실패
   QUEUED --> ACTIVE: 로봇 배정 (L4)
   ACTIVE --> DONE: 마지막 정류장 확인 (L6)
   QUEUED --> CANCELED: 취소 (L7)
@@ -311,7 +310,8 @@ stateDiagram-v2
 | `ACTIVE` | 진행 중 | 로봇 배정됨. 이동·대기·확인 대기·장애 모두 여기. 자세한 상태는 로봇 상태로 본다 |
 | `DONE` | 완료 | 마지막 정류장 확인 |
 | `CANCELED` | 취소 | 사람이 취소 |
-| `REJECTED` | 거절 | 요청 검증 실패 (기록만) |
+
+검증에 실패한 요청은 임무가 아니므로 `missions` 행을 만들지 않는다. `events`에 `MISSION_REJECTED`(이유, 요청자)만 남기고 화면에 오류를 돌려준다 (L2).
 
 **mission_stops.status**: `PENDING`(아직) → `ACTIVE`(이 정류장으로 가는 중) → `ARRIVED`(도착, 확인 대기) → `CONFIRMED`(확인) / `MISMATCH`(불일치, 카드 대기) / `SKIPPED`(카드에서 건너뛰기). 임무가 취소되면 남은 정류장은 `SKIPPED`.
 
@@ -341,7 +341,7 @@ stateDiagram-v2
 
 1. 입력을 검사한다 (`ui_api.py`, 관제 `schemas.py`). 틀리면 400과 이유 문장.
 2. 요청 JSON에 `req_id`/`cmd_id`/`card_id`를 서버가 붙이고, `by`·`requested_by`에는 조작자 이름 칸 값을 넣어 토픽으로 보낸다.
-3. 같은 ID의 `/ui/ack`를 3초 기다려 그대로 돌려준다. 3초 안에 없으면 504 "관제 응답 없음".
+3. POST는 붙인 요청 ID(`ref`)를 바로 돌려준다. 브라우저는 SSE로 같은 `ref`의 `/ui/ack`를 3초까지 기다려 결과 상자·알림에 보인다. 3초 안에 없으면 "관제 응답 없음"을 보인다.
 
 **관제가 요청을 받으면**
 
@@ -494,9 +494,11 @@ sequenceDiagram
 
 | 버튼 | 보내는 것 | 관제 | DB |
 |---|---|---|---|
-| [안전 정지 요청] (위쪽 줄) | 서비스 `/robot/pause` | 두 로봇 `SAFE_PAUSE`, 주행 중이면 `PAUSE` | `events (PAUSE, by)` |
-| [전체 재개] | 서비스 `/robot/resume` | 침상 이탈·감시 끊김 중이면 거절, 아니면 직전 상태로 | `events (RESUME 또는 RESUME_REJECTED, by)` |
+| [안전 정지 요청] (위쪽 줄) | `PAUSE_ALL` (조작자 이름 포함) | 두 로봇 `SAFE_PAUSE`, 주행 중이면 `PAUSE` | `events (PAUSE, by)` |
+| [전체 재개] | `RESUME_ALL` (조작자 이름 포함) | 침상 이탈·감시 끊김 중이면 거절, 아니면 직전 상태로 | `events (RESUME 또는 RESUME_REJECTED, by)` |
 | 로봇 카드 [정지]·[재개] | `PAUSE_ROBOT`·`RESUME_ROBOT` | 그 로봇만 | 같음 |
+
+서비스 `/robot/pause`·`/robot/resume`(ROS `Trigger`)은 ROS 명령줄용으로 남긴다. 인자를 받을 수 없어서 이 경로의 `by`는 "ROS 서비스"로 남는다.
 
 ### 4.12 L11 결정 카드
 
@@ -572,3 +574,10 @@ sequenceDiagram
 1. PART 01: `bad.db` 읽기 전용 조회 주소(L14)와 P2 완료·취소 탭, P2 상세의 정류장·기록 표, P3 최근 표, P5 이벤트·카드 표, 지표, CSV를 DB 기준으로.
 2. PART 03 `store.py`: `mission_stops` 테이블을 만들고 L2~L7에서 채운다. `patients.tag_id`·`updated_at`·UNIQUE(chart_no), `missions`의 `req_id`(UNIQUE)·`assigned_at`·`cancel_reason`, `events.by`, `cards.title`·`reason` 칸을 더한다. 기존 DB 파일은 칸을 더하는 방식으로 옮긴다 (지우지 않는다). `stops_json`은 한동안 같이 채운다.
 3. 상태 값을 3.3절에 맞춘다 (다르면 코드 값을 문서에 반영).
+
+단계 3L은 끝났다 (테스트 300건 통과). 그 뒤 고친 것은 다음과 같다.
+
+- 거절된 요청은 임무 행을 만들지 않는다 (3.3절).
+- 화면 요청은 POST 뒤 SSE로 결과를 받는다 (4.0절).
+- 전체 정지·재개에 누른 사람을 남긴다 (L10, 단계 3O).
+- 기록 문장은 실시간 화면과 DB 조회가 같은 한국어 문장을 쓴다. `OK`·`MISMATCH`·`selected` 같은 코드 값이나 `robot_a` 같은 ID를 보이지 않는다 (BRIEF 14.8절, 단계 3O).

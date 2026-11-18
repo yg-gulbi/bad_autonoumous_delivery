@@ -37,7 +37,7 @@ def test_1_2_priority_and_fifo(cfg, reports, levels, since, winner, mode):
     assert corridor["holder"] == winner and corridor["state"] == "GRANTED"
     assert corridor["capacity"] == len(expected) and corridor["holders"] == expected
     if mode == "EXCLUSIVE":
-        assert loser in manager.pending and winner in manager.wait_reasons[loser]
+        assert loser in manager.pending and manager.robot_label(winner) in manager.wait_reasons[loser]
         assert [item["robot"] for item in corridor["queue"]] == [loser]
     else:
         assert not manager.pending and not manager.wait_reasons and not corridor["queue"]
@@ -62,7 +62,7 @@ def test_4_6_occupied_destination_blocks_entire_set(manager, cfg, reports):
     assert manager.resources["ROOM_B"].holder == A
     assert manager.resources["ROOM_B"].state == "OCCUPIED"
     assert manager.resources["CORRIDOR"].state == "FREE"
-    assert A in manager.wait_reasons[B]
+    assert manager.robot_label(A) in manager.wait_reasons[B]
 
 
 def test_7_continuous_clearance_margin_and_release_window(manager, reports, cfg):

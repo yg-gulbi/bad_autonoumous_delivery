@@ -57,8 +57,15 @@ function formResults() {
     }
 }
 actions["view-job"] = id => { closeModal(); inspect(id); };
-initializers.patient = () => { $("page").innerHTML = '<section class="panel form-page">' + cardTitle("신규 환자 등록") + jobForm("patient") + "</section>"; };
-renderers.patient = formResults;
+initializers.patient = () => { $("page").innerHTML = '<section class="panel form-page">' + cardTitle("신규 환자 등록") + jobForm("patient") + '</section><section class="panel history-patients">' + cardTitle("최근 환자 이송") + '<div id="recent-patients"></div></section>'; };
+renderers.patient = () => {
+    formResults();
+    const result = readHistory("patients","patients/recent");
+    put("recent-patients", result.data ? historyTable(["접수 시각","환자 ID","이름","경로","응급도","상태"],
+        result.data.items.map(m => `<tr data-act="patient-history" data-id="${h(m.id)}" data-status="${h(m.status)}">` +
+            cells([stampText(m.created_at),m.chart_no,m.name || "—",routeText(m),"Level " + m.level,tabs[m.status]]) + "</tr>")) : recordNotice(result));
+};
+actions["patient-history"] = (id,row) => { selected = id; missionFilter = {tab:row.dataset.status}; navigate("missions"); };
 initializers.supply = () => { $("page").innerHTML = '<div class="split"><section class="panel"><div class="tabs">' + ["supply", "call"].map(k => btn(formNames[k], "supply-tab", k, k === supplyTab ? "selected" : "")).join("") + '</div>' + jobForm(supplyTab) + '</section><aside class="panel" id="supply-progress"></aside></div>'; };
 actions["supply-tab"] = k => { supplyTab = k; initializers.supply(); render(); };
 renderers.supply = () => {
@@ -67,6 +74,13 @@ renderers.supply = () => {
     const m = jobs.find(m => m.mission_id === supplyJob) || jobs[0];
     const stage = !m ? 0 : m.stop_index === 0 ? (S.robots[m.robot]?.state === "WAIT_CONFIRM" ? 2 : 1) : (S.robots[m.robot]?.state === "WAIT_CONFIRM" ? 4 : 3);
     put("supply-progress", cardTitle("의료물품 수령 · 확인 상태") + (m ? `<select aria-label="진행 중인 물품 임무" id="supply-job">${jobs.map(j => `<option value="${j.mission_id}" ${j === m ? "selected" : ""}>${h(j.mission_id + " · " + missionTarget(j))}</option>`).join("")}</select><ol class="steps">${["요청·응급도 확인", "로봇 수령지 이동·도착", "물품 수령 확인", "전달지 이동", "인계 확인"].map((v, i) => `<li class="${stage > i ? "done" : stage === i ? "current" : ""}">${i < stage ? "✓ " : ""}${v}</li>`).join("")}</ol>${btn("작업 상세", "inspect", m.mission_id)}` : empty("진행 중인 물품 전달 작업이 없습니다.")));
+    if (m) {
+        const result = readHistory("supply","missions/" + encodeURIComponent(m.mission_id));
+        const panel = $("supply-progress");
+        let stops = $("supply-stops");
+        if (!stops) { stops = document.createElement("div"); stops.id = "supply-stops"; panel.append(stops); }
+        put("supply-stops", result.data ? stopTable(result.data.stops) : recordNotice(result));
+    }
     if ($("supply-job"))
         $("supply-job").onchange = e => { supplyJob = e.target.value; render(); };
 };

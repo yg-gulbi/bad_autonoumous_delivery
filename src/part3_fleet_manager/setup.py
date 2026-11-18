@@ -16,6 +16,7 @@ setup(
     extras_require={'test': ['pytest']},
     entry_points={'console_scripts': [
         'fleet_manager_node = part3_fleet_manager.fleet_manager_node:main',
+        'mock_obstacle_classifier = part3_fleet_manager.mock_obstacle_classifier:main',
         'mock_hospital_nav = part3_fleet_manager.mock_hospital_nav:main',
     ]},
     zip_safe=False,

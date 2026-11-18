@@ -77,6 +77,18 @@ class StallCfg:
 
 
 @dataclass(frozen=True)
+class ObstacleCfg:
+    enabled: bool = True
+    inspect_topic: str = "/{ns}/obstacle/inspect_image"
+    result_topic: str = "/{ns}/obstacle_classifier/result"
+    inspect_at_s: float = 10.0
+    timeout_s: float = 6.0
+    object_blocks_now: bool = True
+    min_confidence: float = 0.4
+    label_ko: Mapping[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class BedMonitorCfg:
     warn_s: float = 1.0
     lost_s: float = 3.0
@@ -136,6 +148,7 @@ class FleetConfig:
     publish: PublishCfg
     db_path: str
     mock: MockCfg = MockCfg()
+    obstacle: ObstacleCfg = field(default_factory=ObstacleCfg)
     assignment: AssignmentCfg = AssignmentCfg()
     zone_names: Mapping[str, str] = field(default_factory=dict)
 
@@ -224,17 +237,21 @@ def _load_corridor(data: Mapping) -> CorridorCfg:
     )
 
 
+def _topic(data, key, section):
+    topic = _text(data.get(key), f"{section}.{key}")
+    expanded = topic.replace("{ns}", "robot")
+    if topic.count("{ns}") != 1 or not expanded.startswith("/") or (
+        "{" in expanded or "}" in expanded or any(c.isspace() for c in expanded)
+    ):
+        raise ConfigError(f"{section}.{key}: {{ns}}가 한 개 포함된 절대 토픽이 필요합니다")
+    return topic
+
+
 def _load_robot_link(data: Mapping) -> RobotLinkCfg:
     topics = {}
     for key in ("command_topic", "status_topic", "amcl_pose_topic", "battery_topic",
                 "hazard_topic", "dock_status_topic"):
-        topic = _text(data.get(key), f"robot_link.{key}")
-        expanded = topic.replace("{ns}", "robot")
-        if topic.count("{ns}") != 1 or not expanded.startswith("/") or (
-            "{" in expanded or "}" in expanded or any(c.isspace() for c in expanded)
-        ):
-            raise ConfigError(f"robot_link.{key}: {{ns}}가 한 개 포함된 절대 토픽이 필요합니다")
-        topics[key] = topic
+        topics[key] = _topic(data, key, "robot_link")
     return RobotLinkCfg(
         mode=_text(data.get("mode"), "robot_link.mode", ("HOSPITAL_NAV", "ICD_GOAL_POSE")),
         request_id=_text(data.get("request_id"), "robot_link.request_id", ("auto", "always", "never")),
@@ -317,7 +334,17 @@ def config_from_dict(data: Mapping) -> FleetConfig:
     return_level = _value(mission, "return_level", "mission", int)
     if not 1 <= return_level <= 3:
         raise ConfigError("mission.return_level: 1~3 정수가 필요합니다")
-    return FleetConfig(
+    values = {**asdict(ObstacleCfg()), **_mapping(root.get("obstacle", {}), "obstacle")}
+    threshold = _number(values["min_confidence"], "obstacle.min_confidence", minimum=0)
+    if threshold > 1:
+        raise ConfigError("obstacle.min_confidence: 0~1 범위가 필요합니다")
+    obstacle = ObstacleCfg(**{k: _topic(values, k, "obstacle") for k in ("inspect_topic", "result_topic")},
+                           **_numbers(values, "obstacle", ("inspect_at_s", "timeout_s"), positive=True),
+                           enabled=_value(values, "enabled", "obstacle", bool),
+                           object_blocks_now=_value(values, "object_blocks_now", "obstacle", bool),
+                           min_confidence=threshold, label_ko={_text(k, "obstacle.label_ko"): _text(v, "obstacle.label_ko")
+                               for k, v in _mapping(values["label_ko"], "obstacle.label_ko").items()})
+    return FleetConfig(obstacle=obstacle,
         assignment=AssignmentCfg(_text(assignment["mode"], "assignment.mode", ("IDLE_BEST_BATTERY", "ROLE")), minimum),
         mock=MockCfg(**_numbers(mock, "mock", ("speed_mps", "stall_radius_m"), positive=True),
                      supports_request_id=_value(mock, "supports_request_id", "mock", bool)),

@@ -5,11 +5,13 @@ from math import atan2, cos, degrees, floor, radians, sin
 from pathlib import Path
 from time import time_ns
 
+import re
 import yaml
 
 from .occupancy import BIN_M, Grid, deskew_angle, map_point, render_grid, unmap_point, world_matrix
 
 from part3_fleet_manager.core import schemas
+from part3_fleet_manager.core.decisions import CONFIRM_REASONS, DONE_REASON, OPTIONS, close_reason
 
 _sequence = count(1)
 
@@ -86,8 +88,9 @@ STATES = {"IDLE": "대기", "RETURNING": "복귀 중", "SENDING": "출발 준비
           "WAIT_CONFIRM": "확인 대기", "SAFE_PAUSE": "안전 정지", "FAULT": "장애", "OFFLINE": "연결 끊김"}
 KINDS = {"PATIENT_TRANSPORT": "환자 이송", "MED_ROUND": "물품 전달", "CALL": "로봇 호출"}
 EVENTS = {
+    "OBSTACLE_INSPECT": "{robot} 장애물 확인 요청", "OBSTACLE_RESULT": "{robot} 장애물 확인 결과",
     "MISSION_CREATED": "{kind} 요청 등록", "MISSION_ASSIGNED": "{robot} 임무 배정", "MISSION_REJECTED": "임무 등록 거절",
-    "LEG_START": "{robot} 구간 출발", "ARRIVE": "{robot} {zone} 도착", "CONFIRM_STEP": "{zone} 확인 결과",
+    "LEG_START": "{robot} 구간 출발", "ARRIVE": "{robot} · {zone} 도착", "CONFIRM_STEP": "{zone} 확인 결과",
     "MISSION_DONE": "{robot} 임무 완료", "MISSION_CANCELED": "임무 취소", "RESOURCE_REQUEST": "{robot} 통행 요청",
     "RESOURCE_GRANT": "{robot} {resource} 진입 허가", "RESOURCE_HOLD": "{robot} 진입 전 대기",
     "RESOURCE_ENTER": "{robot} {resource} 진입 확인", "RESOURCE_RELEASE": "{robot} {resource} 통과 완료",
@@ -110,15 +113,60 @@ RULES = {"ONLY": "단독 요청", "LEVEL": "높은 응급도 우선", "REQUEST_T
          "BLOCKED": "막힘 해제 대기", "UNKNOWN": "점유 확인 대기"}
 
 
-def event_title(e, names):
-    d = e["detail"]
+DEFAULT_ROBOT_NAMES = {"robot_a": "Robot A", "robot_b": "Robot B"}
+
+
+def legacy_names(text, robots):
+    for key, label in robots.items():
+        text = re.sub(re.escape(key) + r"(?:이|가|은|는|의|에(?= 허가))?", lambda _: label, text)
+    return text.replace("공용도로", "복도").replace("통로", "복도")
+
+
+def present_event(event, names, robots=None, card=None):
+    robots = robots or DEFAULT_ROBOT_NAMES
+    d = dict(event["detail"])
+    kind, reason = event["type"], d.get("reason") or ""
     zone = names.get(d.get("destination"), "정류장")
-    resources = ["복도" if n == "CORRIDOR" else names.get(n[-1], n) + " 출입" for n in d.get("resources", [])]
-    robot = {"robot_a": "Robot A", "robot_b": "Robot B"}.get(e.get("robot"), "")
-    if e["type"] == "CONFIRM_STEP":
-        return zone + (" 확인 완료" if d.get("reason") == "OK" else " 확인 불일치")
-    return EVENTS.get(e["type"], e["type"]).format(robot=robot, zone=zone, resource=" · ".join(resources) or "구간",
-                                                    kind=KINDS.get(d.get("mission_type"), "이송")).strip()
+    robot = robots.get(event.get("robot"), "")
+    resources = ["복도" if n == "CORRIDOR" else names.get(n[-1], n[-1] + " 구역") + " 출입"
+                 for n in d.get("resources", [])]
+    title = EVENTS.get(kind, "관제 기록").format(robot=robot, zone=zone, resource=" · ".join(resources) or "구간",
+                                               kind=KINDS.get(d.get("mission_type"), "이송")).strip()
+    if kind == "CONFIRM_STEP":
+        result = d.get("result", reason)
+        reason = CONFIRM_REASONS.get(result, reason)
+        title = zone + (" 확인 완료" if reason == CONFIRM_REASONS["OK"] else " 확인 불일치")
+    elif kind == "CARD_CLOSED" and reason in ("selected", "timeout", "resolved"):
+        choice = d.get("choice")
+        options = (card or {}).get("options", [])
+        label = d.get("choice_label") or next((o["label"] for o in options if o["id"] == choice), None)
+        label = label or next((options[choice] for options in OPTIONS.values() if choice in options), None)
+        if not label and isinstance(choice, str) and choice.startswith("yield_"):
+            label = robots.get("robot_" + choice[6:], "로봇") + " 양보"
+        reason = close_reason(reason, label)
+    elif kind == "MISSION_DONE" and reason == "DONE":
+        reason = DONE_REASON
+    elif kind == "RESOURCE_REQUEST" and d.get("destination") and any(key in reason for key in robots):
+        reason = f"{robot} — {zone}으로 가는 구간 요청"
+    elif kind in ("ARRIVE", "LEG_START") and reason.startswith(str(d.get("destination"))):
+        reason = zone + (" 도착" if kind == "ARRIVE" else " 이동 시작")
+    elif reason in ("MANUAL", "BUMP", "BED_EXIT", "BED_MONITOR_LOST"):
+        reason = {"MANUAL": "운영자 안전 정지 요청", "BUMP": "범퍼 충돌", "BED_EXIT": "침상 이탈 감지",
+                  "BED_MONITOR_LOST": "침상 감시 끊김"}[reason]
+    elif reason == "STATE 수신 상태 변경":
+        reason = "로봇 상태 수신 재개" if kind == "LINK_BACK" else "로봇 상태 수신 중단"
+    elif kind in ("FAULT", "NAV_FAILED", "MOVE_REJECTED", "WARNING") and re.search(
+            r"Nav2|hospital_nav|MISSION_|MOVE|PART 04|ABORTED", reason):
+        reason = {"FAULT": "로봇 주행 상태를 확인하세요.", "NAV_FAILED": "목적지까지 주행하지 못했습니다.",
+                  "MOVE_REJECTED": "이동 요청을 수락하지 못했습니다.", "WARNING": "로봇 상태 또는 명령 응답을 확인하세요."}[kind]
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_ .:/-]*", reason):
+        reason = ""
+    d["reason"] = legacy_names(reason, robots)
+    return {**event, "title": title, "detail": d}
+
+
+def event_title(e, names):
+    return present_event(e, names)["title"]
 
 
 def summary(state):

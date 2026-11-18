@@ -904,3 +904,13 @@ dialog::backdrop {
 .map-switch input:checked { background: var(--blue); }
 .map-switch input:checked::before { transform: translateX(10px); }
 .map-switch input:disabled { opacity: .5; }
+
+.history-pages { margin-top: 12px; align-items: center; }
+.history-patients { margin-top: 16px; }
+#log-filters[hidden] { display: none; }
+#detail, #job-list, #supply-progress { min-width: 0; }
+
+@media (min-width: 1050px) {
+  .missions-layout { grid-template-columns: minmax(0,1.05fr) minmax(0,1fr); }
+}
+.missions-layout th, .missions-layout td { word-break: keep-all; }

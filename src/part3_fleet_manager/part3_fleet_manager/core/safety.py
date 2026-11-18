@@ -120,11 +120,12 @@ class Safety:
         self.bed_exit = self.since = None
         self.record = record
 
-    def pause(self, robot, cause, now):
+    def pause(self, robot, cause, now, *, by=None):
         if cause not in self.causes[robot]:
             self.causes[robot].add(cause)
-            reason = "침상 감시 끊김" if cause == "BED_MONITOR_LOST" else cause
-            self.record("PAUSE", now, reason, robot=robot, cause=cause)
+            reason = {"BED_MONITOR_LOST": "침상 감시 끊김", "MANUAL": "운영자 안전 정지 요청",
+                      "BUMP": "범퍼 충돌", "BED_EXIT": "침상 이탈 감지"}[cause]
+            self.record("PAUSE", now, reason, robot=robot, cause=cause, by=by)
 
     def protect(self, robot, now):
         if robot in self.targets:
@@ -152,10 +153,10 @@ class Safety:
             self.pause(robot, "BUMP", now)
         self.bump[robot] = bumped
 
-    def resume(self, robots, now, *, individual):
+    def resume(self, robots, now, *, individual, by=None):
         reason = self.denial(robots, now, self.bed_exit)
         if reason:
-            self.record("RESUME_REJECTED", now, reason)
+            self.record("RESUME_REJECTED", now, reason, by=by)
             raise ValueError(f"E-409: {reason}")
         for robot in robots:
             causes = self.causes[robot]
@@ -165,7 +166,7 @@ class Safety:
                 causes.intersection_update({"BUMP"})
                 continue
             causes.clear()
-            self.record("RESUME", now, "운영자 재개", robot=robot)
+            self.record("RESUME", now, "운영자 재개", robot=robot, by=by)
 
     def denial(self, robots, now, bed_value):
         if self.monitor.blocked(now) and any(r in self.targets for r in robots):

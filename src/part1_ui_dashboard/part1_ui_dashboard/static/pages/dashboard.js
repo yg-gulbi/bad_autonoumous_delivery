@@ -19,6 +19,18 @@ document.addEventListener("change", e => { const key = e.target.dataset.check; i
 } if (e.target.dataset.go)
     goZones[e.target.dataset.go] = e.target.value; });
 
+function obstacleText(r) {
+    if (r.obstacle_pending) return "장애물 분류 중…";
+    const obs = r.obstacle;
+    if (!obs) return "";
+    if (obs.kind === "PERSON") return "앞에 사람 감지";
+    if (obs.kind === "OBJECT") {
+        const names = obs.labels.map(label => obs.detections.find(d => d.label === label)?.label_ko || label);
+        return "앞에 " + names.join(", ") + " 감지";
+    }
+    return obs.kind === "NONE" ? "카메라에 보이는 장애물 없음" : "장애물 분류 불가";
+}
+
 function robotCard(id, r) {
     const job = mById(r.mission_id), st = r.state, home = st === "RETURNING";
     let controls = "";
@@ -36,7 +48,7 @@ function robotCard(id, r) {
         controls = (st === "FAULT" ? btn("다시 시도", "retry", id) : btn("정지", "pause", id)) + btn("임무 취소", "cancel", r.mission_id || "", "", !r.mission_id);
     return cardTitle(h(r.label), pill(cfg.states[st], stateColor(st))) + `<small class="link-ind ${r.link_ok ? "up" : ""}">${r.link_ok ? "연결 정상" : "연결 끊김"} · /${h(r.ns)}</small><h3>${h(job ? job.mission_id + " · " + missionTarget(job) : home ? "홈 구역 복귀" : "배정된 작업 없음")}</h3>
  <dl><dt>현재</dt><dd>${h(r.wait_reason || (r.zone ? zn(r.zone) : r.region === "CORRIDOR" ? "복도" : r.region || "위치 미수신"))}</dd><dt>목적지</dt><dd>${h(r.leg ? zn(r.leg.from) + " → " + zn(r.leg.to) : "이동 구간 없음")}</dd></dl>
- <div class="row meta"><span>배터리 ${r.battery_pct == null ? "미수신" : Math.round(r.battery_pct) + "%"} · 멈춤 ${Math.floor(r.stall_s)}초</span>${job ? btn("작업 상세", "inspect", job.mission_id, "linkbtn") : ""}</div><div class="buttons">${controls}</div>`;
+ ${obstacleText(r) ? `<p class="notice">${h(obstacleText(r))}</p>` : ""}<div class="row meta"><span>배터리 ${r.battery_pct == null ? "미수신" : Math.round(r.battery_pct) + "%"} · 멈춤 ${Math.floor(r.stall_s)}초</span>${job ? btn("작업 상세", "inspect", job.mission_id, "linkbtn") : ""}</div><div class="buttons">${controls}</div>`;
 }
 
 function roadPanel() {
@@ -45,7 +57,7 @@ function roadPanel() {
     const labels = !track ? [] : track.kind === "yield" ? [robotName(track.first) + " 지나감", robotName(track.next) + " 다시 출발"] : [robotName(track.first) + " 완전 통과 확인", "복도 비움 확인", robotName(track.next) + " 진입 허가", "재개 명령 전달 · 로봇 확인"];
     return cardTitle("복도", pill(c.blocked ? "막힘" : resNames[c.state], c.blocked || c.state === "UNKNOWN" ? "red" : holders.length ? "purple" : "green")) +
         `<label>현재 통행</label>${list || '<strong class="vacant">통행 로봇 없음</strong>'}<hr><label>다음 대기</label>${queue.length ? queue.map((q, i) => `<p><b>${i + 1}　${h(robotName(q.robot))}</b>　${pill("Level " + q.level, "blue")}<small>진입 전 안전 대기 · ${duration(S.stamp - q.since)}</small></p>`).join("") : '<p class="muted">대기 로봇 없음</p>'}
- ${c.give_way ? `<p class="notice">${h(robotName(c.give_way.yielding))}가 ${h(robotName(c.give_way.to))}에게 양보 중</p>` : ""}${c.blocked ? `<p class="warn">막힌 시간 ${duration(S.stamp - (c.blocked_since ?? S.stamp))}</p>` : ""}
+ ${c.give_way ? `<p class="notice">${h(robotName(c.give_way.yielding))} → ${h(robotName(c.give_way.to))} 복도 양보</p>` : ""}${c.blocked ? `<p class="warn">막힌 시간 ${duration(S.stamp - (c.blocked_since ?? S.stamp))}</p>` : ""}
  ${labels.length ? "<label>재개 조건</label>" + labels.map((l, i) => `<small>${S.resume_checks[i] ? "✓" : "○"} ${h(l)}</small>`).join("") : ""}
  <div class="rooms">${["B", "E"].map(z => `<small>${h(zn(z))} 출입 · ${resNames[S.resources["ROOM_" + z].state]}</small>`).join("")}</div>
  <div class="buttons">${btn("통행 판단 상세", "basis", "", "", !S.last_decision)}${c.state === "UNKNOWN" ? btn("현장 확인 후 복도 비움", "clear", "", "danger") : ""}</div>`;

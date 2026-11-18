@@ -7,6 +7,7 @@ from flask import Flask, Response, jsonify, request
 
 from part3_fleet_manager.core import schemas
 from . import ui_api
+from .history import history_api
 
 
 class Feed:
@@ -71,8 +72,9 @@ class Feed:
                 yield f"event: {kind}\ndata: {schemas.dumps(data)}\n\n"
 
 
-def create_app(feed, geometry, publish, trigger, *, meta=None, image=None, dev_tools=False, set_bed_mode=None):
+def create_app(feed, geometry, publish, trigger, *, meta=None, image=None, dev_tools=False, set_bed_mode=None, db_path=None):
     app = Flask(__name__, static_folder="static")
+    app.register_blueprint(history_api(db_path, geometry.get("names", {}), geometry.get("robot_names")))
     routes = {"mission": ("/ui/mission_req", ui_api.mission, "req_id"),
               "command": ("/ui/operator_cmd", ui_api.command, "cmd_id"),
               "decision": ("/ui/decision", ui_api.decision, "card_id")}
@@ -107,8 +109,12 @@ def create_app(feed, geometry, publish, trigger, *, meta=None, image=None, dev_t
         if action == "bed" and form.get("mode") in ("off", "normal", "exit"):
             set_bed_mode(form["mode"])
             return jsonify(mode=form["mode"], message="가짜 침상 감시 설정을 적용했습니다.")
-        elif action in ("stall", "drop_link", "fail_next", "reject_next", "battery") and form.get("robot") in schemas.ROBOT_IDS:
+        elif action in ("stall", "drop_link", "fail_next", "reject_next", "battery", "obstacle") and form.get("robot") in schemas.ROBOT_IDS:
             data = {"robot": form["robot"], "action": action}
+            if action == "obstacle":
+                if form.get("kind") not in ("person", "object", "none", "error", "silent"):
+                    return jsonify(message="장애물 분류 결과를 선택하세요."), 400
+                data["kind"] = form["kind"]
             if action in ("stall", "drop_link", "battery"):
                 from math import isfinite
                 key = "value" if action == "battery" else "seconds"
@@ -136,6 +142,8 @@ def create_app(feed, geometry, publish, trigger, *, meta=None, image=None, dev_t
         topic, build, key = routes[action]
         try:
             payload = build(form)
+        except schemas.SchemaError as exc:
+            return jsonify(message=exc.user_message()), 400
         except ValueError as exc:
             return jsonify(message=str(exc)), 400
         publish(topic, schemas.dumps(payload))

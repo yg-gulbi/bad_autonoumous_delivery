@@ -59,6 +59,16 @@ stall:
   short_s: 10.0
   long_s: 30.0
 
+obstacle:                       # PART 06 장애물 분류 (3.2a·5.5절, 단계 3O)
+  enabled: true
+  inspect_topic: "/{ns}/obstacle/inspect_image"
+  result_topic: "/{ns}/obstacle_classifier/result"
+  inspect_at_s: 10.0
+  timeout_s: 6.0                # PART 06 촬영 제한 3초 + 추론 여유
+  object_blocks_now: true       # OBJECT면 30초를 기다리지 않고 바로 막힘 처리
+  min_confidence: 0.4           # 이보다 낮은 탐지는 종류 판단에서 뺀다 (기록에는 남김)
+  label_ko: {person: 사람, chair: 의자, suitcase: 가방, backpack: 가방, bottle: 병, bed: 침대, couch: 소파, dining table: 탁자, potted plant: 화분, dog: 개, cat: 고양이}
+
 safety:
   bed_monitor:
     warn_s: 1.0

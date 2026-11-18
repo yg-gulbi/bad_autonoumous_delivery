@@ -55,7 +55,12 @@ function navigate(target) { if (location.hash === "#/" + target)
 else
     location.hash = "/" + target; }
 
-function inspect(id) { selected = id; missionFilter = { tab: mById(id)?.status || "ACTIVE" }; navigate("missions"); }
+function inspect(id) {
+    selected = id;
+    if (page === "missions") { render(); return; }
+    missionFilter = {tab: mById(id)?.status || "ACTIVE"};
+    navigate("missions");
+}
 
 function remember(ack) {
     early.set(ack.ref, ack);
@@ -231,7 +236,7 @@ Object.assign(actions, { close: () => { if (modal === "card")
         cards.get(modalCard).deferred = true; closeModal(); nextNotice(); }, defer: () => { cards.get(modalCard).deferred = true; closeModal(); nextNotice(); },
     card: showCard, alarm, dismiss: () => { alerts.shift(); closeModal(); nextNotice(); }, sound: () => { sound = !sound; renderTop(); },
     choose: (id, b) => send("decision", { card_id: modalCard, choice: id }, b),
-    safety: (_, b) => send("service/" + (b.textContent === "전체 재개" ? "resume" : "pause"), {}, b),
+    safety: (_, b) => command(b.textContent === "전체 재개" ? "RESUME_ALL" : "PAUSE_ALL", {}, b),
     cancel: id => openModal("confirm", dialogHead("임무 취소") + `<p>${h(id)} 임무를 취소하시겠습니까?</p>` + btn("임무 취소 실행", "cancel-ok", id, "danger")),
     "cancel-ok": async (id, b) => { const ack = await command("CANCEL_MISSION", { mission_id: id }, b); if (ack?.ok)
         closeModal(); },
@@ -254,6 +259,7 @@ else
     actions.close(); });
 
 function loadPage() {
+    historySlots.clear();
     const target = location.hash.slice(2);
     page = nav[target] ? target : "dashboard";
     if (!nav[target])

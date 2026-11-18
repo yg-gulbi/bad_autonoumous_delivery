@@ -26,6 +26,7 @@ class UIServer(Node):
         options = yaml.safe_load(Path(self.declare_parameter("ui_config", str(ui_path)).value).read_text())
         fleet_path = self.declare_parameter("fleet_yaml", options.get("fleet_yaml") or str(path)).value or str(path)
         cfg = read_config_yaml(fleet_path)
+        self.db_path = self.declare_parameter("db_path", "").value or cfg["db"]["path"]
         self.dev_tools = self.declare_parameter("dev_tools", options.get("dev_tools", False)).value
         self.map_yaml = self.declare_parameter("map_yaml", options["map_yaml"]).value or options["map_yaml"]
         self.host, self.port = options.get("host", "0.0.0.0"), options.get("port", 8090)
@@ -41,6 +42,7 @@ class UIServer(Node):
         self.mode = options.get("mode_label", "auto")
         self.testing = self.dev_tools and self.demo and self.mode != "live"
         self.names = {z: data.get("name") or f"{z} 구역" for z, data in cfg["zones"].items()}
+        self.robot_names = {robot: unit["label"] for robot, unit in cfg["robots"].items()}
         self.track = None
         map_path = Path(self.map_yaml).expanduser()
         if not map_path.is_absolute():
@@ -51,7 +53,9 @@ class UIServer(Node):
         self.meta, self.image = ui_api.map_meta(map_path, options["map_rotate"],
                                                options.get("map_deskew", "auto"),
                                                options.get("map_padding_m", .25), plan)
-        self.geometry.update(names=self.names, states=ui_api.STATES, kinds=ui_api.KINDS, rules=ui_api.RULES,
+        self.geometry.update(names=self.names, robot_names=self.robot_names,
+                             event_labels={t: text.format(robot="", zone="정류장", resource="구간", kind="임무").strip(" ·")
+                                           for t, text in ui_api.EVENTS.items()}, event_types=sorted(ui_api.EVENTS), states=ui_api.STATES, kinds=ui_api.KINDS, rules=ui_api.RULES,
                              dev_tools=self.testing, mode=self.mode, demo=self.demo, ack_timeout_s=options["ack_timeout_s"])
         self.outputs = {topic: self.create_publisher(String, topic, 10)
                         for topic in ("/ui/mission_req", "/ui/operator_cmd", "/ui/decision")}
@@ -86,7 +90,8 @@ class UIServer(Node):
                 if checks and all(checks):
                     self.track = None
             elif kind == "event":
-                data["title"] = ui_api.event_title(data, self.names)
+                card = self.feed.cards.get(data["detail"].get("card_id"))
+                data = ui_api.present_event(data, self.names, self.robot_names, card)
             self.feed.receive(kind, data)
         except ValueError as exc:
             self.get_logger().warning(str(exc), throttle_duration_sec=2.0)
@@ -124,7 +129,7 @@ def main(args=None):
     rclpy.init(args=args)
     node = UIServer()
     app = create_app(node.feed, node.geometry, node.publish_request, node.trigger,
-                     meta=node.meta, image=node.image, dev_tools=node.testing, set_bed_mode=node.set_bed_mode)
+                     meta=node.meta, image=node.image, dev_tools=node.testing, set_bed_mode=node.set_bed_mode, db_path=node.db_path)
     server = make_server(node.host, node.port, app, threaded=True)
     server.timeout = 0.25
 

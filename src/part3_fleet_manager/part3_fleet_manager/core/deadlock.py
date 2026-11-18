@@ -6,6 +6,7 @@ from uuid import uuid4
 import networkx as nx
 
 from . import geometry as g
+from .decisions import close_detail
 from .resource_manager import Leg, ResourceManager
 
 
@@ -77,12 +78,12 @@ class DeadlockManager:
             for name in self.manager.needed(leg.robot):
                 for holder in self.manager.resources[name].blockers(leg.robot):
                     if holder in robots:
-                        reasons.append(f"{leg.robot}은 {holder}이 보유한 {self.manager.resource_label(name)} 대기")
+                        reasons.append(f"{self.manager.robot_label(leg.robot)} — {self.manager.resource_label(name)} 빈자리 대기 (사용 중인 로봇: {self.manager.robot_label(holder)})")
         reason = ", ".join(reasons) + "."
         self.card = {
             "v": 1, "card_id": f"K-{uuid4().hex}", "kind": "DEADLOCK", "robots": robots,
             "title": "교착 해소를 위해 비킬 로봇 선택", "reason": reason,
-            "options": [{"id": key, "label": f"{leg.robot}이 {self.policy.yield_zones[room]} 구역으로 비킴"}
+            "options": [{"id": key, "label": f"{self.manager.robot_label(leg.robot)} · {self.manager.zone_label(self.policy.yield_zones[room])}으로 양보"}
                         for key, (leg, room) in options.items()],
             "recommended": recommended, "timeout_s": self.policy.card_timeout_s,
             "default": recommended, "created_at": now,
@@ -92,9 +93,9 @@ class DeadlockManager:
             detail = {"card": self.card} if kind == "CARD_OPEN" else {}
             self.manager.record(kind, now, reason, candidates=robots, card_id=self.card["card_id"], **detail)
 
-    def _close(self, now, reason, **detail):
-        self.manager.record("CARD_CLOSED", now, reason, candidates=self.card["robots"],
-                            card_id=self.card["card_id"], **detail)
+    def _close(self, now, reason, choice=None, by=None):
+        self.manager.record("CARD_CLOSED", now, **close_detail(self.card, reason, choice), candidates=self.card["robots"],
+                            card_id=self.card["card_id"], by=by)
         self.card = None
         self._options = {}
 
@@ -109,17 +110,17 @@ class DeadlockManager:
                                       mission_id=leg.mission_id, carrying_patient=leg.carrying_patient, mission_type=leg.mission_type)
         self.yielding[leg.robot] = Yield(leg, detour)
         self._awaiting_release.append((room, leg.robot, detected_at))
-        self.manager.record("YIELD_START", now, f"{leg.robot}이 {self.manager.resource_label(room)}을 비우기 위해 {dest}행 허가를 요청합니다.",
-                            robot=leg.robot, mission_id=leg.mission_id, candidates=robots, destination=dest, source_room=room, detected_at=detected_at)
+        self.manager.record("YIELD_START", now, f"{self.manager.robot_label(leg.robot)} — {self.manager.resource_label(room)} 양보를 위해 {self.manager.zone_label(dest)} 이동 요청",
+                            robot=leg.robot, mission_id=leg.mission_id, candidates=robots, destination=dest, source_room=room, detected_at=detected_at, by=by)
         self.cycle = ()
 
     def choose(self, card_id: str, choice: str, by: str, now: float):
         """Apply a validated UI decision after the latest reports have been processed."""
         if (not self.card or self.card["card_id"] != card_id or self._current_cycle() != self.cycle
                 or now >= self.card["created_at"] + self.policy.card_timeout_s):
-            raise ValueError("E-409: deadlock card is no longer actionable")
+            raise ValueError("E-409: 교착이 풀렸거나 카드가 만료됐습니다.")
         if choice not in self._options or not by.strip():
-            raise ValueError("E-400: invalid deadlock choice or operator")
+            raise ValueError("E-400: 양보 선택지와 조작자 이름을 확인하세요.")
         self._start(choice, now, by, "selected")
 
     def _resolved(self, elapsed):
@@ -182,7 +183,7 @@ class DeadlockManager:
         self.manager.finish(leg, now)
         del self.yielding[leg.robot]
         original = action.original
-        self.manager.record("YIELD_DONE", now, f"{leg.robot}이 {leg.destination}에 도착하여 원래 구간을 다시 요청합니다.",
+        self.manager.record("YIELD_DONE", now, f"{self.manager.robot_label(leg.robot)} · {self.manager.zone_label(leg.destination)} 도착, 원래 구간 다시 요청",
                             robot=leg.robot, mission_id=leg.mission_id, destination=leg.destination)
         return self.manager.request(leg.robot, original.destination, original.level, now,
                                     mission_id=original.mission_id, carrying_patient=original.carrying_patient, mission_type=original.mission_type)
