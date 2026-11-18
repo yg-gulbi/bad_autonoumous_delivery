@@ -260,7 +260,8 @@ class FleetCore:
                         res.blocked_since = now
                     res.stall_blockers.add(robot)
                 self.resources.record("BLOCKED", now, reason, robot=robot, mission_id=r.job.journal_id, region=region)
-                self.decisions.open("BLOCKED", robot, r.job.journal_id, reason, now)
+                self.decisions.open("BLOCKED", robot, r.job.journal_id, reason, now,
+                                    obstacle_kind=stall.obstacle["kind"] if stall.obstacle else None)
 
     def _drain(self, now, out):
         with self._lock:

@@ -37,9 +37,9 @@ class UIServer(Node):
                          "event_limit": options.get("event_log_size", 500)}
         self.demo = self.declare_parameter("demo", False).value
         self.detected_demo = self.demo
-        if not self.demo:
+        self.mode = self.declare_parameter("mode_label", options.get("mode_label", "auto")).value
+        if not self.demo and self.mode == "auto":
             self.create_timer(1.0, self.detect_mock)
-        self.mode = options.get("mode_label", "auto")
         self.testing = self.dev_tools and self.demo and self.mode != "live"
         self.names = {z: data.get("name") or f"{z} 구역" for z, data in cfg["zones"].items()}
         self.robot_names = {robot: unit["label"] for robot, unit in cfg["robots"].items()}

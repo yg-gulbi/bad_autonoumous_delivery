@@ -569,6 +569,7 @@ def test_blocked_choices_respect_protocol_state(sim, choice):
     sim.frames[A]["pose"] = sim.pose((-1.55, -1.7))
     sim.tick(2)
     card = sim.tick(32).cards[0]
+    assert card["options"][0] == {"id": "retry", "label": "확인함, 다시 출발"}
     if choice == "retry":
         sim.event(A, "PAUSED")
     sim.choose(card, choice)
@@ -880,6 +881,9 @@ def test_39_classification_changes_only_block_timing(sim,label,kind,reason):
     assert {e["type"] for e in out.events} >= {"STALL_LONG","BLOCKED","CARD_OPEN"}
     card, = out.cards
     assert card["kind"] == "BLOCKED" and reason in card["reason"]
+    retry_label = {"PERSON": "비켜 줌, 다시 출발", "OBJECT": "치웠음, 다시 출발"}.get(kind, "확인함, 다시 출발")
+    assert card["options"] == [{"id": "retry", "label": retry_label},
+                               {"id": "return", "label": "되돌아가기"}, {"id": "hold", "label": "임무 보류"}]
     assert sim.core.resources.snapshot()["CORRIDOR"]["blocked"]
     sim.med(stops=["A"])
     sim.tick(33)

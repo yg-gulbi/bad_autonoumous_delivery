@@ -8,6 +8,7 @@ from ament_index_python.packages import get_package_share_path
 from geometry_msgs.msg import PoseWithCovarianceStamped
 import rclpy
 from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
+from rclpy.action import ActionServer, GoalResponse
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.parameter import Parameter
@@ -19,7 +20,12 @@ from .core.config import load_config
 from .core.route_planner import waypoints
 from .core.robot_protocol import DONE
 from .core.schemas import dumps
-from .robot_link import AMCL_QOS
+from .robot_link import AMCL_QOS, DockStatus, HazardDetectionVector
+
+try:
+    from nav2_msgs.action import NavigateToPose
+except ImportError:
+    NavigateToPose = None
 
 
 def parse_command(text, supports_id):
@@ -82,6 +88,16 @@ class MockHospitalNav(Node):
         self.status = self.create_publisher(String, link.status_topic.format(ns=self.robot), 10)
         self.battery_pub = self.create_publisher(BatteryState, link.battery_topic.format(ns=self.robot),
                                                  qos_profile_sensor_data)
+        if DockStatus is not None:
+            self.dock_pub = self.create_publisher(DockStatus, link.dock_status_topic.format(ns=self.robot),
+                                                  qos_profile_sensor_data)
+            self.hazard_pub = self.create_publisher(HazardDetectionVector, link.hazard_topic.format(ns=self.robot),
+                                                    qos_profile_sensor_data)
+        # Expose Nav2 discovery for bench checks. Only hospital_nav commands drive this simulator.
+        if NavigateToPose is not None:
+            self.nav_server = ActionServer(
+                self, NavigateToPose, "navigate_to_pose", execute_callback=lambda _: NavigateToPose.Result(),
+                goal_callback=lambda _: GoalResponse.REJECT)
         self.pose_pub = self.create_publisher(PoseWithCovarianceStamped, link.amcl_pose_topic.format(ns=self.robot),
                                               AMCL_QOS)
         self.create_subscription(String, link.command_topic.format(ns=self.robot), self.command, 10)
@@ -169,6 +185,9 @@ class MockHospitalNav(Node):
         battery.present = True
         battery.percentage = self.value("battery_pct") / 100.0
         self.battery_pub.publish(battery)
+        if DockStatus is not None:
+            self.dock_pub.publish(DockStatus(header=battery.header, is_docked=False))
+            self.hazard_pub.publish(HazardDetectionVector(header=battery.header, detections=[]))
         progress = {"remaining_m": None, "percent": None}
         if self.state == "MOVING":
             progress = self.progress()

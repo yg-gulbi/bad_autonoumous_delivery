@@ -31,13 +31,16 @@ class Decisions:
         self.cards = {}
         self.record = record
 
-    def open(self, kind, robot, mission_id, reason, now, *, targets=None):
+    def open(self, kind, robot, mission_id, reason, now, *, targets=None, obstacle_kind=None):
         robots = list(targets) if targets is not None else [robot]
         for card in self.cards.values():
             if card["kind"] == kind and card["robots"] == robots:
                 return card
         card_id = f"K-{uuid4().hex}"
         options = OPTIONS[kind]
+        if kind == "BLOCKED":
+            retry = {"PERSON": "비켜 줌, 다시 출발", "OBJECT": options["retry"]}.get(obstacle_kind, "확인함, 다시 출발")
+            options = {**options, "retry": retry}
         card = {"v": 1, "card_id": card_id, "kind": kind, "robots": robots, "title": TITLES[kind],
                 "reason": reason, "options": [{"id": k, "label": v} for k, v in options.items()],
                 "recommended": None, "timeout_s": None, "default": None, "created_at": now}
