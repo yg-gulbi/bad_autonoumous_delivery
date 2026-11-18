@@ -1,0 +1,210 @@
+"""Arm one-shot synchronized RGB+Depth capture on trigger and publish obstacle JSON."""
+
+import json
+import threading
+
+import cv2
+from cv_bridge import CvBridge
+from geometry_msgs.msg import PointStamped
+from message_filters import ApproximateTimeSynchronizer, Subscriber
+import numpy as np
+import rclpy
+from rclpy.duration import Duration
+from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import CameraInfo, CompressedImage, Image
+from std_msgs.msg import Empty, String
+from tf2_ros import Buffer, TransformListener
+import tf2_geometry_msgs  # noqa: F401  # Registers PointStamped transform support
+
+from .obstacle_classifier import build_error, load_classifier, process_frame
+
+
+class ObstacleClassifierNode(Node):
+    def __init__(self):
+        super().__init__('obstacle_classifier')
+
+        self.declare_parameter('rgb_topic', 'oakd/rgb/image_raw/compressed')
+        self.declare_parameter('depth_topic', 'oakd/stereo/image_raw')
+        self.declare_parameter('camera_info_topic', 'oakd/rgb/camera_info')
+        self.declare_parameter('trigger_topic', 'obstacle/inspect_image')
+        self.declare_parameter('output_topic', 'obstacle_classifier/result')
+        self.declare_parameter('target_frame', 'map')
+        self.declare_parameter(
+            'method',
+            'part6_obstacle_classifier.obstacle_classifier:Yolo11Classifier',
+        )
+        self.declare_parameter('model_path', 'yolo11n.pt')
+        self.declare_parameter('conf_threshold', 0.25)
+        self.declare_parameter('min_depth', 0.2)
+        self.declare_parameter('max_depth', 5.0)
+        self.declare_parameter('sync_slop', 0.1)
+        self.declare_parameter('capture_timeout_sec', 3.0)
+
+        method = str(self.get_parameter('method').value)
+        model_path = str(self.get_parameter('model_path').value)
+        conf_threshold = float(self.get_parameter('conf_threshold').value)
+        self.min_depth = float(self.get_parameter('min_depth').value)
+        self.max_depth = float(self.get_parameter('max_depth').value)
+        self.target_frame = str(self.get_parameter('target_frame').value)
+        sync_slop = float(self.get_parameter('sync_slop').value)
+        self.capture_timeout_sec = float(self.get_parameter('capture_timeout_sec').value)
+
+        if method.endswith(':Yolo11Classifier'):
+            self.classifier = load_classifier(
+                method, model_path=model_path, conf_threshold=conf_threshold
+            )
+        else:
+            self.classifier = load_classifier(method)
+
+        self.bridge = CvBridge()
+        self.lock = threading.Lock()
+        # 평소에는 이미지 처리를 하지 않고 대기 (이벤트 수신 시에만 True로 전환)
+        self.pending_capture = False
+        self.timeout_timer = None
+        self.K = None
+
+        # /tf, /tf_static을 백그라운드 버퍼에 유지해 depth stamp 시점 변환을 지원
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+
+        self.publisher = self.create_publisher(
+            String, str(self.get_parameter('output_topic').value), 10
+        )
+
+        self.create_subscription(
+            CameraInfo,
+            str(self.get_parameter('camera_info_topic').value),
+            self.camera_info_callback,
+            qos_profile_sensor_data,
+        )
+
+        self.rgb_sub = Subscriber(
+            self, CompressedImage, str(self.get_parameter('rgb_topic').value),
+            qos_profile=qos_profile_sensor_data,
+        )
+        self.depth_sub = Subscriber(
+            self, Image, str(self.get_parameter('depth_topic').value),
+            qos_profile=qos_profile_sensor_data,
+        )
+        self.ts = ApproximateTimeSynchronizer(
+            [self.rgb_sub, self.depth_sub], queue_size=10, slop=sync_slop
+        )
+        self.ts.registerCallback(self.synced_callback)
+
+        self.create_subscription(
+            Empty,
+            str(self.get_parameter('trigger_topic').value),
+            self.trigger_callback,
+            10,
+        )
+
+    def camera_info_callback(self, msg: CameraInfo):
+        with self.lock:
+            if self.K is None:
+                self.K = np.array(msg.k, dtype=np.float64).reshape(3, 3)
+
+    def _cancel_timeout_timer(self):
+        if self.timeout_timer is not None:
+            self.timeout_timer.cancel()
+            self.timeout_timer = None
+
+    def trigger_callback(self, _msg: Empty):
+        """이벤트 수신 시 1회 이미지 수신 활성화 및 타임아웃 타이머 시작."""
+        with self.lock:
+            self.pending_capture = True
+            self._cancel_timeout_timer()
+            self.timeout_timer = self.create_timer(
+                self.capture_timeout_sec, self._on_capture_timeout
+            )
+
+    def _on_capture_timeout(self):
+        with self.lock:
+            if not self.pending_capture:
+                self._cancel_timeout_timer()
+                return
+            self.pending_capture = False
+            self._cancel_timeout_timer()
+        self.publish_result(
+            build_error('missing_data', 'Timed out waiting for RGB/Depth or CameraInfo')
+        )
+
+    def _transform_to_target(self, x: float, y: float, z: float, frame_id: str, stamp):
+        pt = PointStamped()
+        pt.header.frame_id = frame_id
+        pt.header.stamp = stamp
+        pt.point.x = float(x)
+        pt.point.y = float(y)
+        pt.point.z = float(z)
+        try:
+            transformed = self.tf_buffer.transform(
+                pt, self.target_frame, timeout=Duration(seconds=0.5)
+            )
+            return {
+                'x': float(transformed.point.x),
+                'y': float(transformed.point.y),
+                'z': float(transformed.point.z),
+            }
+        except Exception as exc:
+            self.get_logger().warn(f'TF transform to {self.target_frame} failed: {exc}')
+            return None
+
+    def synced_callback(self, rgb_msg: CompressedImage, depth_msg: Image):
+        # 대기 상태이거나 CameraInfo 미수신 시 즉시 반환해 리소스 낭비 방지
+        with self.lock:
+            if not self.pending_capture or self.K is None:
+                return
+            self.pending_capture = False
+            self._cancel_timeout_timer()
+            K = self.K.copy()
+
+        header = {
+            'stamp': {
+                'sec': rgb_msg.header.stamp.sec,
+                'nanosec': rgb_msg.header.stamp.nanosec,
+            },
+            'frame_id': rgb_msg.header.frame_id,
+        }
+
+        try:
+            np_arr = np.frombuffer(rgb_msg.data, np.uint8)
+            rgb_frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            depth_frame = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='passthrough')
+            camera_frame = depth_msg.header.frame_id or rgb_msg.header.frame_id
+            result = process_frame(
+                rgb_frame,
+                self.classifier,
+                header,
+                depth_image=depth_frame,
+                K=K,
+                transform_fn=lambda x, y, z: self._transform_to_target(
+                    x, y, z, camera_frame, depth_msg.header.stamp
+                ),
+                min_depth=self.min_depth,
+                max_depth=self.max_depth,
+            )
+        except Exception as exc:
+            self.get_logger().error(f'Classification failed: {exc}')
+            result = build_error('processing_error', str(exc), header)
+
+        self.publish_result(result)
+
+    def publish_result(self, result: dict):
+        msg = String()
+        msg.data = json.dumps(result, allow_nan=False)
+        self.publisher.publish(msg)
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = None
+    try:
+        node = ObstacleClassifierNode()
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if node is not None:
+            node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
