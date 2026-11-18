@@ -883,15 +883,17 @@ db:
 
 ### 10.1 실제 연결 준비 (단계 4P)
 
-- **네트워크는 실행 파일에서 정하지 않는다.** 강의실 TurtleBot4는 Fast DDS 발견 서버(`ROS_DISCOVERY_SERVER`)를 쓴다 (`docs/part3/troubleshooting/2026-11-18-mock-discovery.md`). 관제 노트북은 PART 04 노트북과 같은 `ROS_DOMAIN_ID`·`ROS_DISCOVERY_SERVER`·`RMW_IMPLEMENTATION`을 셸에서 그대로 쓴다. 두 로봇의 발견 서버가 모두 들어 있어야 한다. 실행 파일과 코드는 이 값들을 바꾸지 않는다. mock 시험용 `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`·격리 도메인은 실제 실행에서 쓰지 않는다.
+- **네트워크는 실행 파일에서 정하지 않는다.** 이 팀은 Fast DDS 발견 서버를 **관제 PC에서** 띄운다 (2026-11-18 확인): `/usr/bin/fastdds discovery --server-id 0 --ip-address <관제 PC IP> --port 11811` (지금 강의실 관제 PC는 `192.168.108.31`). 로봇과 PART 04 노트북은 모두 이 서버에 붙는다. 관제 노드를 띄우는 터미널도 `ROS_DISCOVERY_SERVER=<관제 PC IP>:11811`로 같은 서버에 붙고, 명령줄 도구가 전체 토픽을 보도록 `ROS_SUPER_CLIENT=True`를 둔다. `ROS_DOMAIN_ID`·`RMW_IMPLEMENTATION`은 PART 04가 쓰는 값과 같게 한다. 실행 파일과 코드는 이 값들을 바꾸지 않는다. mock 시험용 `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`·격리 도메인은 실제 실행에서 쓰지 않는다.
+- **PART 04 `keyboard_control`과 같이 띄우지 않는다.** 그것도 `/<ns>/hospital_nav/command`로 명령을 보내는 시험용 관제다. 둘이 같이 돌면 한 로봇에 명령이 두 군데서 간다. preflight는 `hospital_nav/command`에 관제 말고 다른 발행자가 있으면 경고한다.
+- 관제 PC는 팀 Python 가상환경(`rokey_venv`)을 켠 터미널에서 실행한다. 코드가 venv 밖 경로를 가정하지 않는다.
 - **실행 파일** `part1_ui_dashboard/launch/real.launch.py`: 관제 + 화면만 띄운다 (mock 로봇·mock 분류기 없음, 시험 도구 끔, 시연 모드 표시 끔). 인자: `config_file`, `map_yaml`(PART 04가 쓰는 같은 맵), `db_path`(기본은 시연 DB와 다른 파일, 예: `bad_real.db`), `bed_monitor_require_at_start`(기본은 `fleet.yaml` 값).
 - **연결 점검 도구** `ros2 run part3_fleet_manager preflight` (읽기만 하고 아무 명령도 보내지 않는다):
-  - 셸 환경 출력: `ROS_DOMAIN_ID`, `ROS_DISCOVERY_SERVER`, `ROS_AUTOMATIC_DISCOVERY_RANGE`, `RMW_IMPLEMENTATION`. LOCALHOST 범위면 경고.
+  - 셸 환경 출력: `ROS_DOMAIN_ID`, `ROS_DISCOVERY_SERVER`, `ROS_SUPER_CLIENT`, `ROS_AUTOMATIC_DISCOVERY_RANGE`, `RMW_IMPLEMENTATION`. LOCALHOST 범위거나 `ROS_DISCOVERY_SERVER`가 비어 있으면 경고. 발견 서버 주소의 포트에 이 PC에서 연결되는지(서버가 떠 있는지) 확인.
   - 로봇마다 10초 동안: `hospital_nav/status`의 STATE 수신과 그 `state`, `amcl_pose`, `battery_state`(%), `dock_status`(도킹 여부), `hazard_detection`, Nav2 `navigate_to_pose` 액션 서버. 항목별 OK·없음 표.
   - 침상 감시 `/patient/bed_exit` 수신 속도, 장애물 분류 결과 토픽 발행자 유무 (없어도 실패 아님, "없음 — 30초 규칙으로 동작" 표시).
   - `fleet.yaml zones`와 PART 04 `goal_manager.py`의 `GOALS` 비교 (PART 04 파일은 읽기만). 0.05 m 넘게 다르면 경고와 두 값.
   - 끝에 "실제 실행 가능 / 안 됨"과 안 되는 이유 한 줄씩.
-- **현장 순서 문서** `docs/part3/REAL_TEST.md`: 팀원에게 부탁할 것(로봇별 Nav2·명령 노드 실행, 초기 위치 지정, 도크에서 떼어 두기 — R3 반영 전), 관제 노트북 순서(환경 확인 → preflight → real.launch), 침상 감시(PART 05 실행 또는 카드의 [감시 없이 운행]), 시험 순서(로봇 한 대 짧은 이동 → 정지·재개 → 호출 1건 → 두 대 동시(시나리오 1) → 복도 양보(시나리오 2)), 비상시(화면 [안전 정지 요청], 로봇 옆 사람), 끝나고 모을 것(DB 파일, 화면 캡처, 로그).
+- **현장 순서 문서** `docs/part3/REAL_TEST.md`: 관제 PC 터미널 구성(1: 발견 서버, 2: 관제·화면 — venv 켬, `ROS_DISCOVERY_SERVER`·`ROS_SUPER_CLIENT`), `keyboard_control` 끄기, 팀원에게 부탁할 것(로봇별 Nav2·명령 노드 실행, 초기 위치 지정, 도크에서 떼어 두기 — R3 반영 전), 관제 노트북 순서(환경 확인 → preflight → real.launch), 침상 감시(PART 05 실행 또는 카드의 [감시 없이 운행]), 시험 순서(로봇 한 대 짧은 이동 → 정지·재개 → 호출 1건 → 두 대 동시(시나리오 1) → 복도 양보(시나리오 2)), 비상시(화면 [안전 정지 요청], 로봇 옆 사람), 끝나고 모을 것(DB 파일, 화면 캡처, 로그).
 
 ## 11. PART 04에 요구한 변경
 

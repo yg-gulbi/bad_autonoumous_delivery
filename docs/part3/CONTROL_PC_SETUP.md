@@ -34,9 +34,9 @@
 
 **발견 서버(Discovery Server)**
 
-- 강의실 TurtleBot4는 노드들이 서로를 '전화번호부(발견 서버)'로 찾는다. 서버는 보통 로봇마다 하나씩 떠 있다.
-- 관제 노트북에 전화번호부 주소만 알려 주면, 관제를 켤 때 그 서버에 등록된 노드를 알아서 찾는다. 주소는 환경변수 `ROS_DISCOVERY_SERVER`다.
-- 주행팀 노트북에는 자기 로봇 서버 하나만 들어 있다. 관제는 robot2와 robot3를 둘 다 다뤄야 하니까 **두 서버를 모두** 넣는다 (4장).
+- 노드들이 서로를 찾는 '전화번호부'다. 이 팀은 **관제 PC에서** 서버를 띄운다. 로봇과 PART 04 노트북은 모두 이 서버에 붙는다.
+- 그래서 관제 PC의 서버가 켜져 있어야 다른 노드들이 서로를 찾는다.
+- 관제 노드도 같은 서버에 붙어야 한다. 관제를 띄우는 터미널에 `ROS_DISCOVERY_SERVER=<관제 PC IP>:11811`을 넣는다 (5장).
 
 ## 1. 준비물 확인 (새 컴퓨터)
 
@@ -72,6 +72,12 @@ source ~/.bashrc
 
 ## 3. 코드 받기와 빌드
 
+팀 가상환경(`rokey_venv`)을 켠 채로 해도 된다. 실행할 때 `ModuleNotFoundError: flask`(또는 `shapely`·`networkx`·`yaml`)가 나면 venv 안에서 한 번 채운다.
+
+```bash
+pip install flask shapely networkx pyyaml
+```
+
 ```bash
 git clone -b feat/part1-part3-junseong https://github.com/yg-gulbi/bad_autonoumous_delivery.git ~/bad_ws
 cd ~/bad_ws
@@ -103,26 +109,32 @@ ros2 launch part1_ui_dashboard demo_mock.launch.py
 
 브라우저에서 http://localhost:8090 을 연다. 로봇 2대가 연결되고, [+ 이송 요청]으로 호출을 넣으면 움직이면 성공이다. 끝나면 `Ctrl+C`.
 
-## 5. 강의실 네트워크 설정 (처음 한 번)
+## 5. 강의실 네트워크 (관제 PC가 발견 서버)
 
-1. 주행팀 노트북 두 대에서 각각 아래 명령을 실행해 값을 받는다. 필요한 건 `ROS_DOMAIN_ID`, 로봇마다 발견 서버 IP·포트(보통 11811)·서버 ID다.
+이 팀은 원래 이렇게 켠다. 관제 PC의 IP가 `192.168.108.31`일 때다. IP는 `hostname -I`로 확인한다.
 
-   ```bash
-   cat /etc/turtlebot4_discovery/setup.bash 2>/dev/null; env | grep -E 'ROS|RMW'
-   ```
+**터미널 1: 발견 서버** (실험하는 동안 계속 켜 둔다)
 
-2. 관제 노트북에서 TurtleBot4 공식 설정 스크립트를 실행한다. 묻는 대로 도메인 ID를 넣고, 발견 서버는 **robot2 것과 robot3 것 두 개를** 넣는다.
+```bash
+/usr/bin/fastdds discovery --server-id 0 --ip-address 192.168.108.31 --port 11811
+```
 
-   ```bash
-   wget -qO - https://raw.githubusercontent.com/turtlebot/turtlebot4_setup/jazzy/turtlebot4_discovery/configure_discovery.sh | bash <(cat) </dev/tty
-   ```
+**관제를 띄울 터미널마다** 이걸 넣는다:
 
-3. 새 터미널을 열고 확인한다. 주행팀이 로봇 노드를 띄운 상태여야 보인다.
+```bash
+export ROS_DISCOVERY_SERVER=192.168.108.31:11811
+export ROS_SUPER_CLIENT=True        # ros2 topic list 같은 명령이 전체 토픽을 보게
+echo $ROS_DOMAIN_ID                 # PART 04가 쓰는 값과 같아야 한다 (다르면 export ROS_DOMAIN_ID=같은값)
+```
 
-   ```bash
-   ros2 daemon stop; ros2 daemon start
-   ros2 topic list | grep -E 'robot2|robot3'     # /robot2/hospital_nav/status, /robot3/... 가 보여야 함
-   ```
+확인 (주행팀이 로봇 노드를 띄운 상태여야 보인다):
+
+```bash
+ros2 daemon stop; ros2 daemon start
+ros2 topic list | grep -E 'robot2|robot3'     # /robot2/hospital_nav/status 등이 보여야 함
+```
+
+⚠ PART 04의 `ros2 run hospital_nav keyboard_control`도 로봇에 명령을 보내는 시험용 관제다. 우리 관제를 켤 때는 그 창에서 `Q`로 끈다. 둘이 같이 켜져 있으면 한 로봇에 명령이 두 군데서 간다.
 
 ## 6. 실제 로봇으로 실행
 
@@ -133,10 +145,11 @@ ros2 launch part1_ui_dashboard demo_mock.launch.py
 - **PART 05:** 침상 감시 웹캠을 켠다. 안 켜면 첫 출발 때 화면 카드에서 [감시 없이 운행]을 누른다.
 - **PART 06:** 장애물 분류는 없어도 된다. 없으면 30초 막힘 규칙으로 돈다.
 
-관제 노트북 (단계 4P에서 만든 점검 도구와 실행 파일):
+관제 PC (발견 서버는 터미널 1에서 켜 둔 상태. 아래는 터미널 2. 실행 파일과 점검 도구는 단계 4P에서 만든다):
 
 ```bash
 cd ~/bad_ws && source install/setup.bash
+export ROS_DISCOVERY_SERVER=192.168.108.31:11811 ROS_SUPER_CLIENT=True
 ros2 run part3_fleet_manager preflight          # 마지막 줄이 "실제 실행 가능"인지 확인
 ros2 launch part1_ui_dashboard real.launch.py
 ```
