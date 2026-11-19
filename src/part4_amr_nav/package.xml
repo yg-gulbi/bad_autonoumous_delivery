@@ -1,13 +1,27 @@
 <?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>part4_amr_nav</name>
-  <version>0.1.0</version>
-  <description>PART 04 TurtleBot4 Nav2 autonomous navigation and road-1 arbitration package (skeleton).</description>
-  <maintainer email="maintainer@example.com">Project contributors</maintainer>
-  <license>UNLICENSED</license>
-  <buildtool_depend>ament_python</buildtool_depend>
-  <exec_depend>rclpy</exec_depend>
-  <exec_depend>std_msgs</exec_depend>
+  <name>hospital_nav</name>
+  <version>0.0.0</version>
+  <description>TurtleBot4 hospital mission navigation with A-team permission interface</description>
+  <maintainer email="tjsdnrla02@naver.com">hv-03</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>nav2_msgs</depend>
+  <depend>action_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>irobot_create_msgs</depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
   <test_depend>python3-pytest</test_depend>
-  <export><build_type>ament_python</build_type></export>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
 </package>
