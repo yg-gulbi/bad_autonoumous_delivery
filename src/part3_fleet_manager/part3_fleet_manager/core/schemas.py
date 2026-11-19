@@ -3,11 +3,12 @@
 import json
 from math import isfinite
 
+from ..defaults import default_robot_ids
 from .geometry import RESOURCES, ZONE_REGIONS
 
 VERSION = 1
+ROBOT_IDS = default_robot_ids()
 MISSION_TYPES = ("PATIENT_TRANSPORT", "MED_ROUND", "CALL")
-ROBOT_IDS = ("robot_a", "robot_b")
 ERROR_CODES = ("E-400", "E-409", "E-423")
 NUMBER = (int, float)
 NULL = type(None)
@@ -140,13 +141,15 @@ def parse_mission_req(text: str) -> dict:
     return data
 
 
-def parse_operator_cmd(text: str, *, robots=ROBOT_IDS) -> dict:
+def parse_operator_cmd(text: str, *, robots=None) -> dict:
     data, ref = _read(text, "cmd_id")
     _texts(data, ("cmd_id", "by", "cmd"), ref)
     command = data["cmd"]
     _choice(command, COMMAND_FIELDS, "cmd", ref)
     fields = COMMAND_FIELDS[command]
     _texts(data, fields, ref)
+    if robots is None and "robot" in fields:
+        robots = ROBOT_IDS
     choices_by_field = {
         "robot": robots, "zone": ZONE_REGIONS, "result": ("OK", "MISMATCH"), "resource": RESOURCES,
     }

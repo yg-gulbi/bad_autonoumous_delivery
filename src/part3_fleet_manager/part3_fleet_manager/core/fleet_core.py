@@ -1,5 +1,5 @@
 """ROS-independent fleet tick. Enqueue wire data at receipt; consume outputs after tick."""
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from math import inf, nextafter
 import json
@@ -34,8 +34,6 @@ class FleetCore:
     """Inputs: UI topic names, status/pose/battery/docked/hazards with logical robot, or bed exit."""
 
     def __init__(self, config, store=None):
-        if config.robot_link.mode != "HOSPITAL_NAV":
-            raise NotImplementedError("ICD_GOAL_POSE 어댑터는 아직 구현되지 않았습니다.")
         self.config = config
         self.store = store if store is not None else Store(config.db_path)
         self.resources = ResourceManager(config)
@@ -50,12 +48,12 @@ class FleetCore:
         self.blocks = {}
         self.link_ok = dict.fromkeys(config.robots, False)
         self.inputs = deque()
-        self.history = self.store.recent_finished()
+        self.history = self.store.recent_finished(config.publish.finished_mission_limit)
         self.state_times = {}
         self._lock = Lock()
         self._latest_bed = None
         self._next_publish = None
-        self._acks_seen = {}
+        self._acks_seen = OrderedDict()
         self._unsaved_events = []
         self._pending_acks = []
         self._last_tick = float("-inf")
@@ -139,8 +137,8 @@ class FleetCore:
                 self._unblock(robot, now, close_card=False)
             if choice == "hold":
                 r.state, r.fault_stop = "FAULT", True
-                for kind in ("FAULT", "PAUSE"):
-                    self.resources.record(kind, now, "운영자가 막힌 임무를 보류했습니다.",
+                for event_type in ("FAULT", "PAUSE"):
+                    self.resources.record(event_type, now, "운영자가 막힌 임무를 보류했습니다.",
                                           robot=robot, mission_id=r.job.journal_id, by=by)
             elif choice == "retry" and self.links[robot].state == "PAUSED":
                 r.state, r.resume_due = "MOVING", True
@@ -156,6 +154,7 @@ class FleetCore:
         ref = data[ref_key]
         cache_key = topic, ref
         if topic != "/ui/decision" and cache_key in self._acks_seen:
+            self._acks_seen.move_to_end(cache_key)
             out.acks.append(self._acks_seen[cache_key])
             return
         ack = {"v": 1, "ref": ref, "ok": True, "code": None, "mission_id": data.get("mission_id"),
@@ -173,6 +172,8 @@ class FleetCore:
                        message=message.strip() or str(exc))
         if topic != "/ui/decision":
             self._acks_seen[cache_key] = ack
+            if len(self._acks_seen) > 500:
+                self._acks_seen.popitem(last=False)
         out.acks.append(ack)
 
     def _unblock(self, robot, now, *, close_card=True, moved=False):
@@ -328,7 +329,7 @@ class FleetCore:
             self.safety.protect(robot, now)
         for topic, payload, robot, _ in safety:
             if topic == "hazards":
-                self.safety.hazards(robot, payload, now)
+                self.safety.hazards(robot, payload, now, {r: link.pose for r, link in self.links.items()})
             elif topic == "/ui/operator_cmd":
                 self._ui(topic, payload, now, out)
             elif topic == "/robot/pause":
@@ -391,7 +392,7 @@ class FleetCore:
         for job in self.mission.dirty.values():
             if job.finished_at is not None and job.kind in schemas.MISSION_TYPES:
                 self.history[job.id] = self.mission_row(job)
-        while len(self.history) > 20:
+        while len(self.history) > self.config.publish.finished_mission_limit:
             self.history.pop(next(iter(self.history)))
         try:
             self.store.save(self.mission.dirty.values(), self._unsaved_events)

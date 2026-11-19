@@ -21,7 +21,8 @@ def test_default_yaml_loads(cfg):
     assert cfg.robot_link.request_id == "auto"
     assert set(cfg.zones) == set("ABCDEF")
     assert cfg.corridor.mouths["ROOM_E"] == (-1.08, -2.25)
-    assert cfg.corridor.mode == "SHARED_YIELD" and cfg.corridor.yield_enabled
+    assert cfg.corridor.yield_enabled
+    assert cfg.safety.bump_neighbor_m == 1.0 and cfg.publish.finished_mission_limit == 20
     assert (cfg.corridor.yield_trigger_m, cfg.corridor.yield_release_m, cfg.corridor.yield_timeout_s) == (1.2, 0.5, 10)
     assert cfg.resources.clear_margin_m == 0.20
     assert cfg.resources.aging_s == 0
@@ -60,6 +61,9 @@ def test_default_yaml_loads(cfg):
     ("resources.aging_s", True),
     ("deadlock.yield_zones.ROOM_E", "E"),
     ("stall.long_s", 5),
+    ("safety.bump_neighbor_m", -1),
+    ("publish.finished_mission_limit", -1),
+    ("publish.finished_mission_limit", True),
     ("safety.bed_exit_pause_targets", ["robot2"]),
     ("mission.return_to_dock", "false"),
     ("mock.speed_mps", 0),
@@ -107,8 +111,10 @@ def test_core_has_no_ros_imports():
             assert not ros_packages.intersection(name.split(".")[0] for name in imports), source
 
 
-def test_previous_fleet_file_inherits_shared_yield_defaults(cfg):
+def test_previous_fleet_file_without_policy_uses_directional_defaults():
     data = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
     for key in ("mode", "yield_enabled", "yield_trigger_m", "yield_release_m", "yield_timeout_s"):
         del data["corridor"][key]
-    assert config_from_dict(data).corridor == cfg.corridor
+    corridor = config_from_dict(data).corridor
+    assert corridor.mode == "DIRECTIONAL" and corridor.yield_enabled
+    assert (corridor.yield_trigger_m, corridor.yield_release_m, corridor.yield_timeout_s) == (1.2, 0.5, 10.0)

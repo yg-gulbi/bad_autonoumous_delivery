@@ -12,6 +12,9 @@ from . import geometry
 from .schemas import MISSION_TYPES
 
 
+CORRIDOR_MODES = ("DIRECTIONAL", "SHARED_YIELD", "EXCLUSIVE")
+
+
 class ConfigError(ValueError):
     """An invalid fleet configuration, with the offending setting in the message."""
 
@@ -43,7 +46,7 @@ class CorridorCfg:
     polygon: tuple[geometry.Point, ...]
     mouths: Mapping[str, geometry.Point]
     include_boundary: bool
-    mode: str = "SHARED_YIELD"
+    mode: str = "DIRECTIONAL"
     yield_enabled: bool = True
     yield_trigger_m: float = 1.2
     yield_release_m: float = 0.5
@@ -101,6 +104,7 @@ class BedMonitorCfg:
 class SafetyCfg:
     bed_exit_pause_targets: tuple[str, ...]
     bed_monitor: BedMonitorCfg = BedMonitorCfg()
+    bump_neighbor_m: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -124,6 +128,7 @@ class AssignmentCfg:
 class PublishCfg:
     fleet_state_hz: float
     tick_hz: float
+    finished_mission_limit: int = 20
 
 
 @dataclass(frozen=True)
@@ -230,7 +235,7 @@ def _load_corridor(data: Mapping) -> CorridorCfg:
     return CorridorCfg(
         polygon=tuple(vertices),
         mouths=points,
-        mode=_text(policy["mode"], "corridor.mode", ("SHARED_YIELD", "EXCLUSIVE")),
+        mode=_text(policy["mode"], "corridor.mode", CORRIDOR_MODES),
         yield_enabled=_value(policy, "yield_enabled", "corridor", bool),
         **_numbers(policy, "corridor", ("yield_trigger_m", "yield_release_m", "yield_timeout_s"), positive=True),
         include_boundary=include_boundary,
@@ -253,7 +258,7 @@ def _load_robot_link(data: Mapping) -> RobotLinkCfg:
                 "hazard_topic", "dock_status_topic"):
         topics[key] = _topic(data, key, "robot_link")
     return RobotLinkCfg(
-        mode=_text(data.get("mode"), "robot_link.mode", ("HOSPITAL_NAV", "ICD_GOAL_POSE")),
+        mode=_text(data.get("mode"), "robot_link.mode", ("HOSPITAL_NAV",)),
         request_id=_text(data.get("request_id"), "robot_link.request_id", ("auto", "always", "never")),
         **topics,
         **_numbers(data, "robot_link", ("accept_timeout_s", "link_timeout_s"), positive=True),
@@ -344,6 +349,9 @@ def config_from_dict(data: Mapping) -> FleetConfig:
                            object_blocks_now=_value(values, "object_blocks_now", "obstacle", bool),
                            min_confidence=threshold, label_ko={_text(k, "obstacle.label_ko"): _text(v, "obstacle.label_ko")
                                for k, v in _mapping(values["label_ko"], "obstacle.label_ko").items()})
+    limit = cfg["publish"].get("finished_mission_limit", PublishCfg.finished_mission_limit)
+    if type(limit) is not int or limit < 0:
+        raise ConfigError("publish.finished_mission_limit: 0 이상의 정수가 필요합니다")
     return FleetConfig(obstacle=obstacle,
         assignment=AssignmentCfg(_text(assignment["mode"], "assignment.mode", ("IDLE_BEST_BATTERY", "ROLE")), minimum),
         mock=MockCfg(**_numbers(mock, "mock", ("speed_mps", "stall_radius_m"), positive=True),
@@ -362,7 +370,9 @@ def config_from_dict(data: Mapping) -> FleetConfig:
             yield_zones=yield_zones,
         ),
         stall=stall,
-        safety=SafetyCfg(tuple(_text(r, "safety.bed_exit_pause_targets", robots) for r in targets), monitor),
+        safety=SafetyCfg(tuple(_text(r, "safety.bed_exit_pause_targets", robots) for r in targets), monitor,
+                         _number(cfg["safety"].get("bump_neighbor_m", SafetyCfg.bump_neighbor_m),
+                                 "safety.bump_neighbor_m", minimum=0)),
         mission=MissionCfg(
             return_home=_value(mission, "return_home", "mission", bool),
             return_interruptible=_value(mission, "return_interruptible", "mission", bool),
@@ -372,7 +382,7 @@ def config_from_dict(data: Mapping) -> FleetConfig:
             confirm_at_stops=_value(cfg["mission"], "confirm_at_stops", "mission", bool),
             return_to_dock=_value(cfg["mission"], "return_to_dock", "mission", bool),
         ),
-        publish=PublishCfg(**_numbers(cfg["publish"], "publish", ("fleet_state_hz", "tick_hz"),
+        publish=PublishCfg(finished_mission_limit=limit, **_numbers(cfg["publish"], "publish", ("fleet_state_hz", "tick_hz"),
                                       positive=True)),
         db_path=expanduser(_text(cfg["db"].get("path"), "db.path")),
     )

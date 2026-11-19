@@ -68,7 +68,7 @@ class DeadlockManager:
 
         def yield_order(option):
             leg, _ = options[option]
-            return leg.level, -leg.since, leg.carrying_patient, leg.robot != "robot_b"
+            return leg.level, -leg.since, leg.carrying_patient, -self.manager.robot_order[leg.robot]
 
         recommended = min(options, key=yield_order)
         self._options = options

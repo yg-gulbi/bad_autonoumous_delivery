@@ -14,7 +14,8 @@ A, B = "robot_a", "robot_b"
 @pytest.fixture
 def sim(cfg, tmp_path):
     # These stage 2 scenarios, including 26, use fixed patient and medication roles.
-    s = Simulation(replace(cfg, assignment=replace(cfg.assignment, mode="ROLE"), db_path=str(tmp_path / "bad.db")))
+    s = Simulation(replace(cfg, corridor=replace(cfg.corridor, mode="SHARED_YIELD"),
+                           assignment=replace(cfg.assignment, mode="ROLE"), db_path=str(tmp_path / "bad.db")))
     yield s
     s.core.store.close()
 
@@ -25,7 +26,7 @@ def commands(out):
 
 @pytest.fixture
 def shared(cfg, tmp_path):
-    s = Simulation(replace(cfg, db_path=str(tmp_path / "pool.db")))
+    s = Simulation(replace(cfg, corridor=replace(cfg.corridor, mode="SHARED_YIELD"), db_path=str(tmp_path / "pool.db")))
     yield s
     s.core.store.close()
 

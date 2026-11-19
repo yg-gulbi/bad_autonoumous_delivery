@@ -139,10 +139,10 @@ def test_aging_and_blocked_resource(cfg, reports, mode):
     manager = ResourceManager(replace(cfg, corridor=replace(cfg.corridor, mode=mode),
                                       resources=replace(cfg.resources, aging_s=1)))
     oldest = manager.request(A, "F", 1, 0)
-    manager.resources["CORRIDOR"].blocked_by = B
+    manager.resources["CORRIDOR"].stall_blockers.add(B)
     assert manager.tick(2, reports).grants == []
     newer = manager.request(B, "D", 3, 2.5)
-    manager.resources["CORRIDOR"].blocked_by = None
+    manager.resources["CORRIDOR"].stall_blockers.discard(B)
     expected = [oldest, newer] if mode == "SHARED_YIELD" else [oldest]
     assert manager.tick(3, reports).grants == expected
 

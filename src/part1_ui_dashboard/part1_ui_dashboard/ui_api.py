@@ -70,13 +70,13 @@ def mission(form):
     return schemas.parse_mission_req(schemas.dumps(data))
 
 
-def command(form):
+def command(form, *, robots=None):
     cmd = form.get("cmd")
     if not isinstance(cmd, str) or cmd not in schemas.COMMAND_FIELDS:
         raise ValueError("관제 명령을 확인하세요.")
     data = {key: form.get(key) for key in schemas.COMMAND_FIELDS[cmd]}
     data.update(v=1, cmd=cmd, cmd_id=request_id(), by=_operator(form))
-    return schemas.parse_operator_cmd(schemas.dumps(data))
+    return schemas.parse_operator_cmd(schemas.dumps(data), robots=robots)
 
 
 def decision(form):
@@ -109,7 +109,7 @@ EVENTS = {
 }
 RULES = {"ONLY": "단독 요청", "LEVEL": "높은 응급도 우선", "REQUEST_TIME": "먼저 요청한 쪽",
          "SUBMIT_ORDER": "먼저 접수한 쪽", "ENTRY_ORDER": "복도에 나중에 들어온 쪽이 양보",
-         "ROBOT_ID": "동점 로봇 식별자 순", "CAPACITY": "자원 정원 도달", "NO_PREEMPT": "이미 허가된 로봇은 회수하지 않음",
+         "ROBOT_ID": "동점 로봇 식별자 순", "CAPACITY": "자원 정원 도달", "DIRECTION": "복도 반대 방향 통행 중", "NO_PREEMPT": "이미 허가된 로봇은 회수하지 않음",
          "BLOCKED": "막힘 해제 대기", "UNKNOWN": "점유 확인 대기"}
 
 

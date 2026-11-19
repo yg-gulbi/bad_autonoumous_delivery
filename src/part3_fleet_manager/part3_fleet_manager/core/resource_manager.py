@@ -32,6 +32,7 @@ class Holding:
     entered_at: float | None = None
     outside_since: float | None = None
     reserved_next: bool = False
+    direction: int = 0  # Signed TOP → BOTTOM at grant time, zero for unknown or transverse travel.
 
     @property
     def state(self):
@@ -45,7 +46,6 @@ class Resource:
     decided_at: float | None = None
     holders: dict[str, Holding] = field(default_factory=dict)
     uncertain: set[str] = field(default_factory=set)
-    blocked_by: str | None = None
     blocked_since: float | None = None
     stall_blockers: set[str] = field(default_factory=set)
 
@@ -95,8 +95,9 @@ class ResourceManager:
     def __init__(self, config: FleetConfig):
         self.config = config
         self.planner = RoutePlanner(config)
+        self.robot_order = {robot: index for index, robot in enumerate(config.robots)}
         self.resources = {name: Resource(1) for name in g.RESOURCES}
-        if config.corridor.mode == "SHARED_YIELD":
+        if config.corridor.mode != "EXCLUSIVE":
             self.resources[g.CORRIDOR].capacity = 2
         self.pending: dict[str, Leg] = {}
         self.active: dict[str, Leg] = {}
@@ -186,6 +187,7 @@ class ResourceManager:
             holding = resource.holders.get(robot)
             if holding:
                 holding.reserved_next = False
+                holding.direction = 0
             if holding and holding.state == "GRANTED" and robot not in resource.uncertain:
                 self._release(name, robot, now, "구간이 끝나 미진입 허가를 반납했습니다.", leg.mission_id)
 
@@ -265,7 +267,7 @@ class ResourceManager:
             if now - holding.outside_since >= policy.clear_hold_s:
                 if holding.reserved_next:
                     # The outgoing leg cleared, but the returning leg already owns this slot.
-                    resource.holders[robot] = Holding()
+                    resource.holders[robot] = Holding(direction=holding.direction)
                     continue
                 leg = self.active.get(robot)
                 self._release(name, robot, now, f"{self.robot_label(robot)} · {self.resource_label(name)} 통과 완료",
@@ -282,7 +284,25 @@ class ResourceManager:
     def needed(self, robot: str) -> tuple[str, ...]:
         return self._needed.get(robot, ())
 
-    def _hold_reason(self, leg, needed, now):
+    def _direction_conflicts(self, leg, needed):
+        if (self.config.corridor.mode != "DIRECTIONAL" or g.CORRIDOR not in needed
+                or not self.eligible(leg.robot)):
+            return []
+        holders = self.resources[g.CORRIDOR].holders
+        origin = self.regions[leg.robot]
+        direction = self._direction(leg, origin)
+        # A pair already physically inside must be able to take escape legs and use rule 11.
+        conflicts = []
+        for other, claim in holders.items():
+            if other == leg.robot or (direction and claim.direction == direction):
+                continue
+            both_inside = origin == self.regions.get(other) == g.CORRIDOR
+            if both_inside and direction and (claim.direction or other not in self.active):
+                continue
+            conflicts.append(other)
+        return conflicts
+
+    def _hold_reason(self, leg, needed, now, conflicts):
         robot = leg.robot
         if not self.eligible(robot):
             return f"{self.robot_label(robot)} — 연결·위치 또는 안전 정지 상태 확인 대기"
@@ -290,8 +310,13 @@ class ResourceManager:
             resource = self.resources[name]
             if resource.state == "UNKNOWN":
                 return f"{self.resource_label(name)} 점유 불명으로 운영자 확인을 기다립니다."
-            if resource.stall_blockers - {robot} or (resource.blocked_by is not None and resource.blocked_by != robot):
+            if resource.stall_blockers - {robot}:
                 return f"{self.resource_label(name)}에 막힘이 보고되어 대기합니다."
+            if name == g.CORRIDOR and conflicts:
+                owners = ", ".join(map(self.robot_label, conflicts))
+                if not self._direction(leg, self.regions[robot]) or any(not resource.holders[r].direction for r in conflicts):
+                    return f"{owners} 복도 사용 중 · 단독 통행 필요 → {self.robot_label(robot)} 대기"
+                return f"{owners} 복도 반대 방향 통행 중 → {self.robot_label(robot)} 복도 밖 대기"
             blockers = resource.blockers(robot)
             if blockers:
                 return f"{self.resource_label(name)} 정원 {resource.capacity}대 사용 중 ({', '.join(map(self.robot_label, blockers))}) — 빈자리 대기"
@@ -316,21 +341,23 @@ class ResourceManager:
         return [{"robot": leg.robot, "level": leg.level, "mission_id": leg.mission_id,
                  "type": leg.mission_type, "requested_at": leg.since} for leg in legs]
 
-    def _basis(self, leg, needed, queue, requirements, prior_holders, now):
+    def _basis(self, leg, needed, queue, requirements, prior_holders, now, conflicts):
         # Capture the limiting resource before mutating any of its reservations.
         name = next((n for n in needed if self.resources[n].state == "UNKNOWN"
-                     or self.resources[n].blocked_by or self.resources[n].stall_blockers
-                     or self.resources[n].blockers(leg.robot)), next(iter(needed), None))
+                     or self.resources[n].stall_blockers - {leg.robot}
+                     or (n == g.CORRIDOR and conflicts) or self.resources[n].blockers(leg.robot)), next(iter(needed), None))
         if name is None:
             return {"rule": "ONLY", "state_before": "FREE", "contenders": self._contenders([leg])}
         resource = self.resources[name]
         rivals = [other for other in queue if name in requirements[other.robot] and self.eligible(other.robot)]
-        prior = [r for r in prior_holders[name] if r in resource.blockers(leg.robot)]
+        prior = [r for r in prior_holders[name] if r in resource.blockers(leg.robot) or (name == g.CORRIDOR and r in conflicts)]
         rivals.extend(self.active[r] for r in prior if r in self.active and self.active[r] not in rivals)
         if resource.uncertain:
             rule = "UNKNOWN"
-        elif resource.blocked_by or resource.stall_blockers:
+        elif resource.stall_blockers - {leg.robot}:
             rule = "BLOCKED"
+        elif name == g.CORRIDOR and conflicts:
+            rule = "DIRECTION"
         elif prior:
             rule = "NO_PREEMPT" if any(r in self.active and leg.level > self.active[r].level for r in prior) else "CAPACITY"
         elif len(rivals) < 2:
@@ -359,8 +386,9 @@ class ResourceManager:
         for leg in queue:
             robot = leg.robot
             needed = requirements[robot]
-            basis = self._basis(leg, needed, queue, requirements, prior_holders, now)
-            reason = self._hold_reason(leg, needed, now)
+            conflicts = self._direction_conflicts(leg, needed)
+            basis = self._basis(leg, needed, queue, requirements, prior_holders, now, conflicts)
+            reason = self._hold_reason(leg, needed, now, conflicts)
             if reason:
                 if self.wait_reasons.get(robot) != reason:
                     self.record("RESOURCE_HOLD", now, reason, robot=robot, mission_id=leg.mission_id,
@@ -370,6 +398,8 @@ class ResourceManager:
             for name in needed:
                 resource = self.resources[name]
                 holding = resource.holders.setdefault(robot, Holding())
+                if name == g.CORRIDOR:
+                    holding.direction = self._direction(leg, self.regions[robot])
                 if holding.state == "OCCUPIED" and self.regions[robot] != name:
                     holding.reserved_next = True
             self._origins[robot] = self.regions[robot]
@@ -398,13 +428,13 @@ class ResourceManager:
         dx, dy = bottom[0] - top[0], bottom[1] - top[1]
         return ((pose[0] - top[0]) * dx + (pose[1] - top[1]) * dy) / dist(top, bottom)
 
-    def _direction(self, leg):
+    def _direction(self, leg, origin):
         destination = g.ZONE_REGIONS[leg.destination]
         if destination == g.TOP:
             return -1
         if destination == g.BOTTOM:
             return 1
-        if self._origins[leg.robot] in g.ROOMS:
+        if origin in g.ROOMS:
             return 0
         mouth = self.config.corridor.mouths[destination]
         delta = self._projection(mouth) - self._projection(self.reports[leg.robot].pose)
@@ -420,24 +450,30 @@ class ResourceManager:
             if corridor.holders[robot].entered_at is not None and self.regions[robot] != g.CORRIDOR:
                 return []  # already outside, waiting for clearance
         first, second = (self.active[r] for r in robots)
+        if self.config.corridor.mode == "DIRECTIONAL" and any(self.regions[r] != g.CORRIDOR for r in robots):
+            return []
         if self._timed_out_pair == frozenset((first, second)):
             return []
         p, q = (self.reports[r].pose for r in robots)
         policy = self.config.corridor
         if dist(p, q) > policy.yield_trigger_m:
             return []
-        direction = self._direction(first)
-        if not direction or direction != -self._direction(second):
+        if policy.mode == "DIRECTIONAL":
+            directions = {r: corridor.holders[r].direction for r in robots}
+        else:
+            directions = {r: self._direction(self.active[r], self._origins[r]) for r in robots}
+        direction = directions[first.robot]
+        if not direction or direction != -directions[second.robot]:
             return []
         if direction * (self._projection(q) - self._projection(p)) <= 0:
             return []
 
         def priority(leg):
             entered = corridor.holders[leg.robot].entered_at
-            return leg.level, -(entered if entered is not None else inf), leg.robot != "robot_b"
+            return leg.level, -(entered if entered is not None else inf), -self.robot_order[leg.robot]
 
         winner, loser = sorted((first, second), key=priority, reverse=True)
-        heading = self._direction(winner)
+        heading = directions[winner.robot]
         progress = heading * self._projection(self.reports[winner.robot].pose)
         self.give_way = GiveWay(loser, winner, now, heading, progress, now)
         labels = self.config.robots
@@ -465,7 +501,7 @@ class ResourceManager:
 
     def _corridor_commands(self, now):
         policy = self.config.corridor
-        if policy.mode != "SHARED_YIELD" or not policy.yield_enabled:
+        if policy.mode == "EXCLUSIVE" or not policy.yield_enabled:
             return []
         corridor = self.resources[g.CORRIDOR]
         action = self.give_way
@@ -527,9 +563,9 @@ class ResourceManager:
         return {
             name: {"state": resource.state, "capacity": resource.capacity, "holders": list(resource.holders),
                    "holder": resource.holder, "give_way": self._give_way_snapshot() if name == g.CORRIDOR else None,
-                   "blocked": bool(resource.stall_blockers) or resource.blocked_by is not None,
+                   "blocked": bool(resource.stall_blockers),
                    "blocked_since": resource.blocked_since,
-                   "blocked_robots": sorted(resource.stall_blockers | ({resource.blocked_by} if resource.blocked_by else set())),
+                   "blocked_robots": sorted(resource.stall_blockers),
                    "reason": resource.reason, "decided_at": resource.decided_at,
                    "queue_detail": [{"robot": leg.robot, "level": leg.level, "mission_id": leg.mission_id, "since": leg.since}
                                     for leg in sorted(self.pending.values(), key=lambda l: (-l.level, l.since))

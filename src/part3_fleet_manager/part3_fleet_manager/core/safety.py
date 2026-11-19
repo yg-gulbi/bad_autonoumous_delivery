@@ -1,6 +1,7 @@
 """Latched stop causes; only explicit operator input releases a safety stop."""
 
 from collections import deque
+from math import dist
 
 
 MONITOR_DENIED = "침상 감시가 끊겨 재개할 수 없습니다. 웹캠을 확인하세요"
@@ -116,6 +117,7 @@ class Safety:
         self.targets = config.safety.bed_exit_pause_targets
         self.monitor = BedMonitor(config.safety.bed_monitor, self.targets, record, decisions)
         self.causes = {r: set() for r in config.robots}
+        self.bump_neighbor_m = config.safety.bump_neighbor_m
         self.bump = dict.fromkeys(config.robots, False)
         self.bed_exit = self.since = None
         self.record = record
@@ -142,15 +144,21 @@ class Safety:
         for robot in active:
             self.protect(robot, stamp)
 
-    def hazards(self, robot, detections, now):
+    def hazards(self, robot, detections, now, poses):
         """Consume normalized hazard names or mappings from the transport adapter."""
         if isinstance(detections, (str, dict)):
             detections = [detections]
         bumped = any((d.get("type") if isinstance(d, dict) else d) == "BUMP" for d in detections)
 
         if bumped and not self.bump[robot]:
-            self.record("BUMP", now, "범퍼 충돌", robot=robot)
-            self.pause(robot, "BUMP", now)
+            origin = poses[robot]
+            targets = [robot]
+            if origin is not None:
+                targets.extend(other for other, pose in poses.items() if other != robot and pose is not None
+                               and dist(origin, pose) <= self.bump_neighbor_m)
+            self.record("BUMP", now, "범퍼 충돌", robot=robot, targets=targets)
+            for target in targets:
+                self.pause(target, "BUMP", now)
         self.bump[robot] = bumped
 
     def resume(self, robots, now, *, individual, by=None):

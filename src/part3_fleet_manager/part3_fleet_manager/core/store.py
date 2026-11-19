@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 import sqlite3
 
+from .config import PublishCfg
+
 
 def stop_item(kind, seq, stop):
     if kind == "PATIENT_TRANSPORT":
@@ -200,11 +202,11 @@ class Store:
         row = self.db.execute("SELECT id FROM missions WHERE req_id=?", (req_id,)).fetchone()
         return row["id"] if row else None
 
-    def recent_finished(self):
+    def recent_finished(self, limit=PublishCfg.finished_mission_limit):
         rows = self.db.execute("""
             SELECT m.*, p.chart_no, p.name FROM missions m LEFT JOIN patients p ON m.patient_id=p.id
             WHERE m.status IN ('DONE','CANCELED') AND m.type IN ('PATIENT_TRANSPORT','CALL','MED_ROUND')
-            ORDER BY finished_at DESC, m.rowid DESC LIMIT 20""")
+            ORDER BY finished_at DESC, m.rowid DESC LIMIT ?""", (limit,))
         result = {}
         for r in reversed(list(rows)):
             stops = json.loads(r["stops_json"])

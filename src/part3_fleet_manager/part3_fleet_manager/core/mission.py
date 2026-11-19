@@ -124,7 +124,7 @@ class MissionManager:
             def rank(robot):
                 link = self.links[robot]
                 return (-link.battery if link.battery is not None else inf,
-                        dist(link.pose, goal) if link.pose is not None else inf, robot != "robot_a", robot)
+                        dist(link.pose, goal) if link.pose is not None else inf, self.resources.robot_order[robot])
 
             robot = min(available, key=rank)
             self.record("MISSION_ASSIGNED", now, "배터리와 첫 정류장 거리로 배정", robot=robot,

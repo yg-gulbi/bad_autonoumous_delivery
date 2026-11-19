@@ -177,3 +177,14 @@ def test_39_per_robot_mock_classifier_control():
         assert topic == "/mock/control" and json.loads(text) == {"robot":robot,"action":"obstacle","kind":kind}
     assert client.post("/api/test/obstacle",json={"robot":"robot_a","kind":"invalid"}).status_code == 400
     assert len(messages) == 2
+
+
+def test_field_commands_and_mock_controls_use_configured_robot_ids():
+    sent = []
+    client = create_app(Feed(), {"robot_names": {"porter": "운반 로봇"}}, lambda *msg: sent.append(msg),
+                        None, dev_tools=True).test_client()
+    for robot, expected in [("robot_a", 400), ("porter", 202)]:
+        assert client.post("/api/command", json={"cmd": "GO_ZONE", "robot": robot, "zone": "D"}).status_code == expected
+        response = client.post("/api/test/stall", json={"robot": robot, "seconds": 1})
+        assert response.status_code == (400 if expected == 400 else 200)
+    assert [json.loads(msg)["robot"] for _, msg in sent] == ["porter", "porter"]

@@ -48,6 +48,7 @@ def test_41_actual_fleet_event_titles_reasons_and_journal(tmp_path,monkeypatch):
     from fleet_simulation import Simulation
 
     cfg = load_config(package / "config/fleet.yaml")
+    cfg = replace(cfg, corridor=replace(cfg.corridor, mode="SHARED_YIELD"))
     events = list(traffic(cfg))
     with ExitStack() as cleanup:
         def simulator():

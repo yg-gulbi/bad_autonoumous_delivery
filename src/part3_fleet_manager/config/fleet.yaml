@@ -8,7 +8,7 @@ assignment:
   min_battery_pct: 20
 
 robot_link:
-  mode: HOSPITAL_NAV            # HOSPITAL_NAV | ICD_GOAL_POSE(자리만)
+  mode: HOSPITAL_NAV
   command_topic: "/{ns}/hospital_nav/command"
   status_topic: "/{ns}/hospital_nav/status"
   amcl_pose_topic: "/{ns}/amcl_pose"
@@ -28,7 +28,7 @@ zones:                          # PART 04 goal_manager.py와 같은 값
   F: {x: -0.80, y: -5.10, name: ""}
 
 corridor:
-  mode: SHARED_YIELD
+  mode: DIRECTIONAL
   yield_enabled: true
   yield_trigger_m: 1.2
   yield_release_m: 0.5
@@ -70,6 +70,7 @@ obstacle:                       # PART 06 장애물 분류 (3.2a·5.5절, 단계
   label_ko: {person: 사람, chair: 의자, suitcase: 가방, backpack: 가방, bottle: 병, bed: 침대, couch: 소파, dining table: 탁자, potted plant: 화분, dog: 개, cat: 고양이}
 
 safety:
+  bump_neighbor_m: 1.0
   bed_monitor:
     warn_s: 1.0
     lost_s: 3.0
@@ -90,6 +91,7 @@ mission:
 publish:
   fleet_state_hz: 5.0
   tick_hz: 10.0
+  finished_mission_limit: 20     # /fleet/state에 포함할 최근 완료·취소 임무 수
 
 db:
   path: ~/.bad/bad.db
