@@ -8,3 +8,6 @@
 
 `80805b4_v1_3/integration/`은 외부 자식 클래스 로딩과 실제 MP4 경로를 검증하고,
 `80805b4_v1_3/integration_benchmark/`는 런타임 로더 기반 벤치마크를 검증한다.
+v1.3.2처럼 공개 계약을 유지하는 patch 변경의 회귀 테스트도 같은 `v1_3` 아래에 추가한다.
+내부 리팩터링 후에도 기존 `integration/`과 `integration_benchmark/` 코드는 수정 없이
+재실행할 수 있어야 한다.

@@ -180,6 +180,25 @@ class BedExitNode(Node):
         except cv2.error:
             self.show = False
 
+    def _log_callback_error(self, message):
+        """로깅 자체의 실패가 타이머 콜백 밖으로 전파되지 않게 한다."""
+        try:
+            self.get_logger().error(message)
+        except Exception:
+            pass
+
+    def _render_preview_safely(self, frame, voted_unsafe):
+        """외부 메서드의 렌더링 실패를 격리하고 프리뷰만 비활성화한다."""
+        render_preview = getattr(self, '_render_preview', None)
+        if not callable(render_preview):
+            return
+        try:
+            render_preview(frame, voted_unsafe)
+        except Exception as exc:
+            self.show = False
+            BedExitNode._log_callback_error(
+                self, f'Preview disabled after rendering failure: {exc}')
+
     def process_frame(self):
         """타이머마다 System Flowchart v5의 Part 5 흐름을 한 번 수행한다."""
         # [PART05-V5: 이미지 캡처] USB 웹캠에서 BGR 프레임 한 장을 읽는다.
@@ -192,7 +211,8 @@ class BedExitNode(Node):
             if not ok or frame is None:
                 raise RuntimeError('Webcam read failed')
         except Exception as exc:
-            self.get_logger().error(f'Webcam read failed; no frame decision published: {exc}')
+            BedExitNode._log_callback_error(
+                self, f'Webcam read failed; no frame decision published: {exc}')
             self.state = BedExitState()
             return
 
@@ -209,19 +229,23 @@ class BedExitNode(Node):
             # 사람·마스크 누락이나 계산 실패는 정상(False)이 아니므로 미발행하고 투표만 초기화한다.
             # 판단 객체 내부의 이전 환자 BBox는 유지해 다음 유효 프레임에서 같은 환자를 연결한다.
             self.state = BedExitState()
-            self.get_logger().error(f'Judgment failed; history reset: {exc}')
-            render_preview = getattr(self, '_render_preview', None)
-            if callable(render_preview):
-                render_preview(frame, None)
+            BedExitNode._log_callback_error(
+                self, f'Judgment failed; history reset: {exc}')
+            BedExitNode._render_preview_safely(self, frame, None)
             return
         # [PART05-V5-10 최종 Bool 발행] 유효한 판정과 투표가 모두 끝난 경우에만 발행한다.
         # 출력 계약: /patient/bed_exit, std_msgs/msg/Bool (True=이탈, False=정상)
-        self.publisher.publish(Bool(data=unsafe))
+        try:
+            self.publisher.publish(Bool(data=unsafe))
+        except Exception as exc:
+            self.state = BedExitState()
+            BedExitNode._log_callback_error(
+                self, f'Publish failed; history reset and no decision published: {exc}')
+            BedExitNode._render_preview_safely(self, frame, None)
+            return
 
         # 프리뷰는 발행 이후 실행하며, 화면 표시 여부가 ROS 결과에 영향을 주지 않게 한다.
-        render_preview = getattr(self, '_render_preview', None)
-        if callable(render_preview):
-            render_preview(frame, unsafe)
+        BedExitNode._render_preview_safely(self, frame, unsafe)
 
     def _release_capture(self):
         """웹캠 핸들과 OpenCV 프리뷰 창을 안전하게 해제한다."""

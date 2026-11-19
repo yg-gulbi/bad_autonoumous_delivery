@@ -145,6 +145,51 @@ def test_process_frame_resets_history_and_skips_publish_on_method_failure():
     assert list(node.state.history) == []
 
 
+def test_process_frame_contains_publish_failure_and_rewarms():
+    frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    errors = []
+    state = BedExitState()
+    state.update(True)
+    node = SimpleNamespace(
+        capture=_Capture(frame),
+        detector=_Method(True),
+        state=state,
+        publisher=SimpleNamespace(
+            publish=lambda message: (_ for _ in ()).throw(RuntimeError('DDS failure'))
+        ),
+        show=False,
+        get_logger=lambda: SimpleNamespace(error=errors.append),
+    )
+
+    bed_exit_node.BedExitNode.process_frame(node)
+
+    assert list(node.state.history) == []
+    assert errors == ['Publish failed; history reset and no decision published: DDS failure']
+
+
+def test_process_frame_contains_preview_failure_after_publish():
+    frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    published = []
+    errors = []
+    node = SimpleNamespace(
+        capture=_Capture(frame),
+        detector=_Method(False),
+        state=BedExitState(),
+        publisher=SimpleNamespace(publish=lambda message: published.append(message.data)),
+        show=True,
+        get_logger=lambda: SimpleNamespace(error=errors.append),
+        _render_preview=lambda current_frame, unsafe: (
+            _ for _ in ()
+        ).throw(RuntimeError('plugin render failure')),
+    )
+
+    bed_exit_node.BedExitNode.process_frame(node)
+
+    assert published == [False]
+    assert node.show is False
+    assert errors == ['Preview disabled after rendering failure: plugin render failure']
+
+
 def test_release_and_close_helpers_release_injected_resources():
     capture = _Capture()
     detector = _Method()

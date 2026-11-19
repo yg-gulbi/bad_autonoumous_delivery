@@ -57,29 +57,64 @@ class Mp4RosReplayNode(Node):
 
     def process_frame(self):
         """영상 프레임 하나를 판단·투표해 유효한 결과만 발행한다."""
-        ok, frame = self.capture.read()
+        try:
+            ok, frame = self.capture.read()
+        except Exception as exc:
+            self.state = BedExitState()
+            Mp4RosReplayNode._log_callback(
+                self, 'error', f'MP4 read failed; history reset: {exc}')
+            return
         if not ok or frame is None:
             # EOF must never be converted into a fabricated SAFE publication.
             self.state = BedExitState()
             self.finished = True
-            self.timer.cancel()
-            self.get_logger().info('MP4 replay complete; no EOF decision published')
+            try:
+                self.timer.cancel()
+            except Exception as exc:
+                Mp4RosReplayNode._log_callback(
+                    self, 'error', f'Failed to cancel completed replay timer: {exc}')
+            Mp4RosReplayNode._log_callback(
+                self, 'info', 'MP4 replay complete; no EOF decision published')
             return
 
         try:
             unsafe = self.state.update(self.detector.judge(frame))
         except Exception as exc:
             self.state = BedExitState()
-            self.get_logger().error(f'Judgment failed; history reset: {exc}')
-            render = getattr(self, '_render_preview', None)
-            if callable(render):
-                render(frame, None, str(exc))
+            Mp4RosReplayNode._log_callback(
+                self, 'error', f'Judgment failed; history reset: {exc}')
+            Mp4RosReplayNode._render_preview_safely(self, frame, None, str(exc))
             return
 
-        self.publisher.publish(Bool(data=unsafe))
+        try:
+            self.publisher.publish(Bool(data=unsafe))
+        except Exception as exc:
+            self.state = BedExitState()
+            Mp4RosReplayNode._log_callback(
+                self, 'error', f'Publish failed; history reset: {exc}')
+            Mp4RosReplayNode._render_preview_safely(
+                self, frame, None, f'publish failed: {exc}')
+            return
+        Mp4RosReplayNode._render_preview_safely(self, frame, unsafe, 'ok')
+
+    def _log_callback(self, level, message):
+        """ROS 로깅 실패가 재생 콜백을 중단하지 않도록 격리한다."""
+        try:
+            getattr(self.get_logger(), level)(message)
+        except Exception:
+            pass
+
+    def _render_preview_safely(self, frame, unsafe, reason):
+        """프리뷰 구현의 모든 예외를 격리하고 화면 출력만 중단한다."""
         render = getattr(self, '_render_preview', None)
-        if callable(render):
-            render(frame, unsafe, 'ok')
+        if not callable(render):
+            return
+        try:
+            render(frame, unsafe, reason)
+        except Exception as exc:
+            self.show = False
+            Mp4RosReplayNode._log_callback(
+                self, 'error', f'Preview disabled after rendering failure: {exc}')
 
     def _render_preview(self, frame, unsafe, reason):
         """판단 불가 프레임을 포함해 재생 상태를 화면에 계속 표시한다."""
