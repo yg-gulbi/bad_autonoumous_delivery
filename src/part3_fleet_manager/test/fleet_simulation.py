@@ -1,0 +1,98 @@
+"""Drive the real fleet tick with simulated ROS inputs and validate every wire payload."""
+import json
+from dataclasses import replace
+
+from part3_fleet_manager.core import schemas
+from part3_fleet_manager.core.fleet_core import FleetCore
+
+
+class Simulation:
+    def __init__(self, cfg, *, require_at_start=False):
+        # The simulator normally runs without a webcam, just like fleet_mock.launch.py.
+        monitor = replace(cfg.safety.bed_monitor, require_at_start=require_at_start)
+        cfg = replace(cfg, safety=replace(cfg.safety, bed_monitor=monitor))
+        self.cfg = cfg
+        self.core = FleetCore(cfg)
+        self.pending = []
+        self.seq = 0
+        self.frames = {r: {"type": "STATE", "robot_id": c.ns, "state": "IDLE", "mission_id": None,
+                           "pose": self.pose(c.start_zone), "percent": 0}
+                       for r, c in cfg.robots.items()}
+        self.ids = {}
+        self.last = {}
+        self.now = 0
+
+    def pose(self, zone):
+        xy = self.cfg.zones[zone] if isinstance(zone, str) else zone
+        return dict(zip(("x", "y"), xy))
+
+    def tick(self, now):
+        self.now = now
+        for r, frame in self.frames.items():
+            self.core.enqueue("status", json.dumps(frame), now, robot=r)
+        for topic, payload, robot in self.pending:
+            self.core.enqueue(topic, payload, now, robot=robot)
+        self.pending.clear()
+        out = self.core.tick(now)
+        for c in out.commands:
+            if c.command.startswith("MOVE "):
+                self.last[c.robot] = c.command
+        for ack in out.acks:
+            schemas.parse_ack(schemas.dumps(ack))
+            if ack["mission_id"]:
+                self.ids[ack["ref"]] = ack["mission_id"]
+        if out.state:
+            schemas.parse_fleet_state(schemas.dumps(out.state))
+        for card in out.cards:
+            schemas.parse_decision_req(schemas.dumps(card))
+        for e in out.events:
+            schemas.parse_event(schemas.dumps(e))
+        return out
+
+    def patient(self, ref="p", pickup="A", dest="C", level=2):
+        self.pending.append(("/ui/mission_req", json.dumps({
+            "v": 1, "req_id": ref, "type": "PATIENT_TRANSPORT", "pickup": pickup, "destination": dest,
+            "level": level, "patient": {"name": "테스트", "chart_no": "TEST"}, "requested_by": "nurse"}), None))
+
+    def call(self, ref, zone="A", level=1):
+        self.pending.append(("/ui/mission_req", json.dumps({
+            "v": 1, "req_id": ref, "type": "CALL", "level": level, "destination": zone,
+            "requested_by": "nurse"}), None))
+
+    def battery(self, robot, pct):
+        self.pending.append(("battery", pct, robot))
+
+    def med(self, ref="m", stops=("F", "E", "B"), level=3):
+        self.pending.append(("/ui/mission_req", json.dumps({
+            "v": 1, "req_id": ref, "type": "MED_ROUND", "level": level,
+            "stops": [{"zone": z, "item": "테스트 물품"} for z in stops], "requested_by": "nurse"}), None))
+
+    def cmd(self, name, **fields):
+        self.seq += 1
+        self.pending.append(("/ui/operator_cmd", json.dumps({
+            "v": 1, "cmd": name, "cmd_id": f"c-{self.seq}", "by": "nurse", **fields}), None))
+
+    def choose(self, card, choice):
+        self.pending.append(("/ui/decision", json.dumps({"v": 1, "card_id": card["card_id"],
+                                                        "by": "nurse", "choice": choice}), None))
+
+    def event(self, robot, name, **fields):
+        f = self.frames[robot]
+        if name == "MISSION_ACCEPTED":
+            _, zone, _, tag = self.last[robot].split()
+            f.update(mission_id=tag[3:], destination=zone, state="MOVING", percent=0)
+            fields.update(destination=zone)
+        if name == "ARRIVED":
+            fields.update(destination=f["destination"], pose=self.pose(f["destination"]))
+            f.update(state="COMPLETE", pose=fields["pose"], percent=100)
+        if name in ("PAUSED", "RESUMED", "MISSION_FAILED", "MISSION_CANCELED"):
+            f["state"] = {"PAUSED": "PAUSED", "RESUMED": "MOVING", "MISSION_FAILED": "FAILED",
+                          "MISSION_CANCELED": "CANCELED"}[name]
+        self.pending.append(("status", json.dumps({"type": "STATUS", "event": name, "robot_id": f["robot_id"],
+                                                  "mission_id": f["mission_id"], **fields}), robot))
+
+    def confirm(self, r, ref, result="OK"):
+        self.cmd("CONFIRM_STEP", robot=r, mission_id=self.ids[ref], result=result)
+
+    def state(self, robot):
+        return self.core.snapshot(self.now)["robots"][robot]["state"]

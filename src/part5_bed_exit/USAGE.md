@@ -75,7 +75,22 @@ ros2 daemon start
 ros2 topic echo /patient/bed_exit
 ```
 
-실행 옵션 예시:
+### 영상 파일(`.mp4`)로 ROS 2 노드 실행하기
+웹캠 대신 녹화한 영상 파일을 넣어도 동일하게 화면 표시 + `/patient/bed_exit` 토픽 발행이 동작합니다(기본값으로 영상 끝에서 자동 반복 재생).
+
+```bash
+# 방법 1: 뒤에 영상 파일 경로 바로 전달
+ros2 run part5_bed_exit bed_exit test_bed.mp4
+
+# 방법 2: ROS 파라미터로 전달 (1회 재생 후 멈추려면 -p loop_video:=false 추가)
+ros2 run part5_bed_exit bed_exit --ros-args -p video_path:=test_bed.mp4
+```
+
+### 자주 쓰는 실행 옵션 (필요할 때만 추가)
+```bash
+# 카메라 번호 직접 지정(예: 0번 내장캠) 또는 프리뷰 창 끄기
+ros2 run part5_bed_exit bed_exit --ros-args -p camera_index:=0 -p show:=false
+```
 
 ```bash
 # 카메라 번호 직접 지정 및 프리뷰 비활성화
@@ -101,12 +116,12 @@ export BED_EXIT_DEVICE=cpu       # 또는 cuda:0
 
 ## ROS 2 없이 비교·시험
 
-### MP4 우회 입력 테스트 (웹캠 ROS 노드와 분리)
+### 운영 노드와 분리한 MP4 비교 테스트
 
-`bed_exit` ROS 노드는 USB 웹캠만 사용한다. MP4 입력은 별도 테스트 코드
+운영 `bed_exit` 노드도 `video_path`를 지원하지만, 모델별 비교 결과가 필요할 때는
 `research/evaluation/video_comparison.py`가 파일을 직접 디코딩해 같은
-`judge(frame)` 판정과 5프레임 3회 다수결을 적용한다. 이 실행에서는
-`cv2.VideoCapture(camera_index)`를 호출하지 않으므로 웹캠을 열지 않는다.
+`judge(frame)` 판정과 5프레임 3회 다수결을 적용한다. 이 비교 도구는 운영 ROS 토픽을
+발행하지 않고 CSV와 비교 영상을 생성한다.
 
 Segmentation 하나만 시험:
 

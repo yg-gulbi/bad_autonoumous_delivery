@@ -88,6 +88,28 @@ def test_init_passes_method_parameters_to_loader(monkeypatch):
         _stop_ros()
 
 
+def test_init_uses_main_video_path_without_removing_dynamic_method(monkeypatch):
+    capture = _Capture()
+    opened_sources = []
+    monkeypatch.setattr(
+        bed_exit_node.cv2,
+        'VideoCapture',
+        lambda source: opened_sources.append(source) or capture,
+    )
+    _start_ros(['--ros-args', '-p', 'show:=false'])
+    node = None
+    try:
+        node = bed_exit_node.BedExitNode(
+            detector=_Method(), video_path='sample.mp4')
+        assert opened_sources == ['sample.mp4']
+        assert node.is_video_file is True
+        assert node.loop_video is True
+    finally:
+        if node is not None:
+            node.destroy_node()
+        _stop_ros()
+
+
 def test_process_frame_publishes_five_frame_vote():
     frame = np.zeros((8, 8, 3), dtype=np.uint8)
     published = []
@@ -122,6 +144,66 @@ def test_process_frame_resets_history_and_skips_publish_on_camera_failure():
 
     assert published == []
     assert list(node.state.history) == []
+
+
+def test_process_frame_restarts_looping_video_and_resets_detector():
+    frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    reads = iter(((False, None), (True, frame)))
+    seek_calls = []
+    reset_calls = []
+    published = []
+    capture = SimpleNamespace(
+        read=lambda: next(reads),
+        set=lambda prop, value: seek_calls.append((prop, value)) or True,
+    )
+    detector = SimpleNamespace(
+        judge=lambda current_frame: False,
+        reset=lambda: reset_calls.append(True),
+    )
+    state = BedExitState()
+    state.update(True)
+    node = SimpleNamespace(
+        capture=capture,
+        detector=detector,
+        state=state,
+        publisher=SimpleNamespace(publish=lambda message: published.append(message.data)),
+        is_video_file=True,
+        loop_video=True,
+        get_logger=lambda: SimpleNamespace(error=lambda message: None),
+    )
+
+    bed_exit_node.BedExitNode.process_frame(node)
+
+    assert seek_calls == [(bed_exit_node.cv2.CAP_PROP_POS_FRAMES, 0)]
+    assert reset_calls == [True]
+    assert published == [False]
+    assert list(node.state.history) == [False]
+
+
+def test_process_frame_contains_video_loop_restart_exception():
+    errors = []
+    state = BedExitState()
+    state.update(True)
+    capture = SimpleNamespace(
+        read=lambda: (False, None),
+        set=lambda prop, value: (_ for _ in ()).throw(RuntimeError('seek failed')),
+    )
+    node = SimpleNamespace(
+        capture=capture,
+        detector=_Method(True),
+        state=state,
+        publisher=SimpleNamespace(publish=lambda message: None),
+        is_video_file=True,
+        loop_video=True,
+        get_logger=lambda: SimpleNamespace(error=errors.append),
+    )
+
+    bed_exit_node.BedExitNode.process_frame(node)
+
+    assert list(node.state.history) == []
+    assert errors == [
+        'Video loop restart failed; no frame decision published: seek failed'
+    ]
 
 
 def test_process_frame_resets_history_and_skips_publish_on_method_failure():

@@ -2,12 +2,19 @@
 <package format="3">
   <name>part1_ui_dashboard</name>
   <version>0.1.0</version>
-  <description>PART 01 control room UI and rosbridge interface package (skeleton).</description>
+  <description>PART 01 control room UI and fleet operations dashboard.</description>
   <maintainer email="maintainer@example.com">Project contributors</maintainer>
   <license>UNLICENSED</license>
   <buildtool_depend>ament_python</buildtool_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>std_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>part3_fleet_manager</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ros2launch</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>python3-flask</exec_depend>
   <test_depend>python3-pytest</test_depend>
   <export><build_type>ament_python</build_type></export>
 </package>

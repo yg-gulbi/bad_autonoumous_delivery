@@ -1,0 +1,100 @@
+robots:
+  robot_a: {label: "Robot A", ns: robot2, role: PATIENT_TRANSPORT, start_zone: D}   # ns 확정 필요
+  robot_b: {label: "Robot B", ns: robot3, role: MED_ROUND,         start_zone: F}
+type_to_robot: {PATIENT_TRANSPORT: robot_a, MED_ROUND: robot_b, CALL: robot_b}
+
+assignment:
+  mode: IDLE_BEST_BATTERY
+  min_battery_pct: 20
+
+robot_link:
+  mode: HOSPITAL_NAV            # HOSPITAL_NAV | ICD_GOAL_POSE(자리만)
+  command_topic: "/{ns}/hospital_nav/command"
+  status_topic: "/{ns}/hospital_nav/status"
+  amcl_pose_topic: "/{ns}/amcl_pose"
+  battery_topic: "/{ns}/battery_state"
+  hazard_topic: "/{ns}/hazard_detection"
+  dock_status_topic: "/{ns}/dock_status"
+  request_id: auto              # auto | always | never (3.3절 R1 표)
+  accept_timeout_s: 3.0
+  link_timeout_s: 3.0           # STATE가 1 Hz라서 3초
+
+zones:                          # PART 04 goal_manager.py와 같은 값
+  A: {x: -2.20, y:  0.50, name: ""}
+  B: {x: -2.55, y: -2.20, name: ""}
+  C: {x: -2.30, y: -5.00, name: ""}
+  D: {x: -0.60, y:  0.40, name: ""}
+  E: {x: -0.55, y: -2.40, name: ""}
+  F: {x: -0.80, y: -5.10, name: ""}
+
+corridor:
+  mode: SHARED_YIELD
+  yield_enabled: true
+  yield_trigger_m: 1.2
+  yield_release_m: 0.5
+  yield_timeout_s: 10.0
+  include_boundary: true        # 통로 경계의 위치도 통로로 판정
+  polygon: [[-1.89, -0.51], [-1.00, -0.58], [-1.26, -4.23], [-2.16, -4.17]]   # [TL, TR, BR, BL]. 단계 3D-2: 맵의 통로 벽 안쪽 면에 맞춤 (폭 0.90 m)
+  # 이전 값(손으로 잡음, 벽보다 약 1.3° 틀어짐): [[-1.79, -0.50], [-0.95, -0.60], [-1.24, -4.25], [-2.19, -4.15]]
+  mouths:                       # mock 경로용 입구·문 중심점
+    TOP:    {x: -1.37, y: -0.55}
+    BOTTOM: {x: -1.72, y: -4.20}
+    ROOM_B: {x: -1.96, y: -2.10}
+    ROOM_E: {x: -1.08, y: -2.25}
+
+resources:
+  clear_margin_m: 0.20
+  clear_hold_s: 1.0
+  decision_window_s: 1.0
+  aging_s: 0                    # 0 = 끔
+
+deadlock:
+  confirm_s: 2.0
+  card_timeout_s: 20
+  yield_zones: {ROOM_B: D, ROOM_E: F}
+
+stall:
+  window_s: 5.0
+  move_m: 0.05
+  short_s: 10.0
+  long_s: 30.0
+
+obstacle:                       # PART 06 장애물 분류 (3.2a·5.5절, 단계 3O)
+  enabled: true
+  inspect_topic: "/{ns}/obstacle/inspect_image"
+  result_topic: "/{ns}/obstacle_classifier/result"
+  inspect_at_s: 10.0
+  timeout_s: 6.0                # PART 06 촬영 제한 3초 + 추론 여유
+  object_blocks_now: true       # OBJECT면 30초를 기다리지 않고 바로 막힘 처리
+  min_confidence: 0.4           # 이보다 낮은 탐지는 종류 판단에서 뺀다 (기록에는 남김)
+  label_ko: {person: 사람, chair: 의자, suitcase: 가방, backpack: 가방, bottle: 병, bed: 침대, couch: 소파, dining table: 탁자, potted plant: 화분, dog: 개, cat: 고양이}
+
+safety:
+  bed_monitor:
+    warn_s: 1.0
+    lost_s: 3.0
+    recover_s: 2.0
+    min_rate_hz: 10.0
+    require_at_start: true
+  bed_exit_pause_targets: [robot_a]   # 팀 확정 필요: [robot_a] 또는 [robot_a, robot_b]
+
+mission:
+  return_home: true
+  return_interruptible: true
+  return_level: 1               # 완료한 임무의 응급도를 홈 복귀에 상속하지 않음
+  manual_level: 1               # GO_ZONE에는 UI가 level을 보내지 않음
+  retry_after_return: false     # 이전 구역으로 되돌아간 뒤 원래 구간은 운영자가 재시도
+  confirm_at_stops: true
+  return_to_dock: false
+
+publish:
+  fleet_state_hz: 5.0
+  tick_hz: 10.0
+
+db:
+  path: ~/.bad/bad.db
+
+mock:
+  speed_mps: 0.2
+  stall_radius_m: 0.05          # 시험 장애물 좌표와 mock 이동 선분 사이의 허용 거리
+  supports_request_id: true     # 로봇별 launch 인자로 R1 반영 전후를 섞어 시험 가능

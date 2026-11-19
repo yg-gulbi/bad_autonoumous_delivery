@@ -1,7 +1,7 @@
-"""웹캠 입력부터 ROS 토픽 발행까지 운영 파이프라인을 총괄하는 파일.
+"""웹캠·MP4 입력부터 ROS 토픽 발행까지 운영 파이프라인을 총괄하는 파일.
 
 주요 역할:
-- OpenCV로 웹캠의 BGR 프레임을 주기적으로 읽는다.
+- OpenCV로 웹캠 또는 MP4의 BGR 프레임을 주기적으로 읽는다.
 - 설정에서 선택한 판단 객체의 ``judge(frame)``에 프레임을 전달한다.
 - 프레임별 판단을 ``BedExitState``의 5프레임 다수결에 넣는다.
 - 최종 ``bool``을 ``/patient/bed_exit`` 토픽으로 발행한다.
@@ -39,7 +39,7 @@ WINDOW_TITLE = 'Part 5 Bed Exit (/patient/bed_exit)'
 
 # [PART05-V5 노드 정보]
 # 노드 이름: bed_exit
-# 입력: camera_index로 지정한 USB 웹캠의 OpenCV BGR 프레임
+# 입력: camera_index로 지정한 USB 웹캠 또는 video_path의 MP4 BGR 프레임
 # 설정: method의 내장 이름 또는 module:ClassOrObject, method_config의 내장 모델 설정
 # 처리: 동적으로 선택한 판단 메서드 → 최근 5프레임 중 3회 이상 이탈 다수결
 # 출력: output_topic의 std_msgs/msg/Bool (True=침대 이탈, False=정상)
@@ -47,7 +47,7 @@ WINDOW_TITLE = 'Part 5 Bed Exit (/patient/bed_exit)'
 # 실패 정책: 카메라·추론 실패 시 투표 이력을 초기화하고 해당 프레임은 발행하지 않음
 # 선택 기능: show=True이면 ROI·마스크·투표 상태를 OpenCV 창으로 표시
 class BedExitNode(Node):
-    """웹캠 영상으로 침대 이탈을 판단하여 ROS 2 Bool 토픽으로 발행하는 노드.
+    """웹캠·MP4 영상으로 침대 이탈을 판단하여 ROS 2 Bool 토픽으로 발행하는 노드.
 
     이 클래스는 모델의 세부 추론을 직접 구현하지 않는다. 웹캠 프레임을
     ``detector.judge(frame)``에 전달하고, 반환된 프레임별 판단을
@@ -57,11 +57,12 @@ class BedExitNode(Node):
     ``method``의 동적 대상 또는 ``method_config``의 내장 방식을 읽어 판단 객체를 생성한다.
     """
 
-    def __init__(self, detector=None):
+    def __init__(self, detector=None, video_path: str | None = None):
         """ROS 파라미터·판단 객체·카메라·발행자·주기 타이머를 초기화한다.
 
         ``detector``를 전달하면 테스트 대역을 사용하고, 전달하지 않으면 검수된
-        ``method``와 ``method_config``로 선택된 판단 객체를 생성한다.
+        ``method``와 ``method_config``로 선택된 판단 객체를 생성한다. ``video_path``가
+        있으면 웹캠 대신 MP4 파일을 입력으로 사용한다.
         """
         # [PART05-V5-02 노드 초기화]
         # 이전: setup.py:entry_points → bed_exit_node.main()
@@ -71,6 +72,8 @@ class BedExitNode(Node):
         self.capture = None
         self.detector = None
         self.show = False
+        self.is_video_file = False
+        self.loop_video = True
 
         # method(str, 기본값=''): 빈 값이면 method_config JSON의 method를 사용한다.
         # 내장 이름 또는 package.module:ClassOrObject 형식으로 실행 구현을 선택할 수 있다.
@@ -82,6 +85,10 @@ class BedExitNode(Node):
         self.declare_parameter('output_topic', '/patient/bed_exit')
         # camera_index(int, 기본값=0): OpenCV VideoCapture가 열 USB 카메라 장치 번호.
         self.declare_parameter('camera_index', 0)
+        # video_path(str, 기본값=''): 값이 있으면 웹캠 대신 해당 MP4를 입력으로 사용한다.
+        self.declare_parameter('video_path', '' if video_path is None else str(video_path))
+        # loop_video(bool, 기본값=True): MP4 EOF에서 프레임과 판단 객체 상태를 초기화한다.
+        self.declare_parameter('loop_video', True)
         # capture_fps(float, 기본값=30.0): process_frame() 호출을 시도하는 초당 타이머 횟수.
         # 실제 처리 FPS는 카메라 읽기와 모델 추론 시간보다 빨라질 수 없다.
         self.declare_parameter('capture_fps', 30.0)
@@ -97,6 +104,9 @@ class BedExitNode(Node):
         topic = self.get_parameter('output_topic').value
         # camera_index 값을 읽어 cv2.VideoCapture()에 전달한다.
         camera_index = self.get_parameter('camera_index').value
+        # video_path와 loop_video 값을 읽어 웹캠/영상 입력 및 EOF 정책을 선택한다.
+        resolved_video = str(self.get_parameter('video_path').value).strip()
+        self.loop_video = bool(self.get_parameter('loop_video').value)
         # capture_fps 값을 읽어 타이머 주기 1.0 / fps를 계산한다.
         fps = self.get_parameter('capture_fps').value
         # show 값을 명시적으로 bool로 변환해 프리뷰 분기 조건으로 사용한다.
@@ -118,17 +128,23 @@ class BedExitNode(Node):
         else:
             self.detector = validate_bed_exit_method(detector)
 
-        # detector 생성 이후 카메라/타이머 초기화에 실패하면 확보한 리소스를 즉시 정리한다.
+        # detector 생성 이후 카메라/영상·타이머 초기화에 실패하면 확보한 리소스를 즉시 정리한다.
         try:
             self.state = BedExitState()
             self.publisher = self.create_publisher(Bool, topic, 10)
-            # 순서도 실행 전 준비: 지정한 USB 웹캠 장치를 한 번 연다.
-            self.capture = cv2.VideoCapture(camera_index)
+            self.is_video_file = bool(resolved_video)
+            source = resolved_video if self.is_video_file else camera_index
+            source_desc = (
+                f'video_path={resolved_video}'
+                if self.is_video_file
+                else f'camera_index={camera_index}'
+            )
+            self.capture = cv2.VideoCapture(source)
             if not self.capture.isOpened():
-                raise RuntimeError(f'Cannot open webcam (camera_index={camera_index})')
+                raise RuntimeError(f'Cannot open video source ({source_desc})')
             self.timer = self.create_timer(1.0 / fps, self.process_frame)
             self.get_logger().info(
-                f'BedExitNode started: camera_index={camera_index}, topic={topic}, '
+                f'BedExitNode started: {source_desc}, topic={topic}, '
                 f'method={type(self.detector).__name__}, show={self.show}'
             )
         except Exception:
@@ -205,15 +221,45 @@ class BedExitNode(Node):
         # 이전: BedExitNode.__init__()의 create_timer(..., self.process_frame)
         # 다음: bed_exit_core.BedExitMethod.judge(frame)
         # 프레임 수신 실패 시 거짓 정상(False) 발행을 막기 위해 이력을 초기화하고 발행을 건너뛴다.
-        # 유효한 카메라 프레임만 판단 단계로 넘긴다.
+        # 유효한 카메라·영상 프레임만 판단 단계로 넘긴다.
         try:
             ok, frame = self.capture.read()
-            if not ok or frame is None:
-                raise RuntimeError('Webcam read failed')
         except Exception as exc:
             BedExitNode._log_callback_error(
-                self, f'Webcam read failed; no frame decision published: {exc}')
+                self, f'Video source read failed; no frame decision published: {exc}')
             self.state = BedExitState()
+            return
+
+        is_video_file = bool(getattr(self, 'is_video_file', False))
+        loop_video = bool(getattr(self, 'loop_video', False))
+        if (not ok or frame is None) and is_video_file and loop_video:
+            self.state = BedExitState()
+            try:
+                self.capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                reset = getattr(self.detector, 'reset', None)
+                if callable(reset):
+                    reset()
+                ok, frame = self.capture.read()
+            except Exception as exc:
+                BedExitNode._log_callback_error(
+                    self, f'Video loop restart failed; no frame decision published: {exc}')
+                return
+
+        if not ok or frame is None:
+            self.state = BedExitState()
+            if is_video_file:
+                try:
+                    self.timer.cancel()
+                except Exception as exc:
+                    BedExitNode._log_callback_error(
+                        self, f'Failed to stop completed video timer: {exc}')
+                try:
+                    self.get_logger().info('Video playback finished; stopping timer')
+                except Exception:
+                    pass
+            else:
+                BedExitNode._log_callback_error(
+                    self, 'Webcam read failed; no frame decision published')
             return
 
         # [PART05-V5-06~08 사람 인식 → 단일 환자 선정 → 환자 마스크 ROI 판정]
@@ -281,10 +327,12 @@ def main(args=None):
     # 다음: BedExitNode.__init__() → BedExitNode.process_frame()
     # ROS 컨텍스트를 초기화한 뒤 노드를 생성하며, 생성 실패에 대비해 초기값은 None으로 둔다.
     rclpy.init(args=args)
+    cli_args = rclpy.utilities.remove_ros_args(args=args)[1:]
+    cli_video = cli_args[0] if cli_args else None
     node = None
     try:
         # executor가 타이머 콜백 ``process_frame``을 반복 호출하도록 블로킹 실행한다.
-        node = BedExitNode()
+        node = BedExitNode(video_path=cli_video)
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass

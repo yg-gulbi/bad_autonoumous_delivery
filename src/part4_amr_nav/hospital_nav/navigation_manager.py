@@ -1,23 +1,18 @@
-"""Reusable, non-blocking Nav2 NavigateToPose client for one TurtleBot4.
+"""Non-blocking Nav2 NavigateToPose client for one TurtleBot4.
 
-The keyboard UI is intentionally kept outside this module so a ROS 2 command
-subscriber (the future traffic-control team interface) can call send_room().
-
-No traffic-priority, room-lock, or corridor-permission logic is implemented here.
-Do not use this test client to send multiple robots into the shared corridor.
+MissionManager sends the goal and reads remaining() to report progress.
 """
 from __future__ import annotations
 
 import math
 import threading
-import time
 
 from action_msgs.msg import GoalStatus
 from nav2_msgs.action import NavigateToPose
 from rclpy.action import ActionClient
 from rclpy.node import Node
 
-from .goal_manager import get_goal
+from .goal_manager import GoalPoint
 
 
 class NavigationManager(Node):
@@ -34,22 +29,26 @@ class NavigationManager(Node):
         self._cancel_requested = False
         self._finished = threading.Event()
         self._finished.set()
-        self._last_feedback_at = 0.0
+        self._remaining: float | None = None  # latest Nav2 distance_remaining
 
     def status(self) -> tuple[str, str | None]:
         with self._lock:
             return self._state, self._room
 
+    def remaining(self) -> float | None:
+        """Latest path distance left to the goal (m), None before first feedback."""
+        with self._lock:
+            return self._remaining
+
     def is_busy(self) -> bool:
         with self._lock:
             return self._state in self._BUSY
 
-    def send_room(self, room: str) -> bool:
-        """Submit a room goal. Returns False if busy, invalid, or Nav2 unavailable."""
-        try:
-            destination = get_goal(room)
-        except ValueError as exc:
-            self.get_logger().error(str(exc))
+    def send_pose(self, destination: GoalPoint, label: str = "WAYPOINT") -> bool:
+        """Start one Nav2 action (non-blocking)."""
+        if not all(math.isfinite(v) for v in
+                   (destination.x, destination.y, destination.yaw_deg)):
+            self.get_logger().error("잘못된 Goal 좌표")
             return False
 
         with self._lock:
@@ -59,15 +58,16 @@ class NavigationManager(Node):
                 )
                 return False
             self._state = "SENDING"
-            self._room = room.strip().upper()
+            self._room = label
             self._handle = None
             self._cancel_requested = False
+            self._remaining = None
             self._finished.clear()
 
         if not self._client.wait_for_server(timeout_sec=5.0):
             self.get_logger().error(
                 "Nav2 액션 서버를 찾지 못했습니다. "
-                "ros2 action list -t 에서 /robot3/navigate_to_pose를 확인하세요."
+                "ros2 action info /<namespace>/navigate_to_pose 를 확인하세요."
             )
             self._finish("SERVER_UNAVAILABLE")
             return False
@@ -145,16 +145,9 @@ class NavigationManager(Node):
             self._finish("FAILED")
 
     def _feedback_callback(self, feedback_msg) -> None:
-        now = time.monotonic()
         with self._lock:
-            if now - self._last_feedback_at < 2.0 or self._state != "MOVING":
-                return
-            self._last_feedback_at = now
-            room = self._room
-        feedback = feedback_msg.feedback
-        self.get_logger().info(
-            f"[MOVING] {room} 남은 거리 약 {feedback.distance_remaining:.2f} m"
-        )
+            if self._state == "MOVING":
+                self._remaining = float(feedback_msg.feedback.distance_remaining)
 
     def _request_cancel(self, handle) -> None:
         try:

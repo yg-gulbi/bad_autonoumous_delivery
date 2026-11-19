@@ -6,8 +6,9 @@
 
 ## 실행 구조
 
-운영 노드는 `BedExitNode`가 카메라 입력, 판단 메서드, 5프레임 다수결과 ROS 발행을
-연결한다. `method` ROS 파라미터에는 내장 방식 이름 또는
+운영 노드는 `BedExitNode`가 웹캠·MP4 입력, 판단 메서드, 5프레임 다수결과 ROS 발행을
+연결한다. `video_path`가 비어 있으면 `camera_index`의 웹캠을 사용하고, 값이 있으면
+해당 MP4를 사용한다. `method` ROS 파라미터에는 내장 방식 이름 또는
 `package.module:ClassOrObject` 형식의 외부 모듈을 지정할 수 있다. 내장 방식은
 `method_config` JSON에서 ROI, 모델 경로와 실행 장치를 읽는다.
 
