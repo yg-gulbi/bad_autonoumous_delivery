@@ -80,7 +80,7 @@ unset ROS_DISCOVERY_SERVER ROS_SUPER_CLIENT
 ## ROS 파라미터
 
 ROS 파라미터는 노드를 다시 빌드하지 않고 실행 구성을 전달하는 값이다. PART 05는 아래
-7개 값을 노드 시작 시 한 번 읽는다. 현재 구현은 실행 중 `ros2 param set`으로 값을
+8개 값을 노드 시작 시 한 번 읽는다. 현재 구현은 실행 중 `ros2 param set`으로 값을
 바꿔도 카메라나 판단 객체를 다시 생성하지 않으므로, 변경 후 노드를 재시작해야 한다.
 
 | 파라미터 | 형식 | 기본값 | 필수 여부 | 용도 |
@@ -89,6 +89,7 @@ ROS 파라미터는 노드를 다시 빌드하지 않고 실행 구성을 전달
 | `method_config` | 문자열 | `""` | 내장 모델 사용 시 필수 | ROI·모델 경로·장치가 든 JSON 경로 |
 | `camera_index` | 정수 | `0` | 카메라 번호 변경 시 | OpenCV가 열 USB 카메라 번호 |
 | `video_path` | 문자열 | `""` | MP4 입력 시 필수 | 웹캠 대신 한 번 재생할 MP4 경로 |
+| `loop_video` | 불리언 | `false` | 선택 | MP4 종료 시 프레임 0부터 반복 |
 | `output_topic` | 문자열 | `/patient/bed_exit` | 선택 | 최종 Bool 결과 발행 토픽 |
 | `capture_fps` | 실수 | `30.0` | 선택 | 초당 프레임 처리 시도 횟수 |
 | `show` | 불리언 | GUI 환경 존재 여부 | 선택 | OpenCV 판정 프리뷰 표시 |
@@ -97,7 +98,8 @@ ROS 파라미터는 노드를 다시 빌드하지 않고 실행 구성을 전달
 
 - `video_path`가 비어 있으면 `camera_index`의 카메라를 사용한다.
 - `video_path`가 있으면 MP4를 사용하고 `camera_index`는 사용하지 않는다.
-- MP4는 끝에서 정지하며 자동 반복하지 않는다. `loop_video` 파라미터는 없다.
+- MP4는 기본적으로 끝에서 정지한다. `loop_video=true`면 프레임 0부터 반복한다.
+- 반복 경계에서는 5프레임 투표와 detector 추적 상태를 초기화한다.
 - `capture_fps`는 타이머 주기이며 실제 처리 속도는 카메라와 추론 속도에 제한된다.
 
 ## 판단 모듈 선택
@@ -273,6 +275,7 @@ ros2 run part5_bed_exit bed_exit --ros-args \
 ros2 run part5_bed_exit bed_exit --ros-args \
   -p method_config:="$(pwd)/src/part5_bed_exit/research/configs/test_input_sequence1_methods_v1.json" \
   -p video_path:="$(pwd)/src/part5_bed_exit/research/data/videos/test_input_sequence1.mp4" \
+  -p loop_video:=true \
   -p show:=true
 ```
 
@@ -300,7 +303,9 @@ ros2 topic echo /patient/bed_exit
 | --- | --- | --- | --- |
 | `capture.read()` 예외 | 오류 기록 후 다음 프레임 대기 | 해당 프레임 미발행 | 초기화 |
 | 웹캠의 잘못된 반환 | 오류 기록 후 다음 프레임 대기 | 해당 프레임 미발행 | 초기화 |
-| MP4 종료 | 타이머 중단 | 추가 발행 없음 | 초기화 |
+| MP4 종료 (`loop_video=false`) | 타이머 중단 | 추가 발행 없음 | 초기화 |
+| MP4 종료 (`loop_video=true`) | 프레임 0부터 재시작 | 재워밍업 후 계속 발행 | 초기화 |
+| MP4 되감기 실패 | 오류 기록 후 타이머 중단 | 추가 발행 없음 | 초기화 |
 | `judge()` 예외 | 프레임 건너뜀 | 해당 프레임 미발행 | 초기화 |
 | publisher 예외 | 다음 프레임부터 재시도 | 실패 결과 미발행 | 초기화 |
 | 프리뷰 예외 | `show`만 비활성화 | 이미 계산한 결과 유지 | 유지 |

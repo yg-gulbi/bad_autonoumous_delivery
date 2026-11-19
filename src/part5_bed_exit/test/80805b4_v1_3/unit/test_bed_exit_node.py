@@ -58,6 +58,7 @@ def test_init_creates_30hz_timer_with_injected_method(monkeypatch):
     try:
         node = bed_exit_node.BedExitNode(detector=_Method())
         assert node.get_parameter('capture_fps').value == 30.0
+        assert node.get_parameter('loop_video').value is False
         assert abs(node.timer.timer_period_ns - round(1_000_000_000 / 30.0)) <= 1
     finally:
         if node is not None:
@@ -169,6 +170,74 @@ def test_process_frame_stops_video_at_eof_without_publish():
     assert list(node.state.history) == []
     assert timer.cancelled is True
     assert info_logs == ['Video playback finished; stopping timer']
+
+
+def test_process_frame_rewinds_loop_video_and_rewarms_without_stopping():
+    frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    published = []
+    info_logs = []
+    reads = iter([(False, None), (True, frame)])
+    seek_calls = []
+    timer = SimpleNamespace(cancelled=False)
+    timer.cancel = lambda: setattr(timer, 'cancelled', True)
+    detector = _Method(False)
+    detector.reset_count = 0
+    detector.reset = lambda: setattr(
+        detector, 'reset_count', detector.reset_count + 1)
+    state = BedExitState()
+    state.update(True)
+    node = SimpleNamespace(
+        capture=SimpleNamespace(
+            read=lambda: next(reads),
+            set=lambda prop, value: seek_calls.append((prop, value)) or True,
+        ),
+        detector=detector,
+        state=state,
+        publisher=SimpleNamespace(publish=lambda message: published.append(message.data)),
+        is_video_file=True,
+        loop_video=True,
+        timer=timer,
+        get_logger=lambda: SimpleNamespace(
+            error=lambda message: None, info=info_logs.append),
+    )
+
+    bed_exit_node.BedExitNode.process_frame(node)
+
+    assert seek_calls == [(bed_exit_node.cv2.CAP_PROP_POS_FRAMES, 0)]
+    assert detector.reset_count == 1
+    assert list(node.state.history) == [False]
+    assert published == [False]
+    assert timer.cancelled is False
+    assert info_logs == ['Video playback loop restarted from frame 0']
+
+
+def test_process_frame_stops_when_loop_rewind_fails():
+    errors = []
+    timer = SimpleNamespace(cancelled=False)
+    timer.cancel = lambda: setattr(timer, 'cancelled', True)
+    node = SimpleNamespace(
+        capture=SimpleNamespace(
+            read=lambda: (False, None),
+            set=lambda prop, value: False,
+        ),
+        detector=_Method(False),
+        state=BedExitState(),
+        publisher=SimpleNamespace(publish=lambda message: None),
+        is_video_file=True,
+        loop_video=True,
+        timer=timer,
+        get_logger=lambda: SimpleNamespace(
+            error=errors.append, info=lambda message: None),
+    )
+
+    bed_exit_node.BedExitNode.process_frame(node)
+
+    assert timer.cancelled is True
+    assert list(node.state.history) == []
+    assert errors == [
+        'Video loop restart failed; stopping timer: '
+        'capture does not support seeking to frame 0'
+    ]
 
 
 def test_process_frame_resets_history_and_skips_publish_on_method_failure():

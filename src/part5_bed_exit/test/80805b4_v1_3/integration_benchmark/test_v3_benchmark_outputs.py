@@ -10,7 +10,10 @@ import yaml
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[3]
-RESULT_ROOT = PACKAGE_ROOT / 'results/80805b4_v1_3/integration_benchmark'
+RESULT_ROOT = Path(os.environ.get(
+    'PART5_V3_BENCHMARK_RESULT_ROOT',
+    PACKAGE_ROOT / 'results/80805b4_v1_3/integration_benchmark',
+)).expanduser().resolve()
 METHODS = ('detection', 'segmentation', 'yolo_pose', 'mediapipe_pose')
 ACCURACY_FIELDS = (
     'recall', 'safe_fpr', 'precision', 'f1', 'coverage',

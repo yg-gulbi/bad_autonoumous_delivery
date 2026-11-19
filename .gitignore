@@ -22,3 +22,10 @@ venv/
 *.engine
 *.mp4
 *.avi
+
+# Local ROS integration experiment artifacts
+src/part5_bed_exit/results/integration_runs/
+src/part5_bed_exit/results/unit_runs/
+
+# Cross-part integration run artifacts
+/part_integration/results/
