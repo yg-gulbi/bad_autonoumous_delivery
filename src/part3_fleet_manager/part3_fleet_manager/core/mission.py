@@ -5,7 +5,7 @@ from math import dist, inf
 
 from . import geometry as g
 from .decisions import CONFIRM_REASONS, DONE_REASON
-from .robot_protocol import DONE
+from .robot_protocol import DONE, PREPARING
 
 
 @dataclass
@@ -124,7 +124,7 @@ class MissionManager:
             def rank(robot):
                 link = self.links[robot]
                 return (-link.battery if link.battery is not None else inf,
-                        dist(link.pose, goal) if link.pose is not None else inf, robot != "robot_a", robot)
+                        dist(link.pose, goal) if link.pose is not None else inf, self.resources.robot_order[robot])
 
             robot = min(available, key=rank)
             self.record("MISSION_ASSIGNED", now, "배터리와 첫 정류장 거리로 배정", robot=robot,
@@ -180,7 +180,7 @@ class MissionManager:
         for robot, r in self.robots.items():
             if not r.queue or not self._interruptible_return(robot) or self.safety.causes[robot]:
                 continue
-            if robot in self.resources.pending:
+            if robot in self.resources.pending or (self.links[robot].move and not self.links[robot].move.attempts):
                 # No MOVE was sent: release the pending home request immediately.
                 self.complete(robot, now, canceled=True)
             elif r.state == "MOVING":
@@ -202,7 +202,19 @@ class MissionManager:
                 continue
             job = r.job
             destination = r.target_override or job.stops[job.index]["zone"]
+            dock_path = ()
+            unit = self.config.robots[robot]
+            if r.returning and not r.target_override and unit.return_to == "DOCK":
+                observed = self.links[robot].dock_position
+                dock_path = unit.dock.path_end() if unit.dock else ((observed,) if observed else ())
+                zones = [z for z, region in g.ZONE_REGIONS.items()
+                         if dock_path and all(self.config.corridor.region_of(p) == region for p in dock_path)]
+                if not zones:
+                    self.fault(robot, "NAV_FAILED", "도크 복귀 경로를 확인할 수 없습니다. 도크 좌표와 구역을 확인하세요.", now)
+                    continue
+                destination = min(zones, key=lambda z: dist(self.config.zones[z], dock_path[-1]))
             self.resources.request(robot, destination, job.level, now, mission_id=job.journal_id, mission_type=job.kind,
+                                   dock_path=dock_path,
                                    carrying_patient=job.kind == "PATIENT_TRANSPORT" and job.index > 0)
         self.ready.clear()
 
@@ -210,8 +222,9 @@ class MissionManager:
         r = self.robots[leg.robot]
         job = r.job
         job.sends += 1
-        self.links[leg.robot].go(f"L-{job.id.removeprefix('M-')}-{job.sends}", leg.destination, leg.level)
-        r.state = "SENDING"
+        destination = "DOCK" if leg.dock_path else leg.destination
+        self.links[leg.robot].go(f"L-{job.id.removeprefix('M-')}-{job.sends}", destination, leg.level)
+        r.state, r.resume_due = "SENDING", False
 
     def fault(self, robot, kind, reason, now, diagnostic=None):
         r = self.robots[robot]
@@ -229,6 +242,13 @@ class MissionManager:
         if event == "WARNING":
             self.record("WARNING", now, "로봇 상태 또는 명령 응답을 확인하세요.", diagnostic=data["reason"], robot=robot)
             return
+        leg = self.resources.active.get(robot)
+        if event == "DOCKED":
+            if not leg or not leg.dock_path:
+                return
+            # Reuse the confirmed arrival transition only after physical docking is confirmed.
+            event = "ARRIVED"
+            data = {**data, "destination": leg.destination}
         if r.canceling:
             if r.returning and event == "MISSION_FAILED":
                 return  # Wait for the terminal STATE or cancel reply.
@@ -236,7 +256,7 @@ class MissionManager:
                 r.zone = data["destination"]
                 self.record("ARRIVE", now, f"{self.resources.zone_label(r.zone)} 도착", robot=robot, destination=r.zone, return_home=True)
             if r.returning and event == "CANCEL_CONFIRMED" and data.get("at_home"):
-                r.zone = self.config.robots[robot].start_zone
+                r.zone = leg.destination if leg else self.config.robots[robot].start_zone
             if event in {"CANCEL_CONFIRMED", "ARRIVED", "MISSION_FAILED", "MISSION_CANCELED"}:
                 r.canceling = link.cancel_wait = False
                 link.forget()
@@ -255,7 +275,6 @@ class MissionManager:
             link.cancel_wait = False
             self._replan(robot, now)
             return
-        leg = self.resources.active.get(robot)
         if event == "MISSION_ACCEPTED" and r.state == "SENDING" and leg:
             r.state = "MOVING"
             if not r.returning and r.job.started_at is None:
@@ -271,7 +290,7 @@ class MissionManager:
                       "WARNING": "로봇에서 주행이 취소됐습니다."}[kind]
             self.fault(robot, kind, reason, now, diagnostic=data.get("reason") or event)
         elif event == "ARRIVED" and leg and data.get("destination") == leg.destination:
-            self.record("ARRIVE", now, f"{self.resources.zone_label(leg.destination)} 도착", robot=robot,
+            self.record("ARRIVE", now, "도크 복귀 완료" if leg.dock_path else f"{self.resources.zone_label(leg.destination)} 도착", robot=robot,
                         mission_id=r.job.journal_id, destination=leg.destination, return_home=r.returning)
             r.zone = leg.destination
             link.forget()
@@ -378,7 +397,7 @@ class MissionManager:
             stop.update(status="CONFIRMED", confirmed_at=now, confirmed_by=by)
             self.advance(robot, now)
 
-    def wire_step(self, robot, now, corridor_command=None):
+    def wire_step(self, robot, now, corridor_command=None, *, traffic_stop=False, stalled=False, hold_restart=None):
         """Combine motion intents once, after safety, arbitration and operator decisions."""
         r, link = self.robots[robot], self.links[robot]
         if r.returning and r.canceling and link.cancel_sent_at is not None:
@@ -386,14 +405,29 @@ class MissionManager:
                 r.canceling = link.cancel_wait = False
                 self.fault(robot, "NAV_FAILED", "복귀 취소 후 정지 또는 홈 도착 확인을 받지 못했습니다.", now)
             return None
+        move = link.move
+        if (move and move.preparing_since is not None and now - move.preparing_since > link.policy.start_timeout_s
+                and not r.fault_stop and not r.canceling and not r.replacing):
+            self.fault(robot, "NAV_FAILED", "도크에서 출발 준비 시간이 초과됐습니다.", now)
+            link.cancel()
         giving_way = self.resources.robot_state(robot, r.state) == "GIVE_WAY"
-        stop = bool(self.safety.causes[robot]) or r.fault_stop or giving_way or corridor_command == "PAUSE"
-        if stop or corridor_command == "RESUME":
+        local_stop = bool(self.safety.causes[robot]) or r.fault_stop or giving_way
+        stop = local_stop or traffic_stop or self.resources.following(robot) or corridor_command == "PAUSE"
+        if stop and link.state in PREPARING | {"DOCKING"} and not link.cancel_wait and move and not move.finished:
+            # PART 04 accepts PAUSE only while navigating. CANCEL also stops the Create3 action.
+            if not r.fault_stop:
+                self.fault(robot, "NAV_FAILED", "도크 동작을 중단했습니다. 정지 사유가 풀리면 다시 시도하세요.", now)
+            link.cancel()
+        if (local_stop and r.job) or corridor_command == "RESUME":
             r.resume_due = True
-        resume = r.resume_due and r.state == "MOVING" and not stop
+        resume = r.resume_due and (r.state == "MOVING" or (not r.job and link.state == "PAUSED")) and not stop and not stalled
+        if resume and link.state == "PAUSED" and hold_restart and hold_restart(robot, now):
+            stop, resume = True, False
         if r.state == "FAULT" and not link.cancel_wait and not stop:
             return None
         command, error = link.step(now, stop=stop, resume=resume)
+        if command == "PAUSE":
+            r.resume_due = True
         if command == "RESUME" or (not stop and link.state == "MOVING" and link.control_sent != "PAUSE"):
             r.resume_due = False
         if error:

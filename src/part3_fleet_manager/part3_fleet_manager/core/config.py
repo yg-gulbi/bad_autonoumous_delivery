@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
-from math import isfinite
+from math import cos, isfinite, radians, sin
 from os import PathLike
 from os.path import expanduser
 
@@ -12,16 +12,33 @@ from . import geometry
 from .schemas import MISSION_TYPES
 
 
+CORRIDOR_MODES = ("DIRECTIONAL", "SHARED_YIELD", "EXCLUSIVE")
+
+
 class ConfigError(ValueError):
     """An invalid fleet configuration, with the offending setting in the message."""
 
 
 @dataclass(frozen=True)
+class DockPose:
+    x: float
+    y: float
+    yaw_deg: float
+
+    def path_end(self):
+        yaw = radians(self.yaw_deg)
+        return ((self.x - 0.6 * cos(yaw), self.y - 0.6 * sin(yaw)), (self.x, self.y))
+
+
+@dataclass(frozen=True)
 class RobotCfg:
     label: str
+    mark: str
     ns: str
     role: str
     start_zone: str
+    return_to: str = "ZONE"
+    dock: DockPose | None = None
 
 
 @dataclass(frozen=True)
@@ -36,6 +53,7 @@ class RobotLinkCfg:
     request_id: str
     accept_timeout_s: float
     link_timeout_s: float
+    start_timeout_s: float = 120.0
 
 
 @dataclass(frozen=True)
@@ -43,11 +61,13 @@ class CorridorCfg:
     polygon: tuple[geometry.Point, ...]
     mouths: Mapping[str, geometry.Point]
     include_boundary: bool
-    mode: str = "SHARED_YIELD"
+    mode: str = "DIRECTIONAL"
     yield_enabled: bool = True
     yield_trigger_m: float = 1.2
     yield_release_m: float = 0.5
     yield_timeout_s: float = 10.0
+    follow_gap_m: float = 1.0
+    follow_resume_m: float = 1.4
 
     def region_of(self, point: geometry.Point) -> str:
         return geometry.region_of(point, self.polygon, include_boundary=self.include_boundary)
@@ -59,6 +79,7 @@ class ResourcesCfg:
     clear_hold_s: float
     decision_window_s: float
     aging_s: float
+    zone_occupied_m: float = 0.6
 
 
 @dataclass(frozen=True)
@@ -101,6 +122,10 @@ class BedMonitorCfg:
 class SafetyCfg:
     bed_exit_pause_targets: tuple[str, ...]
     bed_monitor: BedMonitorCfg = BedMonitorCfg()
+    use_hazard_topic: bool = False
+    bump_neighbor_m: float = 1.0
+    proximity_stop_m: float = 0.6
+    proximity_resume_m: float = 0.9
 
 
 @dataclass(frozen=True)
@@ -116,7 +141,7 @@ class MissionCfg:
 
 @dataclass(frozen=True)
 class AssignmentCfg:
-    mode: str = "IDLE_BEST_BATTERY"
+    mode: str = "ROLE"
     min_battery_pct: float = 20.0
 
 
@@ -124,13 +149,16 @@ class AssignmentCfg:
 class PublishCfg:
     fleet_state_hz: float
     tick_hz: float
+    finished_mission_limit: int = 20
 
 
 @dataclass(frozen=True)
 class MockCfg:
     speed_mps: float = 0.2
     stall_radius_m: float = 0.05
-    supports_request_id: bool = True
+    supports_request_id: bool = False
+    localizing_s: float = 3.0
+    report_rejections: bool = False
 
 
 @dataclass(frozen=True)
@@ -203,6 +231,14 @@ def _point(value, path: str) -> geometry.Point:
     return (_number(data.get("x"), f"{path}.x"), _number(data.get("y"), f"{path}.y"))
 
 
+def _distance_limits(data, section, stop, resume, defaults):
+    values = {key: _number(data.get(key, getattr(defaults, key)), f"{section}.{key}", positive=True)
+              for key in (stop, resume)}
+    if values[resume] <= values[stop]:
+        raise ConfigError(f"{section}.{resume}: {stop}보다 커야 합니다")
+    return values
+
+
 def _load_corridor(data: Mapping) -> CorridorCfg:
     raw = _value(data, "polygon", "corridor", list)
     vertices = []
@@ -228,9 +264,10 @@ def _load_corridor(data: Mapping) -> CorridorCfg:
     keys = ("mode", "yield_enabled", "yield_trigger_m", "yield_release_m", "yield_timeout_s")
     policy = {key: data.get(key, getattr(CorridorCfg, key)) for key in keys}
     return CorridorCfg(
+        **_distance_limits(data, "corridor", "follow_gap_m", "follow_resume_m", CorridorCfg),
         polygon=tuple(vertices),
         mouths=points,
-        mode=_text(policy["mode"], "corridor.mode", ("SHARED_YIELD", "EXCLUSIVE")),
+        mode=_text(policy["mode"], "corridor.mode", CORRIDOR_MODES),
         yield_enabled=_value(policy, "yield_enabled", "corridor", bool),
         **_numbers(policy, "corridor", ("yield_trigger_m", "yield_release_m", "yield_timeout_s"), positive=True),
         include_boundary=include_boundary,
@@ -253,8 +290,9 @@ def _load_robot_link(data: Mapping) -> RobotLinkCfg:
                 "hazard_topic", "dock_status_topic"):
         topics[key] = _topic(data, key, "robot_link")
     return RobotLinkCfg(
-        mode=_text(data.get("mode"), "robot_link.mode", ("HOSPITAL_NAV", "ICD_GOAL_POSE")),
+        mode=_text(data.get("mode"), "robot_link.mode", ("HOSPITAL_NAV",)),
         request_id=_text(data.get("request_id"), "robot_link.request_id", ("auto", "always", "never")),
+        start_timeout_s=_number(data.get("start_timeout_s", 120.0), "robot_link.start_timeout_s", positive=True),
         **topics,
         **_numbers(data, "robot_link", ("accept_timeout_s", "link_timeout_s"), positive=True),
     )
@@ -287,10 +325,21 @@ def config_from_dict(data: Mapping) -> FleetConfig:
         if ns in namespaces:
             raise ConfigError(f"{path}.ns: 중복 namespace {ns}")
         namespaces.add(ns)
+        mark = _text(robot.get("mark", chr(ord("A") + len(robots))), f"{path}.mark")
+        if len(mark) != 1 or any(value.mark == mark for value in robots.values()):
+            raise ConfigError(f"{path}.mark: 서로 다른 표시 글자 한 자가 필요합니다")
+        raw_dock = robot.get("dock")
+        dock = None
+        if raw_dock is not None:
+            xy = _point(raw_dock, f"{path}.dock")
+            dock = DockPose(*xy, _number(raw_dock.get("yaw_deg"), f"{path}.dock.yaw_deg"))
         robots[robot_id] = RobotCfg(
+            dock=dock,
+            mark=mark,
             label=_text(robot.get("label"), f"{path}.label"),
             ns=ns,
             role=_text(robot.get("role"), f"{path}.role", MISSION_TYPES),
+            return_to=_text(robot.get("return_to", "ZONE"), f"{path}.return_to", ("ZONE", "DOCK")),
             start_zone=_text(robot.get("start_zone"), f"{path}.start_zone", zones),
         )
 
@@ -330,7 +379,7 @@ def config_from_dict(data: Mapping) -> FleetConfig:
     minimum = _number(assignment["min_battery_pct"], "assignment.min_battery_pct", minimum=0)
     if minimum > 100:
         raise ConfigError("assignment.min_battery_pct: 0~100 범위가 필요합니다")
-    mission = {"return_home": True, "return_interruptible": True, "return_level": 1, **cfg["mission"]}
+    mission = {"return_to_dock": False, "return_home": True, "return_interruptible": True, "return_level": 1, **cfg["mission"]}
     return_level = _value(mission, "return_level", "mission", int)
     if not 1 <= return_level <= 3:
         raise ConfigError("mission.return_level: 1~3 정수가 필요합니다")
@@ -344,9 +393,14 @@ def config_from_dict(data: Mapping) -> FleetConfig:
                            object_blocks_now=_value(values, "object_blocks_now", "obstacle", bool),
                            min_confidence=threshold, label_ko={_text(k, "obstacle.label_ko"): _text(v, "obstacle.label_ko")
                                for k, v in _mapping(values["label_ko"], "obstacle.label_ko").items()})
+    limit = cfg["publish"].get("finished_mission_limit", PublishCfg.finished_mission_limit)
+    if type(limit) is not int or limit < 0:
+        raise ConfigError("publish.finished_mission_limit: 0 이상의 정수가 필요합니다")
     return FleetConfig(obstacle=obstacle,
         assignment=AssignmentCfg(_text(assignment["mode"], "assignment.mode", ("IDLE_BEST_BATTERY", "ROLE")), minimum),
         mock=MockCfg(**_numbers(mock, "mock", ("speed_mps", "stall_radius_m"), positive=True),
+                     localizing_s=_number(mock["localizing_s"], "mock.localizing_s", minimum=0),
+                     report_rejections=_value(mock, "report_rejections", "mock", bool),
                      supports_request_id=_value(mock, "supports_request_id", "mock", bool)),
         robots=robots,
         type_to_robot=type_to_robot,
@@ -354,15 +408,24 @@ def config_from_dict(data: Mapping) -> FleetConfig:
         zones=zones,
         zone_names={z: zone_data[z].get("name") or f"{z} 구역" for z in zones},
         corridor=corridor,
-        resources=ResourcesCfg(**_numbers(cfg["resources"], "resources", (
-            "clear_margin_m", "clear_hold_s", "decision_window_s", "aging_s",
-        ))),
+        resources=ResourcesCfg(
+            zone_occupied_m=_number(cfg["resources"].get("zone_occupied_m", ResourcesCfg.zone_occupied_m),
+                                   "resources.zone_occupied_m", positive=True),
+            **_numbers(cfg["resources"], "resources", ("clear_margin_m", "clear_hold_s", "decision_window_s", "aging_s")),
+        ),
         deadlock=DeadlockCfg(
             **_numbers(cfg["deadlock"], "deadlock", ("confirm_s", "card_timeout_s"), positive=True),
             yield_zones=yield_zones,
         ),
         stall=stall,
-        safety=SafetyCfg(tuple(_text(r, "safety.bed_exit_pause_targets", robots) for r in targets), monitor),
+        safety=SafetyCfg(
+            bed_exit_pause_targets=tuple(_text(r, "safety.bed_exit_pause_targets", robots) for r in targets),
+            bed_monitor=monitor,
+            use_hazard_topic=_value({"use_hazard_topic": False, **cfg["safety"]}, "use_hazard_topic", "safety", bool),
+            bump_neighbor_m=_number(cfg["safety"].get("bump_neighbor_m", SafetyCfg.bump_neighbor_m),
+                                    "safety.bump_neighbor_m", minimum=0),
+            **_distance_limits(cfg["safety"], "safety", "proximity_stop_m", "proximity_resume_m", SafetyCfg),
+        ),
         mission=MissionCfg(
             return_home=_value(mission, "return_home", "mission", bool),
             return_interruptible=_value(mission, "return_interruptible", "mission", bool),
@@ -370,9 +433,9 @@ def config_from_dict(data: Mapping) -> FleetConfig:
             manual_level=manual_level,
             retry_after_return=retry_after_return,
             confirm_at_stops=_value(cfg["mission"], "confirm_at_stops", "mission", bool),
-            return_to_dock=_value(cfg["mission"], "return_to_dock", "mission", bool),
+            return_to_dock=_value(mission, "return_to_dock", "mission", bool),
         ),
-        publish=PublishCfg(**_numbers(cfg["publish"], "publish", ("fleet_state_hz", "tick_hz"),
+        publish=PublishCfg(finished_mission_limit=limit, **_numbers(cfg["publish"], "publish", ("fleet_state_hz", "tick_hz"),
                                       positive=True)),
         db_path=expanduser(_text(cfg["db"].get("path"), "db.path")),
     )

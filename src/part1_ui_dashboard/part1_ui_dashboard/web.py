@@ -75,8 +75,9 @@ class Feed:
 def create_app(feed, geometry, publish, trigger, *, meta=None, image=None, dev_tools=False, set_bed_mode=None, db_path=None):
     app = Flask(__name__, static_folder="static")
     app.register_blueprint(history_api(db_path, geometry.get("names", {}), geometry.get("robot_names")))
+    robots = tuple(geometry.get("robot_names", schemas.ROBOT_IDS))
     routes = {"mission": ("/ui/mission_req", ui_api.mission, "req_id"),
-              "command": ("/ui/operator_cmd", ui_api.command, "cmd_id"),
+              "command": ("/ui/operator_cmd", lambda form: ui_api.command(form, robots=robots), "cmd_id"),
               "decision": ("/ui/decision", ui_api.decision, "card_id")}
 
     @app.get("/")
@@ -109,7 +110,7 @@ def create_app(feed, geometry, publish, trigger, *, meta=None, image=None, dev_t
         if action == "bed" and form.get("mode") in ("off", "normal", "exit"):
             set_bed_mode(form["mode"])
             return jsonify(mode=form["mode"], message="가짜 침상 감시 설정을 적용했습니다.")
-        elif action in ("stall", "drop_link", "fail_next", "reject_next", "battery", "obstacle") and form.get("robot") in schemas.ROBOT_IDS:
+        elif action in ("stall", "drop_link", "fail_next", "reject_next", "battery", "obstacle") and form.get("robot") in robots:
             data = {"robot": form["robot"], "action": action}
             if action == "obstacle":
                 if form.get("kind") not in ("person", "object", "none", "error", "silent"):

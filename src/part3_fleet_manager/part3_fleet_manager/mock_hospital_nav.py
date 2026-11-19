@@ -34,7 +34,7 @@ def parse_command(text, supports_id):
     if supports_id and words and words[-1].lower().startswith("id="):
         tag = words.pop()[3:] or None
     words = [w.upper() for w in words]
-    if len(words) == 1 and words[0] in ("PAUSE", "RESUME", "CANCEL"):
+    if len(words) == 1 and words[0] in ("PAUSE", "RESUME", "CANCEL", "DOCK", "UNDOCK"):
         return words[0], None, None, tag
     if words[:1] == ["MOVE"]:
         words = words[1:]
@@ -69,7 +69,9 @@ class MockHospitalNav(Node):
         self.drop_until = 0.0
         defaults = self.config.mock
         self.declare_parameter("supports_request_id", defaults.supports_request_id)
-        params = [self.declare_parameter("speed_mps", defaults.speed_mps),
+        self.declare_parameter("report_rejections", defaults.report_rejections)
+        params = [self.declare_parameter("localizing_s", defaults.localizing_s),
+                  self.declare_parameter("speed_mps", defaults.speed_mps),
                   self.declare_parameter("battery_pct", 80.0 if self.robot == "robot2" else 60.0),
                   self.declare_parameter("stall_at", [0.0, 0.0, 0.0]),
                   self.declare_parameter("stall_radius_m", defaults.stall_radius_m)]
@@ -80,7 +82,13 @@ class MockHospitalNav(Node):
             self.declare_parameter(name, False)
         self.add_on_set_parameters_callback(self.validate)
         self.yaw = 0.0
+        self.predock, self.dock_point = unit.dock.path_end() if unit.dock else (None, None)
+        # ZONE-mode scenarios start at the existing virtual home docks.
         self.pose = self.config.zones[unit.start_zone]
+        if unit.return_to == "DOCK" and self.dock_point is not None:
+            self.pose = self.dock_point
+        self.docked = True
+        self.phase_until = 0.0
         self.state, self.mid, self.dest, self.level, self.reason = "IDLE", None, None, 1, ""
         self.path, self.total, self.stalled_until, self.fail = [], 0.0, 0.0, False
         self.last_tick = self.now()
@@ -139,6 +147,8 @@ class MockHospitalNav(Node):
                 return SetParametersResult(successful=False, reason="battery_pct requires 0..100")
             if p.name in ("speed_mps", "stall_radius_m") and (not isfinite(p.value) or p.value <= 0):
                 return SetParametersResult(successful=False, reason=f"{p.name} must be finite and positive")
+            if p.name == "localizing_s" and (not isfinite(p.value) or p.value < 0):
+                return SetParametersResult(successful=False, reason="localizing_s must be finite and nonnegative")
             if p.name == "stall_at" and (len(p.value) != 3 or not all(map(isfinite, p.value)) or p.value[2] < 0):
                 return SetParametersResult(successful=False, reason="stall_at requires [x, y, duration_s >= 0]")
         return SetParametersResult(successful=True)
@@ -183,10 +193,13 @@ class MockHospitalNav(Node):
         battery = BatteryState()
         battery.header.stamp = self.get_clock().now().to_msg()
         battery.present = True
+        battery.voltage = 15.0
+        battery.power_supply_status = (BatteryState.POWER_SUPPLY_STATUS_CHARGING if self.docked
+                                       else BatteryState.POWER_SUPPLY_STATUS_DISCHARGING)
         battery.percentage = self.value("battery_pct") / 100.0
         self.battery_pub.publish(battery)
         if DockStatus is not None:
-            self.dock_pub.publish(DockStatus(header=battery.header, is_docked=False))
+            self.dock_pub.publish(DockStatus(header=battery.header, is_docked=self.docked))
             self.hazard_pub.publish(HazardDetectionVector(header=battery.header, detections=[]))
         progress = {"remaining_m": None, "percent": None}
         if self.state == "MOVING":
@@ -194,11 +207,14 @@ class MockHospitalNav(Node):
             self.emit("PROGRESS", destination=self.dest, **progress)
         if not self.value("drop_link") and self.now() >= self.drop_until:
             self.publish("STATE", state=self.state, destination=self.dest, priority=self.level,
-                         reason=self.reason, pose=self.position(), **progress)
+                         reason=self.reason, pose=self.position(), docked=self.docked,
+                         ready=not self.docked and self.state != "LOCALIZING",
+                         battery={"percent": self.value("battery_pct"), "voltage": float(battery.voltage),
+                                  "status": "CHARGING" if self.docked else "DISCHARGING"}, **progress)
 
     def reject(self, text, tag, reason):
         self.get_logger().warning(f"{text!r}: {reason}")
-        if self.value("supports_request_id"):
+        if self.value("report_rejections"):
             self.emit("COMMAND_REJECTED", command=text, request_id=tag, state=self.state, reason=reason)
 
     def command(self, msg):
@@ -208,15 +224,33 @@ class MockHospitalNav(Node):
         except ValueError as exc:
             self.reject(text, None, str(exc))
             return
-        if action == "MOVE" and self.consume("reject_next"):
-            self.get_logger().warning(f"reject_next: {text!r} 무시")
+        if action in ("MOVE", "DOCK") and self.consume("reject_next"):
+            self.reject(text, tag, "시험용 명령 거절")
             return
-        if action == "MOVE" and self.state in DONE:
-            self.dest, self.level, self.mid, self.reason = dest, level, tag or uuid4().hex[:12], ""
-            self.path = waypoints(self.config, self.pose, dest)
+        if action in ("MOVE", "DOCK", "UNDOCK") and self.state in DONE:
+            if action == "DOCK" and self.dock_point is None:
+                self.reject(text, tag, "도크 좌표가 없습니다.")
+                return
+            if (action == "DOCK" and self.docked) or (action == "UNDOCK" and not self.docked):
+                self.reject(text, tag, "현재 도킹 상태에서 실행할 수 없습니다.")
+                return
+            self.dest = dest if action == "MOVE" else action
+            self.level, self.mid, self.reason = level or 1, tag or uuid4().hex[:12], ""
+            if action == "DOCK":
+                anchor = min(self.config.zones, key=lambda z: dist(self.config.zones[z], self.predock))
+                self.path = [*waypoints(self.config, self.pose, anchor)[:-1], self.predock]
+            elif action == "MOVE":
+                self.path = waypoints(self.config, self.pose, dest)
+            else:
+                self.path = []
             self.total = sum(dist(a, b) for a, b in pairwise([self.pose, *self.path]))
             self.fail, self.stalled_until = self.consume("fail_next"), 0.0
-            self.emit("MISSION_ACCEPTED", destination=dest, priority=level)
+            if action != "UNDOCK":
+                self.emit("MISSION_ACCEPTED", destination=self.dest, priority=self.level)
+            if self.docked:
+                self.state, self.phase_until = "UNDOCKING", self.now() + 1.0
+                self.emit("UNDOCKING")
+                return
         elif action == "RESUME" and self.state == "PAUSED":
             self.emit("RESUMED")
         elif action == "PAUSE" and self.state == "MOVING":
@@ -231,6 +265,9 @@ class MockHospitalNav(Node):
         else:
             self.reject(text, tag, f"{action} 불가 상태")
             return
+        self.navigate()
+
+    def navigate(self):
         self.last_tick, self.state = self.now(), "MOVING"
         self.emit("NAVIGATING", destination=self.dest)
 
@@ -240,6 +277,25 @@ class MockHospitalNav(Node):
         if self.state in ("STOPPING_PAUSE", "STOPPING_CANCELED"):
             self.state = "PAUSED" if self.state == "STOPPING_PAUSE" else "CANCELED"
             self.emit("PAUSED" if self.state == "PAUSED" else "MISSION_CANCELED", reason=self.reason, **self.progress())
+            return
+        if self.state in ("UNDOCKING", "LOCALIZING", "DOCKING"):
+            if now < self.phase_until:
+                return
+            if self.state == "DOCKING":
+                self.state, self.docked, self.pose = "COMPLETE", True, self.dock_point
+                self.publish_pose()
+                self.emit("DOCKED")
+            elif self.state == "UNDOCKING":
+                self.docked = False
+                self.emit("UNDOCKED")
+                if self.dest == "UNDOCK":
+                    self.state = "COMPLETE"
+                else:
+                    self.state, self.phase_until = "LOCALIZING", now + self.value("localizing_s")
+                    self.emit("LOCALIZING")
+            else:
+                self.emit("READY", pose=self.position())
+                self.navigate()
             return
         if self.state != "MOVING" or now < self.stalled_until:
             return
@@ -269,6 +325,10 @@ class MockHospitalNav(Node):
             self.yaw = atan2(self.pose[1] - initial[1], self.pose[0] - initial[0])
             self.publish_pose()
         if not self.path:
+            if self.dest == "DOCK":
+                self.state, self.phase_until = "DOCKING", now + 1.0
+                self.emit("DOCKING")
+                return
             self.state = "COMPLETE"
             self.emit("ARRIVED", destination=self.dest, pose=self.position(), percent=100.0, goal_error_m=0.0)
 

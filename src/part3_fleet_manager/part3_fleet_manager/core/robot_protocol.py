@@ -1,5 +1,6 @@
 """One hospital_nav protocol session per namespace. All times are supplied by the caller."""
 
+from collections import deque
 from dataclasses import dataclass
 import json
 from math import isfinite
@@ -7,11 +8,13 @@ from math import isfinite
 from .config import RobotLinkCfg
 
 DONE = {"IDLE", "COMPLETE", "CANCELED", "FAILED"}
-STATES = DONE | {"MOVING", "UNDOCKING", "STOPPING_CANCELED", "STOPPING_PAUSE", "PAUSED"}
+PREPARING = {"UNDOCKING", "LOCALIZING"}
+STATES = DONE | PREPARING | {"MOVING", "DOCKING", "STOPPING_CANCELED", "STOPPING_PAUSE", "PAUSED"}
 EVENT_STATE = {
     "MISSION_ACCEPTED": "MOVING", "NAVIGATING": "MOVING", "RESUMED": "MOVING",
     "PAUSED": "PAUSED", "ARRIVED": "COMPLETE", "MISSION_FAILED": "FAILED",
-    "MISSION_CANCELED": "CANCELED", "UNDOCKING": "UNDOCKING",
+    "MISSION_CANCELED": "CANCELED", "UNDOCKING": "UNDOCKING", "UNDOCKED": "LOCALIZING",
+    "LOCALIZING": "LOCALIZING", "DOCKING": "DOCKING", "DOCKED": "COMPLETE",
 }
 
 
@@ -25,6 +28,8 @@ class Move:
     tagged: bool = False
     remote_id: str | None = None
     finished: bool = False
+    preparing_since: float | None = None
+    previous_id: str | None = None
 
 
 def number(value):
@@ -47,7 +52,10 @@ class RobotProtocol:
         self.remote_id = None
         self.state_at = self.pose_at = float("-inf")
         self.pose = self.percent = self.remaining_m = self.battery = self.docked = None
+        self.battery_at = self.battery_status_at = self.dock_state_at = self.dock_at = float("-inf")
+        self.battery_status = self.dock_position = None
         self.last_event = None
+        self.warned_states = deque(maxlen=32)
         self.home_cancel = False
         self.cancel_wait = False
         self.cancel_id = None
@@ -87,15 +95,59 @@ class RobotProtocol:
         if self.state in {"PAUSED", "STOPPING_PAUSE", "STOPPING_CANCELED"} and not self.cancel_wait:
             self.cancel()
         self.forget()
-        self.move = Move(leg_id, zone, level)
+        self.move = Move(leg_id, zone, level, previous_id=self.remote_id)
+
+    def update_battery(self, percent, stamp):
+        value = number(percent)
+        if value is not None and 0 <= value <= 100 and stamp >= self.battery_at:
+            self.battery, self.battery_at = value, stamp
+
+    def dock_topic(self, docked, stamp):
+        if type(docked) is bool and stamp >= self.dock_at and stamp - self.dock_state_at > self.policy.link_timeout_s:
+            self.docked, self.dock_at = docked, stamp
+
+    def _dock_report(self, docked, stamp):
+        if type(docked) is not bool or stamp < self.dock_state_at:
+            return
+        self.dock_state_at = stamp
+        if stamp + self.policy.link_timeout_s >= self.dock_at:
+            self.docked, self.dock_at = docked, stamp
+
+    def _state_sensors(self, data, stamp):
+        self.update_pose(data.get("pose"), stamp)
+        battery = data.get("battery")
+        if isinstance(battery, dict):
+            self.update_battery(battery.get("percent"), stamp)
+            if stamp >= self.battery_status_at:
+                self.battery_status_at = stamp
+                self.battery_status = battery.get("status") if isinstance(battery.get("status"), str) else None
+        self._dock_report(data.get("docked"), stamp)
+        if data.get("docked") is True and self.dock_state_at == stamp and self.pose_at == stamp:
+            self.dock_position = self.pose
+
+    def _accept(self, move, remote):
+        move.remote_id = remote
+        if self.cancel_wait and self.cancel_id is None:
+            self.cancel_id = remote
+            self.cancel_unaccepted = False
+        if self.policy.request_id == "auto" and move.zone != "DOCK":
+            self.tagged = remote == move.leg_id
+
+    def _phase(self, state, stamp):
+        self.state = state
+        move = self.move
+        if move and move.remote_id:
+            if state in PREPARING:
+                if move.preparing_since is None:
+                    move.preparing_since = stamp
+            else:
+                move.preparing_since = None
 
     def _telemetry(self, data, stamp):
         self.update_pose(data.get("pose"), stamp)
         for key, attr in (("percent", "percent"), ("remaining_m", "remaining_m")):
             if key in data:
                 setattr(self, attr, number(data[key]))
-        if type(data.get("docked")) is bool:
-            self.docked = data["docked"]
 
     def _canceled(self, remote):
         if self.cancel_wait and (self.cancel_id is None or remote == self.cancel_id):
@@ -126,14 +178,17 @@ class RobotProtocol:
             if not isinstance(state, str) or stamp < self.state_at:
                 return None
             self.state_at = stamp
-            self.update_pose(data.get("pose"), stamp)
+            self._state_sensors(data, stamp)
             if (self.home_cancel and self.cancel_wait and self.cancel_sent_at is not None
                     and stamp >= self.cancel_sent_at and state in DONE
                     and remote in (self.cancel_id, None)):
                 self._canceled(self.cancel_id)
                 self._telemetry(data, stamp)
                 self.state, self.remote_id = state, remote
-                return {"event": "CANCEL_CONFIRMED", "at_home": state == "COMPLETE"}
+                docking = self.move and self.move.zone == "DOCK"
+                at_home = state == "COMPLETE" and (not docking or (remote and remote == self.move.remote_id
+                                                                   and data.get("docked") is True))
+                return {"event": "CANCEL_CONFIRMED", "at_home": bool(at_home)}
             if state == "CANCELED" and self._canceled(remote):
                 return {"event": "CANCEL_CONFIRMED"}
             if (self.cancel_unaccepted and self.cancel_sent_at is not None and stamp > self.cancel_sent_at
@@ -144,9 +199,27 @@ class RobotProtocol:
             if self.move and self.move.remote_id and remote != self.move.remote_id:
                 return None
             self._telemetry(data, stamp)
-            self.remote_id, self.state = remote, state
+            self.remote_id = remote
+            move = self.move
+            # A periodic STATE can survive a lost acceptance or docking event. Bind only
+            # a fresh mission for this command and destination, never the preceding leg.
+            inferred_accept = (move and move.attempts and not move.finished and not move.remote_id
+                               and remote and remote != move.previous_id and remote not in self.retired
+                               and data.get("destination") == move.zone and (not move.tagged or remote == move.leg_id)
+                               and (state in PREPARING | {"MOVING", "DOCKING"}
+                                    or (move.zone == "DOCK" and state == "COMPLETE" and data.get("docked") is True)))
+            if inferred_accept:
+                self._accept(move, remote)
+            self._phase(state, stamp)
             self._control_ack(state)
-            if state not in STATES:
+            if (move and move.zone == "DOCK" and not move.finished and remote and remote == move.remote_id
+                    and state == "COMPLETE" and data.get("docked") is True):
+                move.finished = True
+                return {"event": "DOCKED", "mission_id": remote}
+            if inferred_accept:
+                return {"event": "MISSION_ACCEPTED", "destination": move.zone, "mission_id": remote}
+            if state not in STATES and state not in self.warned_states:
+                self.warned_states.append(state)
                 return {"event": "WARNING", "reason": f"알 수 없는 PART 04 상태 {state}"}
             return None
         event = data.get("event")
@@ -168,38 +241,47 @@ class RobotProtocol:
                 return {"event": "MOVE_REJECTED", "reason": str(data.get("reason", event))}
             if (self.home_cancel and self.control_sent == "CANCEL" and data.get("command") == "CANCEL"
                     and (remote is None or remote == self.cancel_id) and self._canceled(self.cancel_id)):
-                return {"event": "CANCEL_CONFIRMED", "at_home": data.get("state") == "COMPLETE"}
+                at_home = data.get("state") == "COMPLETE" and (not move or move.zone != "DOCK")
+                return {"event": "CANCEL_CONFIRMED", "at_home": at_home}
             if data.get("command") in ("PAUSE", "RESUME", "CANCEL") and data["command"] == self.control_sent:
                 self.control_sent = None
                 return {"event": "WARNING", "reason": f"{data['command']} 거절: {data.get('reason', '')}"}
             return None
-        if event not in EVENT_STATE and event not in {"PROGRESS", "UNDOCKED"}:
+        if event == "READY":
+            self.update_pose(data.get("pose"), stamp)
+            return None
+        if event not in EVENT_STATE and event != "PROGRESS":
             return {"event": "WARNING", "reason": f"알 수 없는 PART 04 이벤트 {event}"}
+        if event in {"DOCKED", "UNDOCKED"} and not move and remote not in self.retired:
+            self._dock_report(event == "DOCKED", stamp)
         if not move or not remote or remote in self.retired or move.finished:
             return None
         if event == "MISSION_ACCEPTED":
             if (not move.attempts or move.remote_id or data.get("destination") != move.zone
                     or (move.tagged and remote != move.leg_id)):
                 return None
-            move.remote_id = remote
-            if self.cancel_wait and self.cancel_id is None:
-                self.cancel_id = remote
-                self.cancel_unaccepted = False
-            if self.policy.request_id == "auto":
-                self.tagged = remote == move.leg_id
+            self._accept(move, remote)
+        elif (event == "DOCKED" and move.zone == "DOCK" and move.attempts and not move.remote_id
+              and remote != move.previous_id):
+            self._accept(move, remote)
         elif remote != move.remote_id:
             return None
-        if event == "ARRIVED" and data.get("destination") != move.zone:
+        if event in {"DOCKING", "DOCKED"} and move.zone != "DOCK":
+            return None
+        if event == "ARRIVED" and (data.get("destination") != move.zone or move.zone == "DOCK"):
             return None
         self.remote_id = remote
         self._telemetry(data, stamp)
         if event in EVENT_STATE:
-            self.state = EVENT_STATE[event]
+            state = EVENT_STATE[event]
+            if event == "MISSION_ACCEPTED" and self.docked and move.zone != "DOCK":
+                state = "UNDOCKING"
+            self._phase(state, stamp)
             self._control_ack(self.state)
-        if event in {"ARRIVED", "MISSION_FAILED", "MISSION_CANCELED"}:
+        if event in {"ARRIVED", "DOCKED", "MISSION_FAILED", "MISSION_CANCELED"}:
             move.finished = True
-        if event == "UNDOCKED":
-            self.docked = False
+        if event in {"DOCKED", "UNDOCKED"}:
+            self._dock_report(event == "DOCKED", stamp)
         return data
 
     def _control_ack(self, state):
@@ -234,10 +316,14 @@ class RobotProtocol:
             return None, None
         if move.attempts == 2:
             move.finished = True
-            return None, "두 차례 MOVE에 MISSION_ACCEPTED 응답이 없습니다."
+            return None, f"두 차례 {'DOCK' if move.zone == 'DOCK' else 'MOVE'}에 MISSION_ACCEPTED 응답이 없습니다."
         if not move.attempts and self.state not in DONE:
             move.finished = True
-            return None, f"현재 PART 04 상태 {self.state}에서는 새 MOVE를 보낼 수 없습니다."
+            return None, f"현재 PART 04 상태 {self.state}에서는 새 이동 명령을 보낼 수 없습니다."
+        if move.zone == "DOCK":
+            move.attempts += 1
+            move.sent_at = now
+            return "DOCK", None
         move.tagged = self.tagged if self.tagged is not None else move.attempts == 0
         move.attempts += 1
         move.sent_at = now

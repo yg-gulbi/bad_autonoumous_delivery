@@ -31,19 +31,21 @@ class Decisions:
         self.cards = {}
         self.record = record
 
-    def open(self, kind, robot, mission_id, reason, now, *, targets=None, obstacle_kind=None):
+    def open(self, kind, robot, mission_id, reason, now, *, targets=None, obstacle_kind=None, context=None, options=None):
         robots = list(targets) if targets is not None else [robot]
         for card in self.cards.values():
-            if card["kind"] == kind and card["robots"] == robots:
+            if card["kind"] == kind and card["robots"] == robots and card.get("context") == context:
                 return card
         card_id = f"K-{uuid4().hex}"
-        options = OPTIONS[kind]
-        if kind == "BLOCKED":
+        options = options or OPTIONS[kind]
+        if kind == "BLOCKED" and not context:
             retry = {"PERSON": "비켜 줌, 다시 출발", "OBJECT": options["retry"]}.get(obstacle_kind, "확인함, 다시 출발")
             options = {**options, "retry": retry}
         card = {"v": 1, "card_id": card_id, "kind": kind, "robots": robots, "title": TITLES[kind],
                 "reason": reason, "options": [{"id": k, "label": v} for k, v in options.items()],
                 "recommended": None, "timeout_s": None, "default": None, "created_at": now}
+        if context:
+            card["context"] = context
         if mission_id is not None:
             card["mission_id"] = mission_id
         self.cards[card_id] = card
@@ -54,7 +56,7 @@ class Decisions:
         card = self.cards.get(card_id)
         if card is None:
             raise ValueError("E-409: 이미 닫힌 카드입니다.")
-        if choice not in OPTIONS[card["kind"]]:
+        if not any(o["id"] == choice for o in card["options"]):
             raise ValueError("E-400: 카드 선택지가 아닙니다.")
         return card
 

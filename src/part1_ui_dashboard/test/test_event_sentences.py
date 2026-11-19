@@ -15,6 +15,18 @@ A, B = "robot_a", "robot_b"
 
 
 def traffic(cfg):
+    convoy = ResourceManager(replace(cfg, corridor=replace(cfg.corridor, mode="DIRECTIONAL")))
+    reports = {A:RobotReport(cfg.zones["D"],True), B:RobotReport(cfg.zones["A"],True)}
+    for r in reports:
+        convoy.request(r,"F",1,0)
+    convoy.tick(1,reports)
+    reports[A] = RobotReport((-1.55,-2.8),True,safe_pause=True)
+    reports[B] = RobotReport((-1.55,-1.5),True)
+    convoy.tick(2,reports)
+    reports[A] = RobotReport((-1.55,-3.0),True)
+    convoy.tick(3,reports)
+    yield from convoy.events
+
     for timeout in (False, True):
         rm = ResourceManager(cfg)
         rm.request(A,"F",1,0)
@@ -48,6 +60,7 @@ def test_41_actual_fleet_event_titles_reasons_and_journal(tmp_path,monkeypatch):
     from fleet_simulation import Simulation
 
     cfg = load_config(package / "config/fleet.yaml")
+    cfg = replace(cfg, safety=replace(cfg.safety, use_hazard_topic=True), assignment=replace(cfg.assignment, mode="IDLE_BEST_BATTERY"), corridor=replace(cfg.corridor, mode="SHARED_YIELD"))
     events = list(traffic(cfg))
     with ExitStack() as cleanup:
         def simulator():
@@ -116,6 +129,18 @@ def test_41_actual_fleet_event_titles_reasons_and_journal(tmp_path,monkeypatch):
         sim.call("unanswered","A")
         for ts in (0,3,6):
             collect(sim,ts)
+
+        sim = simulator()
+        sim.cmd("GO_ZONE", robot=A, zone="F")
+        collect(sim,0)
+        sim.frames[B]["pose"] = sim.pose("A")
+        collect(sim,1)
+        sim.event(A,"MISSION_ACCEPTED")
+        sim.frames[B]["pose"] = sim.pose((-.6,.9))
+        collect(sim,2)
+        sim.event(A,"PAUSED")
+        sim.frames[B]["pose"] = sim.pose("C")
+        collect(sim,3)
 
     assert {e["type"] for e in events} == set(EVENTS)
     path = tmp_path / "bad.db"

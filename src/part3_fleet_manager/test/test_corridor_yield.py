@@ -12,6 +12,7 @@ A, B = "robot_a", "robot_b"
 
 class Encounter:
     def __init__(self, cfg, origins=("A", "F"), destinations=("F", "A"), levels=(1, 3)):
+        cfg = replace(cfg, corridor=replace(cfg.corridor, mode="SHARED_YIELD"))
         self.cfg = cfg
         self.rm = ResourceManager(cfg)
         self.reports = {r: RobotReport(cfg.zones[z], True) for r, z in zip((A, B), origins)}
@@ -32,7 +33,7 @@ def test_21_head_on_pauses_only_lower_level_then_resumes_after_passing(cfg):
     rm = scene.rm
     assert scene.tick(2, (-1.55, -2.0), (-1.55, -3.0)) == [MotionRequest(A, "PAUSE")]
     assert rm.robot_state(A, "MOVING") == "GIVE_WAY" and rm.robot_state(B, "MOVING") == "MOVING"
-    assert "Robot B Level 3" in rm.wait_reasons[A]
+    assert "약품 운송 로봇 Level 3" in rm.wait_reasons[A]
     snapshot = rm.snapshot()["CORRIDOR"]
     assert snapshot["state"] == "OCCUPIED" and snapshot["holders"] == [B, A]
     assert snapshot["give_way"] == {"yielding": A, "to": B, "since": 2}
@@ -138,7 +139,7 @@ def test_shared_holder_clearance_and_unknown_are_individual(cfg):
 
 def test_shared_graph_waits_for_all_holders_only_when_full(cfg):
     c = "robot_c"
-    fleet = replace(cfg, robots={**cfg.robots, c: replace(cfg.robots[A], ns="robot4")})
+    fleet = replace(cfg, corridor=replace(cfg.corridor, mode="SHARED_YIELD"), robots={**cfg.robots, c: replace(cfg.robots[A], ns="robot4")})
     rm = ResourceManager(fleet)
     dl = DeadlockManager(rm)
     reports = {A: RobotReport((-1.55, -1.7), True), B: RobotReport(cfg.zones["D"], True),

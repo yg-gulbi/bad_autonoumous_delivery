@@ -31,8 +31,20 @@ function obstacleText(r) {
     return obs.kind === "NONE" ? "카메라에 보이는 장애물 없음" : "장애물 분류 불가";
 }
 
+const locationText = r => r?.zone ? zn(r.zone) : ({CORRIDOR:"복도 안",ROOM_B:zn("B"),ROOM_E:zn("E"),TOP:"A, D 구역 쪽",BOTTOM:"C, F 구역 쪽"})[r?.region] || "위치 미수신";
+const robotMark = r => `<span class="mark ${r.mark === "B" ? "square" : ""}">${h(r.mark)}</span>`;
+function destinationText(r, job) {
+    if (!r.leg) return "—";
+    let purpose = "직접 이동";
+    if (r.leg.purpose) purpose = r.leg.purpose;
+    else if (r.returning || r.state === "RETURNING") purpose = "홈 복귀";
+    else if (job?.type === "PATIENT_TRANSPORT") purpose = job.stop_index === 0 ? "환자 탑승" : "환자 인계";
+    else if (job?.type === "MED_ROUND") purpose = "정류장 " + (job.stop_index + 1) + "번째";
+    else if (job?.type === "CALL") purpose = "수령 확인";
+    return zn(r.leg.to) + " (" + purpose + ")";
+}
 function robotCard(id, r) {
-    const job = mById(r.mission_id), st = r.state, home = st === "RETURNING";
+    const job = mById(r.mission_id), st = r.state, home = r.returning || st === "RETURNING";
     let controls = "";
     if (st === "IDLE")
         controls = `<select aria-label="${r.label} 이동 구역" data-go="${id}">${zoneOptions(goZones[id])}</select>` + btn("보내기", "go", id);
@@ -46,88 +58,86 @@ function robotCard(id, r) {
         controls = `<small>연결 끊김 · 마지막 수신 ${duration(S.stamp - (r.last_state_at ?? r.state_since))} 전</small>`;
     else
         controls = (st === "FAULT" ? btn("다시 시도", "retry", id) : btn("정지", "pause", id)) + btn("임무 취소", "cancel", r.mission_id || "", "", !r.mission_id);
-    return cardTitle(h(r.label), pill(cfg.states[st], stateColor(st))) + `<small class="link-ind ${r.link_ok ? "up" : ""}">${r.link_ok ? "연결 정상" : "연결 끊김"} · /${h(r.ns)}</small><h3>${h(job ? job.mission_id + " · " + missionTarget(job) : home ? "홈 구역 복귀" : "배정된 작업 없음")}</h3>
- <dl><dt>현재</dt><dd>${h(r.wait_reason || (r.zone ? zn(r.zone) : r.region === "CORRIDOR" ? "복도" : r.region || "위치 미수신"))}</dd><dt>목적지</dt><dd>${h(r.leg ? zn(r.leg.from) + " → " + zn(r.leg.to) : "이동 구간 없음")}</dd></dl>
- ${obstacleText(r) ? `<p class="notice">${h(obstacleText(r))}</p>` : ""}<div class="row meta"><span>배터리 ${r.battery_pct == null ? "미수신" : Math.round(r.battery_pct) + "%"} · 멈춤 ${Math.floor(r.stall_s)}초</span>${job ? btn("작업 상세", "inspect", job.mission_id, "linkbtn") : ""}</div><div class="buttons">${controls}</div>`;
+    const mark = r.mark;
+    const fields = [["가는 곳", destinationText(r, job)], ["지금", locationText(r)],
+        ["배터리", (r.battery_pct == null ? "미수신" : Math.round(r.battery_pct) + "%") + (r.battery_status === "CHARGING" ? " 충전 중" : "")], ["연결", "/" + r.ns]];
+    return `<div class="unit-title">${robotMark(r)}<div><h2>${h(r.label)}</h2><small>Robot ${h(mark)}</small></div>${pill(...displayState(id, r))}</div>
+        <p>${h(job ? job.mission_id + "　" + cfg.kinds[job.type] + "　Level " + job.level : home ? (r.leg?.purpose === "도크 복귀" ? "도크 복귀" : "홈 구역 복귀") : r.leg ? "직접 이동" : "배정된 작업 없음")}</p>
+        <div class="unit-facts">${fields.map(([key,value]) => `<span><small>${key}</small> ${h(value)}</span>`).join("")}</div>
+        ${obstacleText(r) ? `<p>${h(obstacleText(r))}</p>` : ""}
+        <div class="buttons">${controls}${job ? btn("작업 상세", "inspect", job.mission_id, "linkbtn") : ""}</div>`;
 }
 
 function roadPanel() {
-    const c = S.resources.CORRIDOR, holders = c.holders, queue = c.queue_detail || [], track = S.resume_track;
-    const list = holders.map(id => { const r = S.robots[id], m = mById(r.mission_id); return `<div class="holder"><strong class="${color(id)}-text">${h(r.label)}</strong><small>${m ? h("Level " + m.level + " · " + missionTarget(m)) : h(r.state === "RETURNING" ? "홈 복귀" : "구역 점유")}</small><progress max="100" value="${r.progress_pct || 0}"></progress></div>`; }).join("");
-    const labels = !track ? [] : track.kind === "yield" ? [robotName(track.first) + " 지나감", robotName(track.next) + " 다시 출발"] : [robotName(track.first) + " 완전 통과 확인", "복도 비움 확인", robotName(track.next) + " 진입 허가", "재개 명령 전달 · 로봇 확인"];
-    return cardTitle("복도", pill(c.blocked ? "막힘" : resNames[c.state], c.blocked || c.state === "UNKNOWN" ? "red" : holders.length ? "purple" : "green")) +
-        `<label>현재 통행</label>${list || '<strong class="vacant">통행 로봇 없음</strong>'}<hr><label>다음 대기</label>${queue.length ? queue.map((q, i) => `<p><b>${i + 1}　${h(robotName(q.robot))}</b>　${pill("Level " + q.level, "blue")}<small>진입 전 안전 대기 · ${duration(S.stamp - q.since)}</small></p>`).join("") : '<p class="muted">대기 로봇 없음</p>'}
- ${c.give_way ? `<p class="notice">${h(robotName(c.give_way.yielding))} → ${h(robotName(c.give_way.to))} 복도 양보</p>` : ""}${c.blocked ? `<p class="warn">막힌 시간 ${duration(S.stamp - (c.blocked_since ?? S.stamp))}</p>` : ""}
- ${labels.length ? "<label>재개 조건</label>" + labels.map((l, i) => `<small>${S.resume_checks[i] ? "✓" : "○"} ${h(l)}</small>`).join("") : ""}
- <div class="rooms">${["B", "E"].map(z => `<small>${h(zn(z))} 출입 · ${resNames[S.resources["ROOM_" + z].state]}</small>`).join("")}</div>
- <div class="buttons">${btn("통행 판단 상세", "basis", "", "", !S.last_decision)}${c.state === "UNKNOWN" ? btn("현장 확인 후 복도 비움", "clear", "", "danger") : ""}</div>`;
+    const c = S.resources.CORRIDOR, track = S.resume_track;
+    const directions = [...new Set((c.holder_detail || []).map(entry => entry.direction))];
+    const heading = directions.map(d => d > 0 ? "왼쪽에서 오른쪽 →" : d < 0 ? "← 오른쪽에서 왼쪽" : "횡단 또는 방향 미확인").join(", ");
+    const waiting = [...new Set([...c.queue.map(q => q.robot), c.follow_stop?.rear, c.give_way?.yielding].filter(Boolean))];
+    const labels = track?.kind === "follow" ? [c.follow_stop?.rule === "GAP" ? "재개 간격 확보" : "선행 로봇 재출발 또는 이탈", "뒤 로봇 연결", "별도 정지 없음", "출발 응답"] : track?.kind === "yield" ? ["우선 로봇 통과", "양보 로봇 연결", "별도 정지 없음", "양보 로봇 재출발"] :
+        ["선행 로봇 완전 통과", "복도 비움 확인", "진입 허가", "출발 응답"];
+    const passing = (c.holder_detail || []).filter(entry => !waiting.includes(entry.robot));
+    return `<div class="road-line"><h2>복도</h2><strong>${h(passing.map(entry => robotName(entry.robot) + (stateColor(S.robots[entry.robot].state) === "red" ? " 정지" : entry.state === "OCCUPIED" ? " 통과 중" : " 진입 허가")).join(", ") || "통행 없음")}</strong>
+        ${heading ? "<span>사용 방향　" + h(heading) + "</span>" : ""}<span>${waiting.length ? "대기　" + h(waiting.map(r => robotName(r) + ", " + locationText(S.robots[r])).join(", ")) : "대기 없음"}</span></div>
+        ${waiting.length && track ? '<div class="checks"><b>출발 조건</b>' + labels.map((l,i) => `<span>${S.resume_checks[i] ? "☑" : "□"} ${l}</span>`).join("") + '</div>' : ""}
+        ${c.state === "UNKNOWN" ? btn("현장 확인 후 복도 비움", "clear", "", "danger") : ""}`;
 }
 
 function basis(e) {
     if (!e)
         return;
     const d = e.detail;
+    if (["ZONE_OCCUPIED_HOLD","PROXIMITY_STOP"].includes(e.type)) {
+        const zone = e.type === "ZONE_OCCUPIED_HOLD";
+        openModal("basis", dialogHead(zone ? "목적지 점유 판단" : "로봇 근접 판단") +
+            factList([["대기 로봇",robotName(e.robot)], ["상대 로봇",robotName(d.peer)],
+                ...(zone ? [["목적지",zn(d.destination)]] : []), ["판단 시각",tm(e.ts)]]) +
+            '<p class="notice blue-surface">' + h(d.reason) + '</p>' + btn("판단 기록 보기","decision-log"));
+        return;
+    }
     openModal("basis", `<span class="eyebrow">복도</span>${dialogHead("통행 판단 상세")}<label>판단 당시 자원 상태</label><p class="tile">${h(resNames[d.state_before] || "상태 미수신")} · ${tm(e.ts)}</p><div>${(d.contenders || []).map(c => `<p><b class="${color(c.robot)}-text">${h(robotName(c.robot))}</b> · ${h(cfg.kinds[c.type] || "직접 이동")} · Level ${c.level} · ${tm(c.requested_at)}</p>`).join("")}</div>
- <p class="notice blue-surface"><b>${h(cfg.rules[d.rule])}</b><br>${h(d.reason)}</p><p class="muted">동급이면 먼저 요청한 쪽, 허가된 통행은 회수하지 않음</p>${btn("판단 기록 보기", "decision-log")}`);
+ <p class="notice blue-surface"><b>${h(cfg.rules[d.rule] || e.title || "현장 상태 확인")}</b><br>${h(d.reason)}</p><p class="muted">동급이면 먼저 요청한 쪽, 허가된 통행은 회수하지 않음</p>${btn("판단 기록 보기", "decision-log")}`);
 }
-Object.assign(actions, { basis: () => basis(S?.last_decision), "decision-log": () => { logFilter = { group: "decision" }; navigate("log"); },
+function basisEvent() {
+    if (!S) return null;
+    const top = situation(true)[0];
+    if (top?.basis?.detail) return top.basis;
+    const follow = S.resources.CORRIDOR.follow_stop;
+    if (follow) return E.findLast(e => e.type === "CORRIDOR_FOLLOW_STOP" && e.robot === follow.rear) || S.last_decision;
+    if ([...cards.values()].some(c => c.kind === "DEADLOCK")) return E.findLast(e => e.type === "DEADLOCK_DETECTED") || S.last_decision;
+    if (Object.values(S.resources).some(r => r.state === "UNKNOWN")) return E.findLast(e => e.type === "RESOURCE_UNKNOWN") || S.last_decision;
+    if (Object.values(S.resources).some(r => r.blocked)) return E.findLast(e => e.type === "BLOCKED") || S.last_decision;
+    return S.last_decision;
+}
+Object.assign(actions, { basis: () => basis(basisEvent()), "decision-log": () => { logFilter = { group: "decision" }; navigate("log"); },
     go: (id, b) => command("GO_ZONE", { robot: id, zone: goZones[id] || Object.keys(cfg.zones)[0] }, b),
     pause: (id, b) => command("PAUSE_ROBOT", { robot: id }, b), resume: (id, b) => command("RESUME_ROBOT", { robot: id }, b), retry: (id, b) => command("RETRY", { robot: id }, b),
     confirm: (id, b) => command("CONFIRM_STEP", { robot: id, mission_id: S.robots[id].mission_id, result: "OK" }, b),
     mismatch: (id, b) => command("CONFIRM_STEP", { robot: id, mission_id: S.robots[id].mission_id, result: "MISMATCH" }, b),
     dashTab: t => { dashTab = t; render(); }, alljobs: () => { missionFilter = { tab: "ACTIVE" }; selected = null; navigate("missions"); }, logs: () => { logFilter = {}; navigate("log"); },
-    summary: id => { if (id === "online" || id === "wait") {
-        const key = id === "wait" ? S.summary.waiting[0] : Object.keys(S.robots).find(k => !S.robots[k].link_ok);
-        const card = $("unit-" + (key || "robot_a"));
-        card?.scrollIntoView({ block: "center" });
-        card?.classList.add("highlight");
-        setTimeout(() => card?.classList.remove("highlight"), 1600);
-    }
-    else {
-        missionFilter = { tab: id === "urgent" ? "OPEN" : "ACTIVE", level: id === "urgent" ? "3" : "" };
-        selected = null;
-        navigate("missions");
-    } } });
+});
 initializers.dashboard = () => {
-    $("page").innerHTML = `<div id="metrics"></div><div id="situation"></div><div class="board"><section class="panel map-panel">${cardTitle("병원 구역 지도", '<label class="map-switch"><input type="checkbox" id="overlay" role="switch">실제 맵</label>' + btn("−", "zoom", "0.8") + btn("＋", "zoom", "1.25"))}<p class="muted" id="map-note"></p><canvas id="map" aria-label="병원 구역과 로봇 실시간 위치"></canvas><footer class="legend"><span>🔵 Robot A</span><span class="violet-text">● Robot B</span><span>━ 계획 경로</span><span>구역 6 · 복도 1</span></footer></section><section class="panel road" id="road"></section><div class="units"><article class="panel" id="unit-robot_a"></article><article class="panel" id="unit-robot_b"></article></div></div>
- <div class="lower"><section class="panel" id="dash-jobs"></section><section class="panel" id="latest"></section></div>`;
-    $("map-note").textContent = meta.floor_plan ? "실측 평면도" : meta.available ? "평면도 없음 · 실제 맵" : "맵 파일 없음 — 간이 지도";
+    $("page").innerHTML = `<div class="board"><section class="floor"><div class="row"><h2>병원 평면도</h2>
+        <div class="buttons"><label class="map-switch"><input type="checkbox" role="switch" id="overlay"> 실제 맵</label>${btn("−","zoom","0.8")}${btn("＋","zoom","1.25")}</div></div>
+        <canvas id="map" aria-label="병원 구역과 로봇 실시간 위치"></canvas><div id="road"></div>
+        <footer class="legend"><span>● A　침상형 이송 로봇</span><span>■ B　약품 운송 로봇</span><span>┄ 남은 경로</span><span>➜ 복도 사용 방향</span></footer></section>
+        <aside class="units"><div id="robot-blocks"></div><section id="dash-jobs"></section></aside></div><section id="latest"></section>`;
     installMap();
 };
 renderers.dashboard = () => {
-    if (!S)
-        return;
-    const info = S.summary, road = S.resources.CORRIDOR, units = Object.entries(S.robots);
-    const waiting = info.waiting[0], robot = S.robots[waiting], urgent = mById(info.urgent[0]);
-    const blocked = Object.values(S.resources).some(resource => resource.blocked_robots?.includes(waiting));
-    let reason = robot?.wait_reason;
-    if (!reason && blocked) {
-        reason = E.findLast(e => e.robot === waiting && e.type === "BLOCKED")?.detail.reason || "이동 경로 막힘";
-    } else if (!reason && robot?.state === "SAFE_PAUSE") {
-        reason = E.findLast(e => e.robot === waiting && e.type === "PAUSE")?.detail.reason || "안전 정지";
-    }
-    const metric = (name, value, detail, cls, target) =>
-        `<button class="metric" data-act="summary" data-id="${target}"><label>${name}</label><div><strong class="${cls}">${value}</strong><small>${h(detail)}</small></div></button>`;
-    put("metrics", [
-        metric("로봇 연결", info.online + " / " + units.length, units.filter(([,r]) => !r.link_ok).map(([,r]) => r.label).join(", ") || "모두 연결됨", "green-text", "online"),
-        metric("진행 중 작업", info.active, `환자 ${info.kinds.PATIENT_TRANSPORT} · 물품 ${info.kinds.MED_ROUND} · 호출 ${info.kinds.CALL}`, "blue-text", "active"),
-        metric("응급 작업", info.urgent.length, urgent ? urgent.mission_id + " · " + missionTarget(urgent) : "Level 3 작업 없음", "violet-text", "urgent"),
-        metric("안전 대기", info.waiting.length, reason || cfg.states[robot?.state] || "대기 로봇 없음", "amber-text", "wait")
-    ].join(""));
-    const urgentHolder = road.holders.map(id => mById(S.robots[id].mission_id)).find(job => job?.level === 3);
-    let title = "";
-    if (road.state === "UNKNOWN") title = "복도 점유 불명";
-    else if (road.blocked) title = "복도 막힘";
-    else if (road.give_way) title = "복도 양보 중";
-    else if ([...cards.values()].some(card => card.kind === "DEADLOCK")) title = "교착 해소 대기";
-    else if (waiting) title = "안전 대기 중";
-    else if (urgentHolder) title = urgentHolder.type === "MED_ROUND" ? "응급 의료물품 통행 중" : "응급 작업 통행 중";
-    const message = reason || S.last_decision?.detail.reason || road.reason || "";
-    put("situation", title ? `<div class="banner"><b>${h(title)}</b><span>${h(message)}</span>${btn("판단 근거", "basis", "", "", !S.last_decision)}</div>` : "");
-    for (const [id, r] of units)
-        put("unit-" + id, robotCard(id, r));
-    put("road", roadPanel());
+    if (!S) return;
+    const ids = Object.keys(S.robots);
+    put("robot-blocks", ids.map(id => `<article id="unit-${h(id)}"></article>`).join(""));
+    for (const id of ids) put("unit-" + id, robotCard(id, S.robots[id]));
     paint();
-    put("dash-jobs", cardTitle("이송 작업", btn("전체 작업", "alljobs")) + `<div class="tabs">${["ACTIVE", "QUEUED"].map(t => btn((t === "ACTIVE" ? "진행 중 " : "배정 대기 ") + S.missions.filter(m => m.status === t).length, "dashTab", t, t === dashTab ? "selected" : "")).join("")}</div>` + jobTable(S.missions.filter(m => m.status === dashTab)));
-    put("latest", cardTitle("최근 운영 기록", btn("전체 기록", "logs", "", "linkbtn")) + (E.length ? E.slice(-8).reverse().map(e => `<button class="timeline" data-act="logs"><time>${tm(e.ts)}</time><div><b>${h(e.title || e.type)}</b><small>${h(e.detail.reason)}</small></div></button>`).join("") : empty("수신된 이벤트가 없습니다.")));
+    put("road", roadPanel());
+    const jobs = S.missions.filter(m => m.status === dashTab);
+    const controls = ["ACTIVE","QUEUED"].map(t => btn((t === "ACTIVE" ? "진행 중 " : "배정 대기 ") +
+        S.missions.filter(m => m.status === t).length, "dashTab", t, t === dashTab ? "selected" : "")).join("");
+    put("dash-jobs", '<div class="row"><h2>작업</h2><div class="buttons">' + controls + btn("전체 작업", "alljobs", "", "linkbtn") + '</div></div>' +
+        '<table><thead><tr><th>작업</th><th>경로</th><th>응급도</th><th>로봇</th></tr></thead><tbody>' +
+        jobs.map(m => `<tr><td>${btn(m.mission_id, "inspect", m.mission_id, "table-link")}<small>${h(cfg.kinds[m.type])}</small></td>
+        <td>${h(m.stops.join(" → "))}</td><td>Level ${m.level}</td><td>${h(m.robot ? robotName(m.robot) : "미배정")}</td></tr>`).join("") +
+        '</tbody></table>' + (jobs.length ? "" : empty("해당 작업 없음")));
+    put("latest", cardTitle("최근 기록", btn("전체 기록","logs","","linkbtn")) +
+        (E.length ? E.slice(-3).reverse().map(e => `<div class="timeline"><time>${tm(e.ts)}</time><b>${h(e.title)}</b><span>${h(e.title.replace(/[ ·]/g,"") === e.detail.reason.replace(/[ ·]/g,"") ? "" : e.detail.reason)}</span></div>`).join("") : empty("수신된 이벤트가 없습니다.")));
 };

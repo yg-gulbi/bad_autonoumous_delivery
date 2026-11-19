@@ -68,7 +68,7 @@ class DeadlockManager:
 
         def yield_order(option):
             leg, _ = options[option]
-            return leg.level, -leg.since, leg.carrying_patient, leg.robot != "robot_b"
+            return leg.level, -leg.since, leg.carrying_patient, -self.manager.robot_order[leg.robot]
 
         recommended = min(options, key=yield_order)
         self._options = options
@@ -186,4 +186,5 @@ class DeadlockManager:
         self.manager.record("YIELD_DONE", now, f"{self.manager.robot_label(leg.robot)} · {self.manager.zone_label(leg.destination)} 도착, 원래 구간 다시 요청",
                             robot=leg.robot, mission_id=leg.mission_id, destination=leg.destination)
         return self.manager.request(leg.robot, original.destination, original.level, now,
-                                    mission_id=original.mission_id, carrying_patient=original.carrying_patient, mission_type=original.mission_type)
+                                    mission_id=original.mission_id, carrying_patient=original.carrying_patient,
+                                    mission_type=original.mission_type, dock_path=original.dock_path)

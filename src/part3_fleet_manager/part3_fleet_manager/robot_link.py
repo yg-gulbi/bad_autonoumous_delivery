@@ -16,7 +16,7 @@ AMCL_QOS = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
 
 
 class RobotLink:
-    def __init__(self, node, robot, ns, config, enqueue, now, obstacle):
+    def __init__(self, node, robot, ns, config, enqueue, now, obstacle, *, use_hazard_topic=False):
         def topic(template):
             return template.format(ns=ns)
 
@@ -35,10 +35,12 @@ class RobotLink:
         listen(BatteryState, config.battery_topic, qos_profile_sensor_data, "battery",
                lambda msg: round(100.0 * msg.percentage, 5) if 0 <= msg.percentage <= 1 else None)
         if HazardDetectionVector is None:
-            node.get_logger().warning(f"{ns}: irobot_create_msgs를 불러올 수 없어 hazard_detection·dock_status 구독을 끕니다.")
+            topics = "dock_status·hazard_detection" if use_hazard_topic else "dock_status"
+            node.get_logger().warning(f"{ns}: irobot_create_msgs 미설치로 {topics} 구독 생략. 도킹 여부는 STATE에서 받습니다.")
         else:
-            listen(HazardDetectionVector, config.hazard_topic, qos_profile_sensor_data, "hazards",
-                   lambda msg: ["BUMP" for d in msg.detections if d.type == HazardDetection.BUMP])
+            if use_hazard_topic:
+                listen(HazardDetectionVector, config.hazard_topic, qos_profile_sensor_data, "hazards",
+                       lambda msg: ["BUMP" for d in msg.detections if d.type == HazardDetection.BUMP])
             listen(DockStatus, config.dock_status_topic, qos_profile_sensor_data, "docked", lambda msg: msg.is_docked)
 
     def request_inspection(self):

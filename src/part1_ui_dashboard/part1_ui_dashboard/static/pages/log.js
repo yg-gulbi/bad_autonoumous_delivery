@@ -1,4 +1,4 @@
-const decisions = new Set(["RESOURCE_GRANT","RESOURCE_HOLD","CORRIDOR_YIELD_START"]);
+const decisions = new Set(["RESOURCE_GRANT","RESOURCE_HOLD","CORRIDOR_YIELD_START","CORRIDOR_FOLLOW_STOP","ZONE_OCCUPIED_HOLD","PROXIMITY_STOP"]);
 let logTab = "events", eventPage = 1, cardPage = 1;
 function logQuery() {
     const {robot,type,mid,q,group,from,to} = logFilter;
@@ -6,7 +6,7 @@ function logQuery() {
 }
 initializers.log = () => {
     $("page").innerHTML = '<div class="filters" id="log-period"><label>시작일<input type="date" name="from"></label><label>종료일<input type="date" name="to"></label></div><div id="kpis"></div><section class="panel">' +
-        cardTitle("운영 기록",btn("CSV 저장","csv")) + '<div id="log-tabs"></div><div class="filters" id="log-filters"><select aria-label="로봇" name="robot"><option value="">모든 로봇</option><option value="robot_a">Robot A</option><option value="robot_b">Robot B</option></select><select aria-label="이벤트 종류" name="type" id="event-types"></select><select aria-label="기록 구분" name="group"><option value="">전체 기록</option><option value="decision">통행 판단</option></select><input name="mid" placeholder="임무 ID"><input name="q" placeholder="기록 검색"></div><div id="logs-table"></div></section>';
+        cardTitle("운영 기록",btn("CSV 저장","csv")) + '<div id="log-tabs"></div><div class="filters" id="log-filters"><select aria-label="로봇" name="robot"><option value="">모든 로봇</option>' + Object.entries(cfg.robot_names).map(([id,label]) => `<option value="${h(id)}">${h(label)}</option>`).join("") + '</select><select aria-label="이벤트 종류" name="type" id="event-types"></select><select aria-label="기록 구분" name="group"><option value="">전체 기록</option><option value="decision">통행 판단</option></select><input name="mid" placeholder="임무 ID"><input name="q" placeholder="기록 검색"></div><div id="logs-table"></div></section>';
     logTab = "events"; eventPage = cardPage = 1;
     $("event-types").innerHTML = '<option value="">모든 종류</option>' + [...new Set([...(cfg.event_types || []), ...E.map(e => e.type)])].sort().map(t => `<option value="${h(t)}">${h(cfg.event_labels[t] || "관제 기록")}</option>`).join("");
     document.querySelectorAll("#log-period input,#log-filters [name]").forEach(el => { el.value = logFilter[el.name] || ""; });

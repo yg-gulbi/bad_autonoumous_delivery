@@ -3,11 +3,12 @@
 import json
 from math import isfinite
 
+from ..defaults import default_robot_ids
 from .geometry import RESOURCES, ZONE_REGIONS
 
 VERSION = 1
+ROBOT_IDS = default_robot_ids()
 MISSION_TYPES = ("PATIENT_TRANSPORT", "MED_ROUND", "CALL")
-ROBOT_IDS = ("robot_a", "robot_b")
 ERROR_CODES = ("E-400", "E-409", "E-423")
 NUMBER = (int, float)
 NULL = type(None)
@@ -140,13 +141,15 @@ def parse_mission_req(text: str) -> dict:
     return data
 
 
-def parse_operator_cmd(text: str, *, robots=ROBOT_IDS) -> dict:
+def parse_operator_cmd(text: str, *, robots=None) -> dict:
     data, ref = _read(text, "cmd_id")
     _texts(data, ("cmd_id", "by", "cmd"), ref)
     command = data["cmd"]
     _choice(command, COMMAND_FIELDS, "cmd", ref)
     fields = COMMAND_FIELDS[command]
     _texts(data, fields, ref)
+    if robots is None and "robot" in fields:
+        robots = ROBOT_IDS
     choices_by_field = {
         "robot": robots, "zone": ZONE_REGIONS, "result": ("OK", "MISMATCH"), "resource": RESOURCES,
     }
@@ -193,6 +196,11 @@ def parse_fleet_state(text: str) -> dict:
             "wait_reason": (str, NULL), "progress_pct": (*NUMBER, NULL), "remaining_m": (*NUMBER, NULL),
             "stall_s": NUMBER, "paused_by": (str, NULL),
         }, path=path)
+        for key, types in (("battery_status", (str, NULL)), ("docked", (bool, NULL))):
+            if key in robot:
+                _fields(robot, {key: types}, path=path)
+        if "mark" in robot and (not isinstance(robot["mark"], str) or len(robot["mark"]) != 1):
+            raise SchemaError(f"{path}mark: 표시 글자 한 자가 필요합니다")
         if "obstacle" in robot and robot["obstacle"] is not None:
             observation = robot["obstacle"]
             _fields(robot, {"obstacle": dict}, path=path)
@@ -205,6 +213,17 @@ def parse_fleet_state(text: str) -> dict:
                 if detection.get("pose") is not None:
                     _fields(detection, {"pose": dict})
                     _fields(detection["pose"], {"x": NUMBER, "y": NUMBER})
+        for key in ("zone_wait", "proximity"):
+            if robot.get(key) is not None:
+                _fields(robot, {key: dict}, path=path)
+                wait = robot[key]
+                _fields(wait, {"peer": str, "since": NUMBER, "reason": str}, path=path+key+".")
+                if wait["peer"] == robot_id or wait["peer"] not in data["robots"]:
+                    raise SchemaError(f"{path}{key}.peer: 상대 로봇 ID가 필요합니다")
+                if key == "zone_wait":
+                    _choice(wait.get("zone"), ZONE_REGIONS, path+"zone_wait.zone")
+        if "returning" in robot:
+            _fields(robot, {"returning": bool}, path=path)
         if "state_since" in robot:
             _fields(robot, {"state_since": NUMBER}, path=path)
         if "route" in robot:
@@ -241,6 +260,24 @@ def parse_fleet_state(text: str) -> dict:
         if (any(not isinstance(r, str) or not r.strip() for r in holders)
                 or len(set(holders)) != len(holders) or len(holders) > resource["capacity"]):
             raise SchemaError(f"{path}holders: 정원 이내의 고유 로봇 ID 목록이 필요합니다")
+        if "holder_detail" in resource:
+            _fields(resource, {"holder_detail": list}, path=path)
+            claims = resource["holder_detail"]
+            for claim in claims:
+                if not isinstance(claim, dict):
+                    raise SchemaError(f"{path}holder_detail: 보유 로봇 정보가 필요합니다")
+                _fields(claim, {"robot": str, "direction": int, "state": str}, path=path)
+                _choice(claim["state"], ("OCCUPIED", "GRANTED"), path+"holder_detail.state")
+                if claim["direction"] not in (-1, 0, 1):
+                    raise SchemaError(f"{path}holder_detail.direction: 복도 방향값을 확인하세요")
+            if [claim["robot"] for claim in claims] != holders:
+                raise SchemaError(f"{path}holder_detail: 보유 목록과 일치해야 합니다")
+        if resource.get("follow_stop") is not None:
+            _fields(resource, {"follow_stop": dict}, path=path)
+            pair = resource["follow_stop"]
+            _fields(pair, {"front": str, "rear": str, "since": NUMBER}, path=path+"follow_stop.")
+            if name != "CORRIDOR" or pair["front"] == pair["rear"]:
+                raise SchemaError(f"{path}follow_stop: 복도를 공유하는 앞뒤 로봇이 필요합니다")
         if resource["holder"] != next(iter(holders), None):
             raise SchemaError(f"{path}holder: 첫 번째 보유 로봇과 일치해야 합니다")
         if resource["state"] != "UNKNOWN" and (resource["state"] == "FREE") != (not holders):
@@ -337,6 +374,6 @@ def parse_event(text: str) -> dict:
     data, _ = _read(text)
     _texts(data, ("type",), None)
     _fields(data, {"ts": NUMBER, "robot": (str, NULL), "mission_id": (str, NULL), "detail": dict})
-    if data["type"] in ("RESOURCE_GRANT", "RESOURCE_HOLD", "CORRIDOR_YIELD_START") and "rule" in data["detail"]:
+    if data["type"] in ("RESOURCE_GRANT", "RESOURCE_HOLD", "CORRIDOR_YIELD_START", "CORRIDOR_FOLLOW_STOP") and "rule" in data["detail"]:
         _decision_detail(data["detail"])
     return data

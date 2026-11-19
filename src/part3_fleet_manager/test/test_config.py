@@ -9,33 +9,48 @@ from part3_fleet_manager.core.config import ConfigError, config_from_dict, load_
 
 
 def test_default_yaml_loads(cfg):
+    assert [(r.label, r.mark) for r in cfg.robots.values()] == [("침상형 이송 로봇", "A"), ("약품 운송 로봇", "B")]
     assert cfg.robots["robot_a"].ns == "robot2"
     assert cfg.robots["robot_b"].ns == "robot3"
     assert {robot.start_zone for robot in cfg.robots.values()} == {"D", "F"}
     assert cfg.type_to_robot == {"PATIENT_TRANSPORT": "robot_a", "MED_ROUND": "robot_b", "CALL": "robot_b"}
-    assert (cfg.assignment.mode, cfg.assignment.min_battery_pct) == ("IDLE_BEST_BATTERY", 20)
+    assert (cfg.assignment.mode, cfg.assignment.min_battery_pct) == ("ROLE", 20)
     assert cfg.mission.return_home and cfg.mission.return_interruptible
     assert cfg.robot_link.command_topic.format(ns=cfg.robots["robot_a"].ns) == (
         "/robot2/hospital_nav/command"
     )
-    assert cfg.robot_link.request_id == "auto"
+    assert cfg.robot_link.request_id == "auto" and cfg.robot_link.start_timeout_s == 120
+    assert not cfg.safety.use_hazard_topic and all(r.return_to == "ZONE" for r in cfg.robots.values())
+    assert not cfg.mock.report_rejections and cfg.mock.localizing_s == 3
     assert set(cfg.zones) == set("ABCDEF")
     assert cfg.corridor.mouths["ROOM_E"] == (-1.08, -2.25)
-    assert cfg.corridor.mode == "SHARED_YIELD" and cfg.corridor.yield_enabled
+    assert cfg.corridor.yield_enabled
+    assert cfg.safety.bump_neighbor_m == 1.0 and cfg.publish.finished_mission_limit == 20
     assert (cfg.corridor.yield_trigger_m, cfg.corridor.yield_release_m, cfg.corridor.yield_timeout_s) == (1.2, 0.5, 10)
     assert cfg.resources.clear_margin_m == 0.20
+    assert (cfg.corridor.follow_gap_m, cfg.corridor.follow_resume_m) == (1.0, 1.4)
+    assert (cfg.safety.proximity_stop_m, cfg.safety.proximity_resume_m) == (0.6, 0.9)
+    assert cfg.resources.zone_occupied_m == 0.6
     assert cfg.resources.aging_s == 0
     assert cfg.deadlock.yield_zones == {"ROOM_B": "D", "ROOM_E": "F"}
     assert cfg.safety.bed_exit_pause_targets == ("robot_a",)
     assert cfg.mission.confirm_at_stops and not cfg.mission.return_to_dock
-    assert (cfg.mock.speed_mps, cfg.mock.stall_radius_m, cfg.mock.supports_request_id) == (0.2, 0.05, True)
+    assert (cfg.mock.speed_mps, cfg.mock.stall_radius_m, cfg.mock.supports_request_id) == (0.2, 0.05, False)
     assert (cfg.publish.fleet_state_hz, cfg.publish.tick_hz) == (5, 10)
     assert cfg.db_path == str(Path("~/.bad/bad.db").expanduser())
 
 
 @pytest.mark.parametrize(("path", "value"), [
     ("robots.robot_b.ns", "robot2"),
+    ("robots.robot_b.mark", "A"),
+    ("robots.robot_a.mark", "AB"),
     ("robots.robot_a.start_zone", "Z"),
+    ("robots.robot_a.return_to", "HOME"),
+    ("robots.robot_a.dock.yaw_deg", float("nan")),
+    ("robot_link.start_timeout_s", 0),
+    ("safety.use_hazard_topic", "false"),
+    ("mock.localizing_s", -1),
+    ("mock.report_rejections", "false"),
     ("type_to_robot.MED_ROUND", "missing"),
     ("assignment.mode", "ROUND_ROBIN"),
     ("assignment.min_battery_pct", 101),
@@ -60,6 +75,14 @@ def test_default_yaml_loads(cfg):
     ("resources.aging_s", True),
     ("deadlock.yield_zones.ROOM_E", "E"),
     ("stall.long_s", 5),
+    ("safety.bump_neighbor_m", -1),
+    ("corridor.follow_gap_m", 0),
+    ("corridor.follow_resume_m", 1.0),
+    ("safety.proximity_stop_m", -0.1),
+    ("safety.proximity_resume_m", 0.5),
+    ("resources.zone_occupied_m", float("nan")),
+    ("publish.finished_mission_limit", -1),
+    ("publish.finished_mission_limit", True),
     ("safety.bed_exit_pause_targets", ["robot2"]),
     ("mission.return_to_dock", "false"),
     ("mock.speed_mps", 0),
@@ -107,8 +130,10 @@ def test_core_has_no_ros_imports():
             assert not ros_packages.intersection(name.split(".")[0] for name in imports), source
 
 
-def test_previous_fleet_file_inherits_shared_yield_defaults(cfg):
+def test_previous_fleet_file_without_policy_uses_directional_defaults():
     data = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
     for key in ("mode", "yield_enabled", "yield_trigger_m", "yield_release_m", "yield_timeout_s"):
         del data["corridor"][key]
-    assert config_from_dict(data).corridor == cfg.corridor
+    corridor = config_from_dict(data).corridor
+    assert corridor.mode == "DIRECTIONAL" and corridor.yield_enabled
+    assert (corridor.yield_trigger_m, corridor.yield_release_m, corridor.yield_timeout_s) == (1.2, 0.5, 10.0)

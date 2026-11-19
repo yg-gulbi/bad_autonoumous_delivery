@@ -13,7 +13,8 @@ MID = (-1.6, -2.0)
 
 
 class RoomSwap:
-    def __init__(self, cfg, *, levels=(2, 2), since=(0, 0), patients=(False, False)):
+    def __init__(self, cfg, *, mode="SHARED_YIELD", levels=(2, 2), since=(0, 0), patients=(False, False)):
+        cfg = replace(cfg, corridor=replace(cfg.corridor, mode=mode))
         self.cfg = cfg
         self.resources = ResourceManager(cfg)
         self.deadlock = DeadlockManager(self.resources)
@@ -38,7 +39,7 @@ class RoomSwap:
 
 @pytest.mark.parametrize("mode", ["EXCLUSIVE", "SHARED_YIELD"])
 def test_5_swap_times_out_yields_and_completes_both_original_legs(cfg, mode):
-    swap = RoomSwap(replace(cfg, corridor=replace(cfg.corridor, mode=mode)))
+    swap = RoomSwap(cfg, mode=mode)
     shared = mode == "SHARED_YIELD"
     rm, dl = swap.resources, swap.deadlock
     assert isinstance(dl.wait_graph(), nx.DiGraph)
@@ -113,9 +114,9 @@ def test_operator_choice_runs_once_and_uses_resource_arbitration(cfg):
     assert swap.deadlock.yielding[A].detour.destination == "D"
     with pytest.raises(ValueError, match="E-409"):
         swap.deadlock.choose(card_id, "yield_b", "nurse01", 3)
-    swap.resources.resources["CORRIDOR"].blocked_by = B
+    swap.resources.resources["CORRIDOR"].stall_blockers.add(B)
     assert not swap.tick(4) and swap.resources.resources["CORRIDOR"].state == "FREE"
-    swap.resources.resources["CORRIDOR"].blocked_by = None
+    swap.resources.resources["CORRIDOR"].stall_blockers.discard(B)
     assert swap.tick(5) == [swap.deadlock.yielding[A].detour]
     closed = next(e for e in swap.resources.events if e["type"] == "CARD_CLOSED")
     assert closed["detail"]["by"] == "nurse01" and closed["detail"]["choice"] == "yield_a"

@@ -1,14 +1,15 @@
 robots:
-  robot_a: {label: "Robot A", ns: robot2, role: PATIENT_TRANSPORT, start_zone: D}   # ns 확정 필요
-  robot_b: {label: "Robot B", ns: robot3, role: MED_ROUND,         start_zone: F}
+  # return_to: ZONE은 start_zone으로, DOCK은 PART 04 도크 좌표로 복귀한다. robot3 좌표는 미등록.
+  robot_a: {label: "침상형 이송 로봇", mark: A, ns: robot2, role: PATIENT_TRANSPORT, start_zone: D, return_to: ZONE, dock: {x: -0.330, y: -5.110, yaw_deg: -3.0}}
+  robot_b: {label: "약품 운송 로봇", mark: B, ns: robot3, role: MED_ROUND,         start_zone: F, return_to: ZONE}
 type_to_robot: {PATIENT_TRANSPORT: robot_a, MED_ROUND: robot_b, CALL: robot_b}
 
 assignment:
-  mode: IDLE_BEST_BATTERY
+  mode: ROLE
   min_battery_pct: 20
 
 robot_link:
-  mode: HOSPITAL_NAV            # HOSPITAL_NAV | ICD_GOAL_POSE(자리만)
+  mode: HOSPITAL_NAV
   command_topic: "/{ns}/hospital_nav/command"
   status_topic: "/{ns}/hospital_nav/status"
   amcl_pose_topic: "/{ns}/amcl_pose"
@@ -16,6 +17,7 @@ robot_link:
   hazard_topic: "/{ns}/hazard_detection"
   dock_status_topic: "/{ns}/dock_status"
   request_id: auto              # auto | always | never (3.3절 R1 표)
+  start_timeout_s: 120.0         # 언독·위치 초기화부터 주행 시작까지
   accept_timeout_s: 3.0
   link_timeout_s: 3.0           # STATE가 1 Hz라서 3초
 
@@ -28,7 +30,9 @@ zones:                          # PART 04 goal_manager.py와 같은 값
   F: {x: -0.80, y: -5.10, name: ""}
 
 corridor:
-  mode: SHARED_YIELD
+  mode: DIRECTIONAL
+  follow_gap_m: 1.0              # 복도 축 간격이 이 값 이하면 뒤 로봇 정지
+  follow_resume_m: 1.4           # 이 간격 이상으로 벌어져야 후행 재개
   yield_enabled: true
   yield_trigger_m: 1.2
   yield_release_m: 0.5
@@ -43,6 +47,7 @@ corridor:
     ROOM_E: {x: -1.08, y: -2.25}
 
 resources:
+  zone_occupied_m: 0.6           # 목적지 중심에서 다른 로봇까지의 점유 반경
   clear_margin_m: 0.20
   clear_hold_s: 1.0
   decision_window_s: 1.0
@@ -70,6 +75,10 @@ obstacle:                       # PART 06 장애물 분류 (3.2a·5.5절, 단계
   label_ko: {person: 사람, chair: 의자, suitcase: 가방, backpack: 가방, bottle: 병, bed: 침대, couch: 소파, dining table: 탁자, potted plant: 화분, dog: 개, cat: 고양이}
 
 safety:
+  use_hazard_topic: false        # 위치 기반 충돌 방지. true면 기존 범퍼 정지 규칙도 사용
+  proximity_stop_m: 0.6          # 중심 간 거리가 이 값 미만이면 주행 중인 로봇 정지
+  proximity_resume_m: 0.9        # 이 거리 이상에서 근접 정지 해제
+  bump_neighbor_m: 1.0
   bed_monitor:
     warn_s: 1.0
     lost_s: 3.0
@@ -85,16 +94,18 @@ mission:
   manual_level: 1               # GO_ZONE에는 UI가 level을 보내지 않음
   retry_after_return: false     # 이전 구역으로 되돌아간 뒤 원래 구간은 운영자가 재시도
   confirm_at_stops: true
-  return_to_dock: false
 
 publish:
   fleet_state_hz: 5.0
   tick_hz: 10.0
+  finished_mission_limit: 20     # /fleet/state에 포함할 최근 완료·취소 임무 수
 
 db:
   path: ~/.bad/bad.db
 
 mock:
+  localizing_s: 3.0
+  report_rejections: false       # 실제 command_receiver는 거절을 로그에만 남긴다
   speed_mps: 0.2
   stall_radius_m: 0.05          # 시험 장애물 좌표와 mock 이동 선분 사이의 허용 거리
-  supports_request_id: true     # 로봇별 launch 인자로 R1 반영 전후를 섞어 시험 가능
+  supports_request_id: false     # 로봇별 launch 인자로 R1 반영 전후를 섞어 시험 가능

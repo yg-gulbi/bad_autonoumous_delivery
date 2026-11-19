@@ -10,7 +10,7 @@ from rclpy.node import Node
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 
-from .core.config import load_config
+from .core.config import CORRIDOR_MODES, load_config
 from .core.fleet_core import FleetCore
 from .core.schemas import dumps
 from .robot_link import RobotLink
@@ -27,13 +27,18 @@ class FleetManagerNode(Node):
         mode = self.declare_parameter("assignment_mode", config.assignment.mode).value
         if mode not in ("IDLE_BEST_BATTERY", "ROLE"):
             raise ValueError("assignment_mode must be IDLE_BEST_BATTERY or ROLE")
+        corridor_mode = self.declare_parameter("corridor_mode", config.corridor.mode).value
+        if corridor_mode not in CORRIDOR_MODES:
+            raise ValueError(f"corridor_mode must be one of {CORRIDOR_MODES}")
+        config = replace(config, corridor=replace(config.corridor, mode=corridor_mode))
         monitor = config.safety.bed_monitor
         required = self.declare_parameter("bed_monitor_require_at_start", monitor.require_at_start).value
         config = replace(config, assignment=replace(config.assignment, mode=mode),
                          safety=replace(config.safety, bed_monitor=replace(monitor, require_at_start=required)))
         db_path = self.declare_parameter("db_path", "").value
         self.core = FleetCore(replace(config, db_path=db_path) if db_path else config)
-        self.links = {r: RobotLink(self, r, unit.ns, config.robot_link, self.core.enqueue, self.now, config.obstacle)
+        self.links = {r: RobotLink(self, r, unit.ns, config.robot_link, self.core.enqueue, self.now, config.obstacle,
+                                   use_hazard_topic=config.safety.use_hazard_topic)
                       for r, unit in config.robots.items()}
         self.outputs = {name: self.create_publisher(String, name, 100) for name in
                         ("/fleet/state", "/fleet/decision_req", "/mission/event", "/ui/ack")}

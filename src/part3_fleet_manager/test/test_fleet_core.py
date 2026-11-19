@@ -12,9 +12,11 @@ A, B = "robot_a", "robot_b"
 
 
 @pytest.fixture
-def sim(cfg, tmp_path):
+def sim(cfg, tmp_path, request):
+    cfg = replace(cfg, safety=replace(cfg.safety, use_hazard_topic=getattr(request, "param", False)))
     # These stage 2 scenarios, including 26, use fixed patient and medication roles.
-    s = Simulation(replace(cfg, assignment=replace(cfg.assignment, mode="ROLE"), db_path=str(tmp_path / "bad.db")))
+    s = Simulation(replace(cfg, corridor=replace(cfg.corridor, mode="SHARED_YIELD"),
+                           assignment=replace(cfg.assignment, mode="ROLE"), db_path=str(tmp_path / "bad.db")))
     yield s
     s.core.store.close()
 
@@ -25,7 +27,7 @@ def commands(out):
 
 @pytest.fixture
 def shared(cfg, tmp_path):
-    s = Simulation(replace(cfg, db_path=str(tmp_path / "pool.db")))
+    s = Simulation(replace(cfg, corridor=replace(cfg.corridor, mode="SHARED_YIELD"), assignment=replace(cfg.assignment, mode="IDLE_BEST_BATTERY"), db_path=str(tmp_path / "pool.db")))
     yield s
     s.core.store.close()
 
@@ -154,7 +156,7 @@ def test_shared_assignment_excludes_offline_and_safety_paused(shared):
 
 @pytest.mark.parametrize("interruptible", [True, False])
 def test_dispatch_during_home_move_acceptance(cfg, tmp_path, interruptible):
-    cfg = replace(cfg, db_path=str(tmp_path / "test.db"),
+    cfg = replace(cfg, db_path=str(tmp_path / "test.db"), assignment=replace(cfg.assignment, mode="IDLE_BEST_BATTERY"),
                   mission=replace(cfg.mission, return_interruptible=interruptible))
     sim = Simulation(cfg)
     try:
@@ -207,6 +209,7 @@ def test_return_resources_remain_occupied_during_preemption(shared):
     assert commands(shared.tick(2.7))[A].startswith("MOVE E 1")
 
 
+@pytest.mark.parametrize("sim", [True], indirect=True)
 def test_10_bed_exit_and_20_bump_require_operator_resume(sim):
     sim.patient()
     assert commands(sim.tick(0))[A].startswith("MOVE A 2")
