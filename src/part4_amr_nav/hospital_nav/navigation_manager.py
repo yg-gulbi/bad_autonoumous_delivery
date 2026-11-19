@@ -40,6 +40,10 @@ class NavigationManager(Node):
         with self._lock:
             return self._remaining
 
+    def ready(self) -> bool:
+        """True when Nav2's navigate_to_pose action server is up (Nav2 active)."""
+        return self._client.server_is_ready()
+
     def is_busy(self) -> bool:
         with self._lock:
             return self._state in self._BUSY

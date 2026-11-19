@@ -2,7 +2,7 @@
 """Control-console text commands -> MissionManager.
 
 Subscribe: /<robot>/hospital_nav/command (std_msgs/String)
-Examples: 'F', 'F 3', 'MOVE F 3', 'PAUSE', 'RESUME', 'CANCEL'
+Examples: 'F', 'F 3', 'MOVE F 3', 'DOCK', 'UNDOCK', 'PAUSE', 'RESUME', 'CANCEL'
 """
 import argparse
 import signal
@@ -14,19 +14,22 @@ from rclpy.node import Node
 from rclpy.signals import SignalHandlerOptions
 from std_msgs.msg import String
 
+from .goal_manager import GoalPoint
 from .mission_manager import MissionManager
 
-CONTROL = ("PAUSE", "RESUME", "CANCEL")
+CONTROL = ("PAUSE", "RESUME", "CANCEL", "UNDOCK")
 
 
 def parse_command(text):
     words = text.strip().upper().split()
     if len(words) == 1 and words[0] in CONTROL:
         return words[0], None, None
+    if words == ["DOCK"]:
+        return "MOVE", "DOCK", 1
     if words and words[0] == "MOVE":
         words = words[1:]
     if len(words) not in (1, 2) or words[0] not in set("ABCDEF"):
-        raise ValueError("A~F, MOVE F [1~3], PAUSE, RESUME, CANCEL 중 하나")
+        raise ValueError("A~F, MOVE F [1~3], DOCK, UNDOCK, PAUSE, RESUME, CANCEL 중 하나")
     if len(words) == 2 and words[1] not in ("1", "2", "3"):
         raise ValueError("응급도는 1~3 정수")
     return "MOVE", words[0], int(words[1]) if len(words) == 2 else 1
@@ -39,7 +42,8 @@ def execute(mission, text):
         return action, mission.start(room, priority=priority)
     return action, {"PAUSE": lambda: mission.pause("관제 요청"),
                     "RESUME": mission.resume,
-                    "CANCEL": mission.cancel_mission}[action]()
+                    "CANCEL": mission.cancel_mission,
+                    "UNDOCK": mission.undock}[action]()
 
 
 def init_ros():
@@ -51,7 +55,7 @@ def init_ros():
 
 def run(mission, *extra_nodes):
     """Spin all nodes in the background; on any exit cancel and wait for Nav2."""
-    nodes = (mission, mission.nav, *extra_nodes)
+    nodes = (mission, mission.nav, mission.dock, *extra_nodes)
     executor = MultiThreadedExecutor(num_threads=4)
     for node in nodes:
         executor.add_node(node)
@@ -90,9 +94,11 @@ class CommandReceiver(Node):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--robot", default="robot3")
+    parser.add_argument("--dock", nargs=3, type=float, metavar=("X", "Y", "YAW_DEG"),
+                        help="도킹 상태 위치 (기본: goal_manager.DOCKS)")
     args = parser.parse_args()
     init_ros()
-    mission = MissionManager(args.robot)
+    mission = MissionManager(args.robot, GoalPoint(*args.dock) if args.dock else None)
     run(mission, CommandReceiver(mission))
 
 
