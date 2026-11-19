@@ -12,7 +12,8 @@ MID = (-1.6, -2.0)
 
 @pytest.fixture
 def manager(cfg):
-    return ResourceManager(replace(cfg, corridor=replace(cfg.corridor, mode="EXCLUSIVE")))
+    # These cases define the 4I room rule (one robot per side room). DOOR rooms are in test_doors.py.
+    return ResourceManager(replace(cfg, corridor=replace(cfg.corridor, mode="EXCLUSIVE", room_mode="ROOM")))
 
 
 @pytest.fixture

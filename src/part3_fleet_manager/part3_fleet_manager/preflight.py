@@ -20,7 +20,8 @@ from sensor_msgs.msg import BatteryState
 from std_msgs.msg import Bool, String
 
 from .core.config import ConfigError, load_config
-from .preflight_checks import compare_zones, discovery_ports, find_goal_file, goal_coordinates, state_rows
+from .preflight_checks import (classifier_line, compare_points, discovery_ports, find_goal_file, goal_points,
+                               slot_line, state_rows)
 from .robot_link import AMCL_QOS, DockStatus, HazardDetectionVector
 
 ENVIRONMENT = ("ROS_DOMAIN_ID", "ROS_DISCOVERY_SERVER", "ROS_SUPER_CLIENT", "ROS_AUTOMATIC_DISCOVERY_RANGE",
@@ -58,6 +59,7 @@ class Observations(Node):
         self.bed_value = None
         self.states = {}
         self.seen = {}
+        self.slots = {}  # ns -> STATE carried a "slot" key (4J PART 04)
         self.create_subscription(Bool, "/patient/bed_exit", self.bed, 10)
         topics = config.robot_link
         for unit in config.robots.values():
@@ -85,6 +87,7 @@ class Observations(Node):
         if (isinstance(report, dict) and report.get("type") == "STATE" and report.get("robot_id") == ns
                 and isinstance(report.get("state"), str)):
             self.states[ns] = (report, monotonic())
+            self.slots[ns] = self.slots.get(ns, False) or "slot" in report
 
     def pose(self, ns, msg):
         pos = msg.pose.pose.position
@@ -142,9 +145,15 @@ class Observations(Node):
                 failures.append(reason)
             else:
                 print("  명령 발행자 · " + (", ".join(publishers) or "없음 (관제 실행 전 가능)"))
-            result = self.config.obstacle.result_topic.format(ns=ns)
+            print("  자리 번호(STATE.slot) · " + slot_line(self.slots.get(ns)))
+            obstacle = self.config.obstacle
+            image = obstacle.image_topic.format(ns=ns)
+            readers = [f"{s.node_namespace.rstrip('/')}/{s.node_name}" for s in self.get_subscriptions_info_by_topic(image)]
+            print(f"  {image} · " + classifier_line(readers, obstacle.mode))
+            result = obstacle.result_topic.format(ns=ns)
             found = any(p.topic_type == "std_msgs/msg/String" for p in self.get_publishers_info_by_topic(result))
-            print(f"  {result} · " + ("발행자 있음" if found else "없음 — 30초 규칙으로 동작"))
+            fallback = "없음 — 판별 없이 사진만 표시" if obstacle.mode == "report" else "없음 — 30초 규칙으로 동작"
+            print(f"  {result} · " + ("발행자 있음" if found else fallback))
         text = "없음" if self.bed_value is None else "이탈" if self.bed_value else "정상"
         print(f"\n/patient/bed_exit · {self.bed_samples/duration:.1f} Hz ({self.bed_samples}건, 마지막 값 {text})")
         if DockStatus is None:
@@ -170,8 +179,11 @@ def main(args=None):
     try:
         if goals is None:
             raise ValueError("goal_manager.py 위치를 --goals-file로 지정하세요.")
-        differences = compare_zones(config.zones, goal_coordinates(goals))
-        print(f"구역 대조 ({goals}) · " + ("경고" if differences else "OK"))
+        part4 = goal_points(goals)
+        differences = compare_points(config, part4)
+        layout = ("자리 2개·교차로 (SLOTS)" if part4["format"] == "SLOTS"
+                  else "예전 형식 (GOALS, 자리 1개)")
+        print(f"구역 대조 ({goals}) · {layout} · " + ("경고" if differences else "OK"))
         for warning in differences:
             print("  경고 · " + warning)
     except (OSError, SyntaxError, ValueError, OverflowError) as exc:

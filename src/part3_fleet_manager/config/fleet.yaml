@@ -1,7 +1,8 @@
 robots:
-  # return_to: ZONE은 start_zone으로, DOCK은 PART 04 도크 좌표로 복귀한다. robot3 좌표는 미등록.
-  robot_a: {label: "침상형 이송 로봇", mark: A, ns: robot2, role: PATIENT_TRANSPORT, start_zone: D, return_to: ZONE, dock: {x: -0.330, y: -5.110, yaw_deg: -3.0}}
-  robot_b: {label: "약품 운송 로봇", mark: B, ns: robot3, role: MED_ROUND,         start_zone: F, return_to: ZONE}
+  # 11/19 확정 (D-29): robot3 = 침상형, robot2 = 약품 운송. 도크 좌표는 PART 04 DOCKS의 robot2 값이다.
+  # return_to: ZONE은 start_zone으로, DOCK은 도크 좌표로 복귀한다. robot3 도크 좌표는 미등록.
+  robot_a: {label: "침상형 이송 로봇", mark: A, ns: robot3, role: PATIENT_TRANSPORT, start_zone: D, return_to: ZONE}
+  robot_b: {label: "약품 운송 로봇", mark: B, ns: robot2, role: MED_ROUND,         start_zone: F, return_to: ZONE, dock: {x: -0.330, y: -5.110, yaw_deg: -3.0}}
 type_to_robot: {PATIENT_TRANSPORT: robot_a, MED_ROUND: robot_b, CALL: robot_b}
 
 assignment:
@@ -21,13 +22,13 @@ robot_link:
   accept_timeout_s: 3.0
   link_timeout_s: 3.0           # STATE가 1 Hz라서 3초
 
-zones:                          # PART 04 goal_manager.py와 같은 값
-  A: {x: -2.20, y:  0.50, name: ""}
-  B: {x: -2.55, y: -2.20, name: ""}
-  C: {x: -2.30, y: -5.00, name: ""}
-  D: {x: -0.60, y:  0.40, name: ""}
-  E: {x: -0.55, y: -2.40, name: ""}
-  F: {x: -0.80, y: -5.10, name: ""}
+zones:                          # PART 04 goal_manager.py SLOTS와 같은 값. x, y = 1번 자리, slot2 = 2번 자리 (D-30)
+  A: {x: -2.383, y:  1.027, slot2: {x: -2.458, y:  0.282}, name: ""}   # 1번 안쪽, 2번 입구 쪽
+  B: {x: -2.500, y: -1.250, slot2: {x: -2.600, y: -2.800}, name: ""}   # 문 양옆
+  C: {x: -2.758, y: -5.123, slot2: {x: -2.738, y: -4.573}, name: ""}
+  D: {x: -1.000, y:  0.800, slot2: {x: -0.750, y: -0.150}, name: ""}
+  E: {x: -0.400, y: -1.400, slot2: {x: -0.500, y: -2.950}, name: ""}   # 문 양옆
+  F: {x: -1.400, y: -5.400, slot2: {x: -1.350, y: -4.700}, name: ""}
 
 corridor:
   mode: DIRECTIONAL
@@ -45,6 +46,9 @@ corridor:
     BOTTOM: {x: -1.72, y: -4.20}
     ROOM_B: {x: -1.96, y: -2.10}
     ROOM_E: {x: -1.08, y: -2.25}
+  crossroad: {x: -1.500, y: -2.180}   # PART 04 goal_manager.CROSSROAD. B·E 방을 드나들 때 먼저 서는 점
+  crossroad_clear_m: 0.6         # 교차로 중심에서 이 거리 안이면 교차로를 쓰는 중
+  room_mode: DOOR                # DOOR(문·교차로 한 대씩, 방 안 두 대) | ROOM(방 하나에 한 대, 4J 이전)
 
 resources:
   zone_occupied_m: 0.6           # 목적지 중심에서 다른 로봇까지의 점유 반경
@@ -64,20 +68,28 @@ stall:
   short_s: 10.0
   long_s: 30.0
 
-obstacle:                       # PART 06 장애물 분류 (3.2a·5.5절, 단계 3O)
+obstacle:                       # 장애물 (3.2a·5.5절). report: PART 04 사진 + PART 06 1번 (D-31)
   enabled: true
-  inspect_topic: "/{ns}/obstacle/inspect_image"
+  mode: report                  # report(Nav2 포기 때 PART 04 사진을 PART 06이 판별) | inspect(10초 멈춤에 촬영 요청, 3O 방식)
+  inspect_topic: "/{ns}/obstacle/inspect_image"            # inspect 모드에서만 발행
   result_topic: "/{ns}/obstacle_classifier/result"
+  image_topic: "/{ns}/hospital_nav/obstacle_image"         # PART 04 원본 사진 (화면이 구독)
+  marked_image_topic: "/{ns}/obstacle_classifier/image/compressed"   # PART 06 표시 사진 (화면이 구독)
   inspect_at_s: 10.0
-  timeout_s: 6.0                # PART 06 촬영 제한 3초 + 추론 여유
+  timeout_s: 6.0                # OBSTACLE(또는 촬영 요청) 뒤 PART 06 결과를 기다리는 시간
+  report_wait_s: 4.0            # Nav2 포기 뒤 OBSTACLE을 기다리는 시간 (PART 04 촬영 제한 3초 + 여유)
+  retry_if_clear: true          # report 모드 NONE이면 같은 구간을 한 번 자동 재출발
+  retry_delay_s: 3.0
+  none_text: "의료용 상자는 보이지 않음"
   object_blocks_now: true       # OBJECT면 30초를 기다리지 않고 바로 막힘 처리
   min_confidence: 0.4           # 이보다 낮은 탐지는 종류 판단에서 뺀다 (기록에는 남김)
-  label_ko: {person: 사람, chair: 의자, suitcase: 가방, backpack: 가방, bottle: 병, bed: 침대, couch: 소파, dining table: 탁자, potted plant: 화분, dog: 개, cat: 고양이}
+  label_ko: {medical_box: 의료용 상자, person: 사람, chair: 의자, suitcase: 가방, backpack: 가방, bottle: 병, bed: 침대, couch: 소파, dining table: 탁자, potted plant: 화분, dog: 개, cat: 고양이}
 
 safety:
   use_hazard_topic: false        # 위치 기반 충돌 방지. true면 기존 범퍼 정지 규칙도 사용
   proximity_stop_m: 0.6          # 중심 간 거리가 이 값 미만이면 주행 중인 로봇 정지
   proximity_resume_m: 0.9        # 이 거리 이상에서 근접 정지 해제
+  slot_stop_m: 0.45              # 같은 구역 자리에 서 있는 로봇과, 그 구역에서 출발·도착하는 로봇 사이의 근접 정지 거리 (D-30, 현장 확인)
   bump_neighbor_m: 1.0
   bed_monitor:
     warn_s: 1.0
@@ -104,6 +116,7 @@ db:
   path: ~/.bad/bad.db
 
 mock:
+  abort_after_s: 5.0             # 장애물 앞에서 멈춘 뒤 Nav2 포기(MISSION_FAILED + OBSTACLE)까지
   localizing_s: 3.0
   report_rejections: false       # 실제 command_receiver는 거절을 로그에만 남긴다
   speed_mps: 0.2

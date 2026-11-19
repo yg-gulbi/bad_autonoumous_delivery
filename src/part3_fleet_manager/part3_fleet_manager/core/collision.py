@@ -27,8 +27,9 @@ class FirstToMove:
 
 
 class CollisionControl:
-    def __init__(self, resources, links, decisions):
+    def __init__(self, resources, links, decisions, zone_of=None):
         self.rm, self.links, self.decisions = resources, links, decisions
+        self.zone_of = zone_of or (lambda robot: None)  # zone the robot last stopped in (mission)
         self.zone = {}
         self.contacts = {}  # held robot -> peer -> continuous stop
         self.priority = {}  # pair -> one operator-authorized departure
@@ -49,19 +50,53 @@ class CollisionControl:
         self.rm.record("ZONE_OCCUPIED_CLEAR", now, "목적지 대기가 해제됐습니다.", robot=robot,
                        mission_id=wait.leg.mission_id, destination=wait.leg.destination, peer=wait.peer)
 
-    def zone_held(self, leg, now):
-        robot, goal = leg.robot, leg.destination
-        targets = (self.rm.config.zones[goal], *leg.dock_path)
-        radius = self.rm.config.resources.zone_occupied_m
-        peer = None
-        for other, link in self.links.items():
+    def parked_slot(self, robot):
+        """(zone, slot) whose point is this robot's nearest slot within zone_occupied_m."""
+        pose, config = self.links[robot].pose, self.rm.config
+        if pose is None:
+            return None
+        best = min(((dist(pose, point), zone, index) for zone in config.zones
+                    for index, point in enumerate(config.slots.get(zone) or (config.zones[zone],), 1)),
+                   default=None)
+        return best[1:] if best and best[0] <= config.resources.zone_occupied_m else None
+
+    def _slot_holder(self, robot, zone, slot):
+        """Another robot standing at this slot, or an active leg heading to it (D-30)."""
+        for other in self.links:
             if other == robot:
                 continue
+            if self.parked_slot(other) == (zone, slot):
+                return other
             active = self.rm.active.get(other)
-            if ((link.pose is not None and any(dist(link.pose, p) <= radius for p in targets))
-                    or (active and active.destination == goal)):
-                peer = other
-                break
+            # A dock approach keeps the whole zone as before 4J.
+            if active and active.destination == zone and (active.dock_path or self.rm.slot_of(active) == slot):
+                return other
+        return None
+
+    def zone_held(self, leg, now):
+        robot, goal = leg.robot, leg.destination
+        radius = self.rm.config.resources.zone_occupied_m
+        peer = None
+        if leg.dock_path:
+            targets = (self.rm.config.zones[goal], *leg.dock_path)
+            for other, link in self.links.items():
+                if other == robot:
+                    continue
+                active = self.rm.active.get(other)
+                if ((link.pose is not None and any(dist(link.pose, p) <= radius for p in targets))
+                        or (active and active.destination == goal)):
+                    peer = other
+                    break
+        else:
+            slot, peer = 1, self._slot_holder(robot, goal, 1)
+            # Slot 2 only for a robot whose PART 04 reports slots; earlier PART 04 rejects "MOVE F2".
+            if (peer and self.rm.config.slot_count(goal) > 1 and self.links[robot].slots
+                    and self._slot_holder(robot, goal, 2) is None):
+                slot, peer = 2, None
+            if slot == 1:
+                self.rm.slot_choice.pop(leg, None)
+            else:
+                self.rm.slot_choice[leg] = slot
         old = self.zone.get(robot)
         if old and (old.leg is not leg or old.peer != peer):
             self._clear_zone(robot, now)
@@ -83,6 +118,8 @@ class CollisionControl:
             move = self.links[robot].move
             if move and not move.attempts:
                 self.zone_held(leg, now)
+                if move.zone != "DOCK":
+                    move.slot = self.rm.slot_of(leg)
 
     def _clear_near(self, robot, peer, now, reason):
         peers = self.contacts.get(robot, {})
@@ -124,6 +161,24 @@ class CollisionControl:
         self.rm.record("PROXIMITY_STOP", now, reason, robot=robot, peer=peer, distance_m=distance,
                        rule="PROXIMITY", mission_id=leg.mission_id if leg else None)
 
+    def stop_distance(self, a, b):
+        """Proximity stop distance for this pair (D-30).
+
+        A robot standing still at a slot and a robot arriving at or leaving the same zone use
+        safety.slot_stop_m: the two slots can be 0.55 m apart (C), and slot 2 lies between
+        slot 1 and the hall mouth (A, D, F), so the leaving robot passes beside it.
+        """
+        config = self.rm.config
+        stop = config.safety.proximity_stop_m
+        for mover, parked in ((a, b), (b, a)):
+            at = self.parked_slot(parked)
+            if not at or config.slot_count(at[0]) < 2 or self.links[parked].state in ("MOVING", "DOCKING"):
+                continue
+            leg = self.rm.active.get(mover)
+            if leg is not None and not leg.dock_path and at[0] in (leg.destination, self.zone_of(mover)):
+                return min(stop, config.safety.slot_stop_m)
+        return stop
+
     def observe_distance(self, now):
         policy = self.rm.config.safety
         for a, b in combinations(self.links, 2):
@@ -135,7 +190,7 @@ class CollisionControl:
                 self.priority.pop(frozenset((a,b)), None)
                 for robot, peer in ((a,b), (b,a)):
                     self._clear_near(robot, peer, now, "로봇 사이에 재개 간격이 확보됐습니다.")
-            elif distance < policy.proximity_stop_m:
+            elif distance < self.stop_distance(a, b):
                 for robot, peer in ((a,b), (b,a)):
                     if self.links[robot].state in {"MOVING", "DOCKING"} or robot in self.contacts:
                         self._hold_near(robot, peer, distance, now)
@@ -147,7 +202,7 @@ class CollisionControl:
             if peer == robot or pose is None or link.pose is None:
                 continue
             distance = dist(pose, link.pose)
-            if distance < self.rm.config.safety.proximity_stop_m:
+            if distance < self.stop_distance(robot, peer):
                 self._hold_near(robot, peer, distance, now)
         return robot in self.contacts
 

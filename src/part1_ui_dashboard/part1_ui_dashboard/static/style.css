@@ -941,3 +941,28 @@ button:disabled {
     flex-wrap: wrap;
   }
 }
+
+/* 4J obstacle card photo: PART 06 drawn photo, else the PART 04 photo */
+.obstacle-photo {
+  display: grid;
+  gap: var(--s);
+  margin: 0;
+}
+
+.obstacle-photo img {
+  width: 100%;
+  max-height: 260px;
+  object-fit: contain;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.obstacle-photo figcaption {
+  color: var(--muted);
+  font-size: var(--small);
+}
+
+.via-note {
+  color: var(--muted);
+}

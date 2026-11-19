@@ -4,6 +4,7 @@ const h = v => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&
 const nav = { dashboard: ["종합 관제", "로봇 운행과 이송 작업을 실시간으로 확인하세요."], missions: ["이송 작업", "요청부터 완료까지 이송 작업의 진행 상황을 확인하세요."], patient: ["환자 등록", "환자 정보와 이동 경로를 등록하세요."], supply: ["약품 운송 요청", "수령지와 전달지를 지정하고 인계 과정을 확인하세요."], log: ["운영 기록", "로봇 운행과 관제 판단을 시간순으로 확인하세요."] };
 const robotName = r => S?.robots[r]?.label || cfg.robot_names?.[r] || "관제";
 const zn = z => cfg.names[z] || "구역 미확인";
+const zs = (z, slot) => zn(z) + (slot === 2 ? " (2번 자리)" : "");
 const resNames = { FREE: "비어 있음", GRANTED: "허가", OCCUPIED: "점유 중", UNKNOWN: "점유 불명" };
 const routeText = m => m.stops.map(zn).join(" → ");
 function tm(t) {
@@ -279,9 +280,10 @@ function showCard(id) {
     const stalled = !c.context && c.kind === "BLOCKED" && r?.stall_s > 0;
     const facts = [["작업", job ? job.mission_id + " " + cfg.kinds[job.type] + ", Level " + job.level : "직접 이동 또는 임무 없음"],
         ["멈춘 곳", locationText(r)]];
-    if (c.kind === "BLOCKED" && !c.context) facts.push(["앞에 있는 것", obstacleText(r || {}) || "분류 결과 없음"]);
+    if (c.kind === "BLOCKED" && !c.context && !c.obstacle) facts.push(["앞에 있는 것", obstacleText(r || {}) || "분류 결과 없음"]);
+    const photo = c.obstacle ? `<figure class="obstacle-photo" id="obstacle-photo" hidden><img alt="${h((r?.label || "로봇") + "이 찍은 장애물 사진")}"><figcaption></figcaption></figure>` : "";
     openModal("card", `<header class="pop-head attention">${r ? robotMark(r) : ""}<h2>${h(title)}</h2>${elapsedSince(stalled ? S.stamp-r.stall_s : c.created_at, stalled)}</header>
-        <div class="pop-body"><p class="lead">${h(c.reason)}</p>${factList(facts)}
+        <div class="pop-body"><p class="lead">${h(c.reason)}</p>${photo}${factList(facts)}
         <h3>어떻게 할까요?</h3><div class="choices">${c.options.map(o =>
             `<button data-act="choose" data-id="${h(o.id)}"><strong>${h(o.label)}${def && o.id === c.recommended ? " · 추천" : ""}</strong>
             <small>${h(choiceDescriptions[c.context || c.kind]?.[o.id] || "선택한 로봇이 대피 구역으로 이동합니다.")}</small></button>`).join("")}</div>
@@ -289,6 +291,28 @@ function showCard(id) {
         <footer class="row"><small>운영자의 결정을 기다립니다.</small>${btn("나중에", "defer")}</footer></div>`);
     modalCard = id;
     renderTop();
+    if (c.obstacle) showObstaclePhoto(c);
+}
+// The PART 06 drawn photo if it came, else PART 04's own photo. No photo: the card keeps only its sentence.
+async function showObstaclePhoto(c) {
+    const robot = c.robots[0];
+    for (const kind of ["masked", "raw"]) {
+        let reply;
+        try { reply = await fetch(`/api/obstacle_image/${encodeURIComponent(robot)}?kind=${kind}`, {cache: "no-store"}); }
+        catch { return; }
+        if (!reply.ok) continue;
+        const url = URL.createObjectURL(await reply.blob());
+        const figure = $("obstacle-photo");
+        if (modalCard !== c.card_id || !figure) { URL.revokeObjectURL(url); return; }
+        const o = c.obstacle, image = figure.querySelector("img");
+        image.onload = () => URL.revokeObjectURL(url);
+        image.src = url;
+        figure.querySelector("figcaption").textContent = kind === "masked" && o.label_ko
+            ? `판별: ${o.label_ko} ${Number(o.confidence).toFixed(2)}`
+            : "로봇이 찍은 사진 " + tm(Number(reply.headers.get("X-Received-At")));
+        figure.hidden = false;
+        return;
+    }
 }
 const alarmKinds = { BED_MONITOR_LOST: "red", BED_EXIT: "red", BUMP: "red", BLOCKED: "amber", LINK_LOST: "red", FAULT: "amber" };
 

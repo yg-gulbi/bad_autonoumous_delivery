@@ -261,6 +261,11 @@ function paint() {
     for (const [z, pos] of zones) {
         const [x,y] = screen(pos.x,pos.y);
         dot(x,y,4,palette["wall"]);
+        if (pos.slot2) {  // slot 2 of the zone (D-30), drawn smaller than slot 1
+            const [u,v] = screen(pos.slot2.x,pos.slot2.y);
+            dot(u,v,2.5,palette["muted"]);
+            hits.push({x:u,y:v,w:5,h:5,z});
+        }
         const room = S?.resources["ROOM_"+z];
 
         labels.push({x,y,z,

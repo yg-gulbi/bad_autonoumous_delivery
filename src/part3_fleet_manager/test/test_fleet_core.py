@@ -11,12 +11,26 @@ from part3_fleet_manager.core.store import Store
 A, B = "robot_a", "robot_b"
 
 
+def stage2(cfg, path, room_mode):
+    # These stage 2 scenarios, including 26, use fixed patient and medication roles and the
+    # 3O obstacle inspection. Report mode, slots and DOOR rooms (4J) are in test_4j_*.py.
+    return Simulation(replace(cfg, corridor=replace(cfg.corridor, mode="SHARED_YIELD", room_mode=room_mode),
+                              obstacle=replace(cfg.obstacle, mode="inspect"),
+                              assignment=replace(cfg.assignment, mode="ROLE"), db_path=str(path)))
+
+
 @pytest.fixture
 def sim(cfg, tmp_path, request):
     cfg = replace(cfg, safety=replace(cfg.safety, use_hazard_topic=getattr(request, "param", False)))
-    # These stage 2 scenarios, including 26, use fixed patient and medication roles.
-    s = Simulation(replace(cfg, corridor=replace(cfg.corridor, mode="SHARED_YIELD"),
-                           assignment=replace(cfg.assignment, mode="ROLE"), db_path=str(tmp_path / "bad.db")))
+    s = stage2(cfg, tmp_path / "bad.db", "DOOR")
+    yield s
+    s.core.store.close()
+
+
+@pytest.fixture
+def room_sim(cfg, tmp_path):
+    """The 4I room rule: a robot standing in room B or E keeps it (deadlock and scenario 26 cases)."""
+    s = stage2(cfg, tmp_path / "bad.db", "ROOM")
     yield s
     s.core.store.close()
 
@@ -86,7 +100,7 @@ def test_28_call_confirmation_home_and_correlated_preemption(shared):
     assert [e["type"] for e in takeover.events if e["type"] in {"LEG_START", "MISSION_ASSIGNED"}] == [
         "LEG_START", "MISSION_ASSIGNED"]
     assert commands(takeover) == {A: "CANCEL"}
-    shared.pending.append(("status", json.dumps({"robot_id": "robot2", "type": "STATUS",
+    shared.pending.append(("status", json.dumps({"robot_id": shared.cfg.robots[A].ns, "type": "STATUS",
                           "event": "MISSION_CANCELED", "mission_id": "old"}), A))
     assert not shared.tick(.4).commands
     shared.event(A, "MISSION_CANCELED")
@@ -128,7 +142,7 @@ def test_29_home_cancel_terminal_evidence(shared, signal):
     if signal == "ARRIVED":
         shared.event(A, "ARRIVED")
     elif signal == "COMMAND_REJECTED":
-        shared.pending.append(("status", json.dumps({"type":"STATUS","robot_id":"robot2","mission_id":shared.frames[A]["mission_id"],
+        shared.pending.append(("status", json.dumps({"type":"STATUS","robot_id":shared.cfg.robots[A].ns,"mission_id":shared.frames[A]["mission_id"],
                                                       "event":signal,"command":"CANCEL","state":"COMPLETE"}), A))
     else:
         shared.frames[A]["state"] = signal
@@ -364,7 +378,8 @@ def test_failure_while_giving_way_waits_for_operator(sim):
     assert not out.commands and sim.core.resources.snapshot()["CORRIDOR"]["give_way"] is None
 
 
-def test_15_26_concurrent_transport_round_and_queues(sim):
+def test_15_26_concurrent_transport_round_and_queues(room_sim):
+    sim = room_sim
     encounter(sim)
     sim.event(B, "ARRIVED")
     assert commands(sim.tick(2.1)) == {A: "RESUME"}
@@ -534,7 +549,8 @@ def test_two_robot_firmware_versions_have_independent_protocol_sessions(sim):
     assert next_moves[A].startswith("MOVE A 2 id=") and next_moves[B] == "MOVE F 3"
 
 
-def test_deadlock_db_measures_until_room_release_and_replays_metrics(sim):
+def test_deadlock_db_measures_until_room_release_and_replays_metrics(room_sim):
+    sim = room_sim
     sim.frames[A]["pose"] = sim.pose("B")
     sim.frames[B]["pose"] = sim.pose("E")
     sim.patient(pickup="E", level=2)

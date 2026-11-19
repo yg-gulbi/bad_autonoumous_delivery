@@ -1,5 +1,6 @@
 """Field preflight must inspect the local listener and read PART 04 without running it."""
 import socket
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -42,3 +43,41 @@ def test_discovery_requires_a_fastdds_process_on_the_configured_local_port(monke
     assert "python3" in rows[1][2] and "확인 불가" in rows[3][2]
     assert "로컬 주소" in rows[5][2]
     assert checks.discovery_ports("") == []
+
+
+PART4_GOALS = Path(__file__).resolve().parents[2] / "part4_amr_nav/hospital_nav/goal_manager.py"
+
+
+@pytest.mark.skipif(not PART4_GOALS.is_file(), reason="PART 04 소스가 없는 환경")
+def test_62_preflight_reads_the_real_part4_slots_and_crossroad_as_text(cfg):
+    points = checks.goal_points(PART4_GOALS)
+    assert points["format"] == "SLOTS" and points["crossroad"] == (-1.5, -2.18)
+    assert points["slots"]["F"] == [(-1.4, -5.4), (-1.35, -4.7)]
+    assert checks.compare_points(cfg, points) == []
+    assert checks.goal_coordinates(PART4_GOALS)["B"] == (-2.5, -1.25)
+
+
+def test_62_preflight_slot_and_crossroad_differences_and_earlier_format(cfg, tmp_path):
+    path = tmp_path / "goal_manager.py"
+    zones = {z: (round(cfg.slots[z][0][0], 3), round(cfg.slots[z][0][1], 3)) for z in cfg.zones}
+    path.write_text("raise SystemExit(1)\nSLOTS = {\n" + "".join(
+        f'    "{z}": (GoalPoint({x}, {y}), GoalPoint({cfg.slots[z][1][0] + (0.2 if z == "C" else 0)}, {cfg.slots[z][1][1]})),\n'
+        for z, (x, y) in zones.items()) + "}\nCROSSROAD = GoalPoint(-1.5, -2.10)\n")
+    warnings = checks.compare_points(cfg, checks.goal_points(path))
+    assert [w.split(" · ")[0] for w in warnings] == ["C 구역 2번 자리", "교차로"]
+    # The earlier PART 04 (one GOALS point per zone, no crossroad) still parses; its slot 2 is "없음".
+    path.write_text("GOALS = {" + ", ".join(f'"{z}": GoalPoint({x}, {y})' for z, (x, y) in zones.items()) + "}")
+    earlier = checks.goal_points(path)
+    assert earlier["format"] == "GOALS" and earlier["crossroad"] is None
+    warnings = checks.compare_points(cfg, earlier)
+    assert len(warnings) == 7 and all("PART 04 없음" in w for w in warnings)
+
+
+def test_62_preflight_slot_and_classifier_lines():
+    assert checks.slot_line(True) == "있음 (2번 자리 사용)"
+    assert checks.slot_line(False) == "경고 · 예전 PART 04 — 2번 자리 사용 안 함"
+    assert "확인 불가" in checks.slot_line(None)
+    assert checks.classifier_line(["/robot2/obstacle_classifier", "/ui_server"], "report") == \
+        "구독자 1 (/robot2/obstacle_classifier)"
+    assert checks.classifier_line(["/ui_server"], "report").endswith("장애물 분류기 없음 — 상자 판별 없이 사진만 표시")
+    assert "사용 안 함" in checks.classifier_line([], "inspect")

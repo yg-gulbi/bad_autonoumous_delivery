@@ -17,6 +17,8 @@ class RobotReport:
     stalled: bool = False
     nav_paused: bool = False
     departed: bool = False
+    via: bool | None = None      # this move goes through the crossroad (from NAVIGATING)
+    via_passed: bool = False     # VIA_PASSED received for this move
 
     @property
     def stopped(self):
@@ -41,6 +43,10 @@ class Holding:
     outside_since: float | None = None
     reserved_next: bool = False
     direction: int = 0  # Signed TOP → BOTTOM at grant time, zero for unknown or transverse travel.
+    # DOOR rooms (D-30): a door claim belongs to one leg, entering ("IN") or leaving ("OUT") the room.
+    leg: "Leg | None" = None
+    door: str | None = None
+    touched: bool = False  # the robot has been within crossroad_clear_m during this claim
 
     @property
     def state(self):
@@ -133,12 +139,14 @@ class ResourceManager:
         self._decide_after = float("-inf")
         self.events: list[dict] = []
         self.last_decision = None
+        self.slot_choice: dict[Leg, int] = {}  # slot picked by the destination check (collision)
 
     def robot_label(self, robot):
         return self.config.robots[robot].label
 
-    def zone_label(self, zone):
-        return self.config.zone_names.get(zone) or f"{zone} 구역"
+    def zone_label(self, zone, slot=None):
+        name = self.config.zone_names.get(zone) or f"{zone} 구역"
+        return f"{name} (2번 자리)" if slot == 2 else name
 
     def resource_label(self, name):
         if name == g.CORRIDOR:
@@ -198,6 +206,7 @@ class ResourceManager:
         self._needed.pop(robot, None)
         self.wait_reasons.pop(robot, None)
         self._origins.pop(robot, None)
+        self.slot_choice.pop(leg, None)
         if self._finishing is None:
             self._return_reservations(leg, now)
         else:
@@ -221,13 +230,19 @@ class ResourceManager:
         if name == g.CORRIDOR and resource.state == "FREE":
             self._decide_after = now + self.config.resources.decision_window_s
 
+    def slot_of(self, leg: Leg) -> int:
+        return self.slot_choice.get(leg, 1)
+
+    def is_door(self, name: str) -> bool:
+        return self.config.corridor.doors and name in g.ROOMS
+
     def clear_unknown(self, name: str, by: str, now: float):
         if not isinstance(by, str) or not by.strip():
             raise ValueError("E-400: 조작자 이름을 입력하세요.")
         resource = self.resources[name]
         if resource.state != "UNKNOWN":
             raise ValueError("E-409: 점유 확인이 필요한 구간만 해제할 수 있습니다.")
-        inside = [robot for robot, region in self.regions.items() if region == name]
+        inside = [] if self.is_door(name) else [robot for robot, region in self.regions.items() if region == name]
         confirmed = resource.holders.keys() - resource.uncertain
         if len(confirmed.union(inside)) > resource.capacity:
             raise ValueError("E-423: 현재 보고된 로봇 수가 정원을 초과합니다.")
@@ -243,7 +258,66 @@ class ResourceManager:
         if name == g.CORRIDOR and resource.state == "FREE":
             self._decide_after = now + self.config.resources.decision_window_s
 
+    def _near_crossroad(self, robot):
+        report = self.reports.get(robot)
+        corridor = self.config.corridor
+        return bool(report and report.pose is not None
+                    and dist(report.pose, corridor.crossroad) <= corridor.crossroad_clear_m)
+
+    def _observe_door(self, name, now):
+        """A door claim starts at the grant. IN ends at arrival, OUT after VIA_PASSED and leaving the crossroad."""
+        resource = self.resources[name]
+        offline = {r for r in resource.holders if r not in self.reports or not self.reports[r].link_ok}
+        if offline - resource.uncertain:
+            resource.uncertain.update(offline)
+            robot = next(iter(offline)) if len(offline) == 1 else None
+            leg = self.active.get(robot)
+            self.record("RESOURCE_UNKNOWN", now, "자원 보유 로봇의 연결이 끊겼습니다.", robot=robot,
+                        mission_id=leg.mission_id if leg else None, code="E-423", resources=[name],
+                        observed=[], uncertain=sorted(resource.uncertain))
+        for robot, holding in list(resource.holders.items()):
+            report = self.reports.get(robot)
+            if robot in resource.uncertain or report is None or report.pose is None:
+                continue
+            leg = self.active.get(robot)
+            if self._near_crossroad(robot):
+                holding.touched = True
+                if holding.entered_at is None:
+                    holding.entered_at = now
+                    self.record("RESOURCE_ENTER", now, f"{self.robot_label(robot)} · {self.resource_label(name)} 진입 확인",
+                                robot=robot, mission_id=leg.mission_id if leg else None, resources=[name])
+                continue
+            if holding.leg is not None and leg is holding.leg:
+                # A legacy PART 04 leg has no VIA_PASSED: leaving the crossroad radius is enough.
+                passed = holding.touched and (report.via_passed or report.via is False)
+                if holding.door == "IN" or not passed:
+                    continue
+            self._release(name, robot, now, f"{self.robot_label(robot)} · {self.resource_label(name)} 통과 완료",
+                          leg.mission_id if leg else None)
+
+    def _approaching_crossroad(self, robot):
+        """An active B·E leg that has not reached the crossroad radius yet."""
+        leg = self.active.get(robot)
+        if leg is None:
+            return False
+        report = self.reports.get(robot)
+        for name in g.ROOMS:
+            holding = self.resources[name].holders.get(robot)
+            if holding and holding.leg is leg and not holding.touched and not (report and report.via_passed):
+                return True
+        return False
+
+    def crossroad_user(self, robot):
+        """The other robot at the crossroad or heading to it, if any (D-30)."""
+        for other in self.reports:
+            if other != robot and (self._near_crossroad(other) or self._approaching_crossroad(other)):
+                return other
+        return None
+
     def _observe(self, name, inside, now):
+        if self.is_door(name):
+            self._observe_door(name, now)
+            return
         resource = self.resources[name]
         policy = self.config.resources
         offline = {r for r in resource.holders if r not in self.reports or not self.reports[r].link_ok}
@@ -325,7 +399,7 @@ class ResourceManager:
             conflicts.append(other)
         return conflicts
 
-    def _hold_reason(self, leg, needed, now, conflicts):
+    def _hold_reason(self, leg, needed, now, conflicts, crossroad=None):
         robot = leg.robot
         if not self.eligible(robot):
             return f"{self.robot_label(robot)} — 연결·위치 또는 안전 정지 상태 확인 대기"
@@ -343,6 +417,8 @@ class ResourceManager:
             blockers = resource.blockers(robot)
             if blockers:
                 return f"{self.resource_label(name)} 정원 {resource.capacity}대 사용 중 ({', '.join(map(self.robot_label, blockers))}) — 빈자리 대기"
+        if crossroad:
+            return f"교차로에 {self.robot_label(crossroad)} 있음 → {self.robot_label(robot)} 대기"
         if any(robot not in self.resources[n].holders for n in needed) and now < self._decide_after:
             return "경쟁 요청을 모으는 동안 대기합니다."
         return None
@@ -412,7 +488,14 @@ class ResourceManager:
             zone_wait = destination_held and destination_held(leg, now)
             conflicts = self._direction_conflicts(leg, needed)
             basis = self._basis(leg, needed, queue, requirements, prior_holders, now, conflicts)
-            reason = self._hold_reason(leg, needed, now, conflicts)
+            crossroad = None
+            if self.eligible(robot) and any(self.is_door(n) for n in needed):
+                crossroad = self.crossroad_user(robot)
+            reason = self._hold_reason(leg, needed, now, conflicts, crossroad)
+            if crossroad and reason and reason.startswith("교차로"):
+                door = next(n for n in needed if self.is_door(n))
+                basis = {"rule": "CROSSROAD", "state_before": self.resources[door].state,
+                         "contenders": self._contenders([leg, *[self.active[r] for r in (crossroad,) if r in self.active]])}
             if reason:
                 if self.wait_reasons.get(robot) != reason:
                     self.record("RESOURCE_HOLD", now, reason, robot=robot, mission_id=leg.mission_id,
@@ -426,7 +509,10 @@ class ResourceManager:
                 holding = resource.holders.setdefault(robot, Holding())
                 if name == g.CORRIDOR:
                     holding.direction = self._direction(leg, self.regions[robot])
-                if holding.state == "OCCUPIED" and self.regions[robot] != name:
+                if self.is_door(name):
+                    holding.leg, holding.touched, holding.reserved_next = leg, False, False
+                    holding.door = "OUT" if self.regions[robot] == name else "IN"
+                elif holding.state == "OCCUPIED" and self.regions[robot] != name:
                     holding.reserved_next = True
             self._origins[robot] = self.regions[robot]
             self.active[robot] = self.pending.pop(robot)
@@ -692,7 +778,8 @@ class ResourceManager:
         return {
             name: {"state": resource.state, "capacity": resource.capacity, "holders": list(resource.holders),
                    "holder": resource.holder, "give_way": self._give_way_snapshot() if name == g.CORRIDOR else None,
-                   "holder_detail": [{"robot": r, "state": h.state, "direction": h.direction}
+                   "holder_detail": [{"robot": r, "state": h.state, "direction": h.direction,
+                                      **({"door": h.door} if h.door else {})}
                                      for r, h in resource.holders.items()],
                    "follow_stop": ({"front": self.follow.front, "rear": self.follow.rear.robot, "since": self.follow.since, "rule": self.follow.rule}
                                    if name == g.CORRIDOR and self.follow else None),

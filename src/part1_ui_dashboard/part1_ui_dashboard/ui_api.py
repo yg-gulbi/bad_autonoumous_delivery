@@ -89,6 +89,7 @@ STATES = {"IDLE": "대기", "RETURNING": "복귀 중", "SENDING": "출발 준비
 KINDS = {"PATIENT_TRANSPORT": "환자 이송", "MED_ROUND": "약품 운송", "CALL": "로봇 호출"}
 EVENTS = {
     "OBSTACLE_INSPECT": "{robot} 장애물 확인 요청", "OBSTACLE_RESULT": "{robot} 장애물 확인 결과",
+    "OBSTACLE_REPORT": "{robot} 장애물 사진 수신", "OBSTACLE_RETRY": "{robot} 장애물 없음 · 자동 재출발",
     "MISSION_CREATED": "{kind} 요청 등록", "MISSION_ASSIGNED": "{robot} 임무 배정", "MISSION_REJECTED": "임무 등록 거절",
     "LEG_START": "{robot} 구간 출발", "ARRIVE": "{robot} · {zone} 도착", "CONFIRM_STEP": "{zone} 확인 결과",
     "MISSION_DONE": "{robot} 임무 완료", "MISSION_CANCELED": "임무 취소", "RESOURCE_REQUEST": "{robot} 통행 요청",
@@ -113,7 +114,7 @@ EVENTS = {
 RULES = {"GAP": "앞 로봇과 간격 유지", "FOLLOW": "앞 로봇 정지", "ONLY": "단독 요청", "LEVEL": "높은 응급도 우선", "REQUEST_TIME": "먼저 요청한 쪽",
          "SUBMIT_ORDER": "먼저 접수한 쪽", "ENTRY_ORDER": "복도에 나중에 들어온 쪽이 양보",
          "ROBOT_ID": "동점 로봇 식별자 순", "CAPACITY": "자원 정원 도달", "DIRECTION": "복도 반대 방향 통행 중", "NO_PREEMPT": "이미 허가된 로봇은 회수하지 않음",
-         "BLOCKED": "막힘 해제 대기", "UNKNOWN": "점유 확인 대기"}
+         "BLOCKED": "막힘 해제 대기", "UNKNOWN": "점유 확인 대기", "CROSSROAD": "교차로는 한 대씩"}
 
 
 DEFAULT_ROBOT_NAMES = {"robot_a": "침상형 이송 로봇", "robot_b": "약품 운송 로봇"}
@@ -133,6 +134,8 @@ def present_event(event, names, robots=None, card=None):
     d = dict(event["detail"])
     kind, reason = event["type"], d.get("reason") or ""
     zone = names.get(d.get("destination"), "정류장")
+    if d.get("slot") == 2 and d.get("destination") in names:
+        zone += " (2번 자리)"
     robot = robots.get(event.get("robot"), "")
     resources = ["복도" if n == "CORRIDOR" else names.get(n[-1], n[-1] + " 구역") + " 출입"
                  for n in d.get("resources", [])]

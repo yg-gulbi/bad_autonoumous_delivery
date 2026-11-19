@@ -7,7 +7,7 @@ function confirmBox(r, id, m) {
     if (!m)
         return "";
     const key = m.mission_id + ":" + m.stop_index, final = m.stop_index === m.stops.length - 1;
-    return `<div class="confirm-box"><strong>${h(zn(m.stops[m.stop_index]))} 도착</strong><p>${h(m.items?.[m.stop_index] || m.patient?.name || m.patient?.chart_no || cfg.kinds[m.type])} · 다음 ${h(final ? "홈 복귀" : zn(m.stops[m.stop_index + 1]))}</p>
+    return `<div class="confirm-box"><strong>${h(zs(m.stops[m.stop_index], r.zone === m.stops[m.stop_index] ? r.slot : null))} 도착</strong><p>${h(m.items?.[m.stop_index] || m.patient?.name || m.patient?.chart_no || cfg.kinds[m.type])} · 다음 ${h(final ? "홈 복귀" : zn(m.stops[m.stop_index + 1]))}</p>
  <label><input type="checkbox" data-check="${key}" ${checked.has(key) ? "checked" : ""}> 확인했습니다</label><div class="buttons">${btn(final ? "수령 완료" : "확인 후 다음 이동", "confirm", id, "primary", !checked.has(key))}${btn("불일치", "mismatch", id)}</div></div>`;
 }
 document.addEventListener("change", e => { const key = e.target.dataset.check; if (key) {
@@ -23,6 +23,7 @@ function obstacleText(r) {
     if (r.obstacle_pending) return "장애물 분류 중…";
     const obs = r.obstacle;
     if (!obs) return "";
+    if (obs.text) return obs.text;  // report mode: the sentence already says what PART 06 saw
     if (obs.kind === "PERSON") return "앞에 사람 감지";
     if (obs.kind === "OBJECT") {
         const names = obs.labels.map(label => obs.detections.find(d => d.label === label)?.label_ko || label);
@@ -31,7 +32,7 @@ function obstacleText(r) {
     return obs.kind === "NONE" ? "카메라에 보이는 장애물 없음" : "장애물 분류 불가";
 }
 
-const locationText = r => r?.zone ? zn(r.zone) : ({CORRIDOR:"복도 안",ROOM_B:zn("B"),ROOM_E:zn("E"),TOP:"A, D 구역 쪽",BOTTOM:"C, F 구역 쪽"})[r?.region] || "위치 미수신";
+const locationText = r => r?.zone ? zs(r.zone, r.slot) : ({CORRIDOR:"복도 안",ROOM_B:zn("B"),ROOM_E:zn("E"),TOP:"A, D 구역 쪽",BOTTOM:"C, F 구역 쪽"})[r?.region] || "위치 미수신";
 const robotMark = r => `<span class="mark ${r.mark === "B" ? "square" : ""}">${h(r.mark)}</span>`;
 function destinationText(r, job) {
     if (!r.leg) return "—";
@@ -41,7 +42,7 @@ function destinationText(r, job) {
     else if (job?.type === "PATIENT_TRANSPORT") purpose = job.stop_index === 0 ? "환자 탑승" : "환자 인계";
     else if (job?.type === "MED_ROUND") purpose = "정류장 " + (job.stop_index + 1) + "번째";
     else if (job?.type === "CALL") purpose = "수령 확인";
-    return zn(r.leg.to) + " (" + purpose + ")";
+    return zs(r.leg.to, r.leg.slot) + " · " + purpose;
 }
 function robotCard(id, r) {
     const job = mById(r.mission_id), st = r.state, home = r.returning || st === "RETURNING";
@@ -64,6 +65,7 @@ function robotCard(id, r) {
     return `<div class="unit-title">${robotMark(r)}<div><h2>${h(r.label)}</h2><small>Robot ${h(mark)}</small></div>${pill(...displayState(id, r))}</div>
         <p>${h(job ? job.mission_id + "　" + cfg.kinds[job.type] + "　Level " + job.level : home ? (r.leg?.purpose === "도크 복귀" ? "도크 복귀" : "홈 구역 복귀") : r.leg ? "직접 이동" : "배정된 작업 없음")}</p>
         <div class="unit-facts">${fields.map(([key,value]) => `<span><small>${key}</small> ${h(value)}</span>`).join("")}</div>
+        ${r.via ? `<p class="via-note">교차로 경유${r.via.passed ? " · 통과" : ""}</p>` : ""}
         ${obstacleText(r) ? `<p>${h(obstacleText(r))}</p>` : ""}
         <div class="buttons">${controls}${job ? btn("작업 상세", "inspect", job.mission_id, "linkbtn") : ""}</div>`;
 }
