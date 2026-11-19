@@ -1,10 +1,11 @@
-"""침대 이탈 판단 메서드의 공통 계약을 정의하는 파일.
+"""침대 이탈 판단 메서드의 공통 계약과 동적 로더를 정의하는 파일.
 
 모든 판단 객체는 ``judge(frame) -> bool`` 인터페이스를 제공해야 한다. 이 파일은
-추상 인터페이스와 테스트 주입 객체의 최소 계약 검사만 담당한다.
+추상 인터페이스, 최소 계약 검사와 ``module:ClassOrObject`` 런타임 로딩을 담당한다.
 """
 
 from abc import ABC, abstractmethod
+from importlib import import_module
 import inspect
 
 
@@ -34,3 +35,38 @@ def validate_bed_exit_method(detector):
             'with a callable judge(frame) method'
         )
     return detector
+
+
+def load_bed_exit_method(method_path: str = '', config_path: str = ''):
+    """설정 기반 내장 메서드 또는 ``module:ClassOrObject`` 대상을 생성한다.
+
+    ``method_path``가 비어 있으면 JSON의 ``method``를 사용한다. 내장 메서드 이름은
+    동일한 JSON에서 ROI와 모델 경로를 읽고, 외부 클래스는 무인자 생성자로 만든다.
+    """
+    from part5_bed_exit.pretrained import SUPPORTED_METHODS, create_method
+
+    if not method_path:
+        if not config_path:
+            raise ValueError('Set method or method_config')
+        return validate_bed_exit_method(create_method(config_path))
+
+    if method_path in SUPPORTED_METHODS:
+        if not config_path:
+            raise ValueError(
+                'Built-in methods require method_config pointing to an ROI JSON'
+            )
+        return validate_bed_exit_method(create_method(config_path, method_path))
+
+    if config_path:
+        raise ValueError('method_config applies only to built-in method names')
+
+    module_name, separator, symbol_name = method_path.partition(':')
+    if not separator or not module_name or not symbol_name:
+        raise ValueError(
+            "method must be a built-in name or have the form "
+            "'module:ClassName' or 'module:object_name'"
+        )
+
+    target = getattr(import_module(module_name), symbol_name)
+    detector = target() if inspect.isclass(target) else target
+    return validate_bed_exit_method(detector)

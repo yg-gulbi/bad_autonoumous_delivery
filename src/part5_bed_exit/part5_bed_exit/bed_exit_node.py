@@ -28,9 +28,11 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Bool
 
-from part5_bed_exit.bed_exit_method import validate_bed_exit_method
+from part5_bed_exit.bed_exit_method import (
+    load_bed_exit_method,
+    validate_bed_exit_method,
+)
 from part5_bed_exit.bed_exit_state import BedExitState
-from part5_bed_exit.pretrained import create_method
 
 WINDOW_TITLE = 'Part 5 Bed Exit (/patient/bed_exit)'
 
@@ -38,8 +40,8 @@ WINDOW_TITLE = 'Part 5 Bed Exit (/patient/bed_exit)'
 # [PART05-V5 노드 정보]
 # 노드 이름: bed_exit
 # 입력: camera_index로 지정한 USB 웹캠의 OpenCV BGR 프레임
-# 설정: method_config JSON의 모델 디렉터리·추론 장치·고정 Bed ROI
-# 처리: method_config에서 선택한 판단 메서드 → 최근 5프레임 중 3회 이상 이탈 다수결
+# 설정: method의 내장 이름 또는 module:ClassOrObject, method_config의 내장 모델 설정
+# 처리: 동적으로 선택한 판단 메서드 → 최근 5프레임 중 3회 이상 이탈 다수결
 # 출력: output_topic의 std_msgs/msg/Bool (True=침대 이탈, False=정상)
 # 실행 주기: capture_fps를 이용해 만든 ROS 타이머 주기
 # 실패 정책: 카메라·추론 실패 시 투표 이력을 초기화하고 해당 프레임은 발행하지 않음
@@ -52,27 +54,29 @@ class BedExitNode(Node):
     ``BedExitState.update()``에 누적한 뒤 최종 다수결 결과만 발행한다.
 
     테스트에서는 ``detector`` 인자로 가짜 판단 객체를 주입할 수 있다. 운영에서는
-    ``method_config``의 ``method``와 고정 ROI를 읽어 선택한 판단 객체를 생성한다.
+    ``method``의 동적 대상 또는 ``method_config``의 내장 방식을 읽어 판단 객체를 생성한다.
     """
 
     def __init__(self, detector=None):
         """ROS 파라미터·판단 객체·카메라·발행자·주기 타이머를 초기화한다.
 
         ``detector``를 전달하면 테스트 대역을 사용하고, 전달하지 않으면 검수된
-        ``method_config``로 선택된 판단 객체를 생성한다.
+        ``method``와 ``method_config``로 선택된 판단 객체를 생성한다.
         """
         # [PART05-V5-02 노드 초기화]
         # 이전: setup.py:entry_points → bed_exit_node.main()
-        # 다음: pretrained.create_method() → cv2.VideoCapture → process_frame()
+        # 다음: bed_exit_method.load_bed_exit_method() → cv2.VideoCapture → process_frame()
         super().__init__('bed_exit')
         # 초기화 도중 예외가 나더라도 destroy_node()/예외 정리가 안전하도록 먼저 None으로 둔다.
         self.capture = None
         self.detector = None
         self.show = False
 
-        # 운영 중 바뀌어야 하는 카메라·ROI 설정과 실행 주기만 ROS 파라미터로 노출한다.
+        # method(str, 기본값=''): 빈 값이면 method_config JSON의 method를 사용한다.
+        # 내장 이름 또는 package.module:ClassOrObject 형식으로 실행 구현을 선택할 수 있다.
+        self.declare_parameter('method', '')
         # method_config(str, 기본값=''): 모델 경로·추론 장치·고정 Bed ROI가 든 JSON 경로.
-        # 실제 모델을 쓰는 운영 실행에서는 빈 값이 허용되지 않는다.
+        # 내장 모델 또는 JSON의 method를 쓰는 운영 실행에서는 빈 값이 허용되지 않는다.
         self.declare_parameter('method_config', '')
         # output_topic(str, 기본값='/patient/bed_exit'): 최종 Bool 판단을 발행할 ROS 토픽 이름.
         self.declare_parameter('output_topic', '/patient/bed_exit')
@@ -97,18 +101,19 @@ class BedExitNode(Node):
         fps = self.get_parameter('capture_fps').value
         # show 값을 명시적으로 bool로 변환해 프리뷰 분기 조건으로 사용한다.
         self.show = bool(self.get_parameter('show').value)
-        # method_config 값을 읽어 create_method()에 전달한다.
+        # method와 method_config 값을 읽어 동적 로더에 전달한다.
+        method_path = self.get_parameter('method').value
         config_path = self.get_parameter('method_config').value
 
         # 실제 모델을 생성할 때는 검수된 ROI 설정이 반드시 필요하다.
         if not topic or not math.isfinite(fps) or fps <= 0:
             raise ValueError('Set output_topic and capture_fps > 0')
-        if detector is None and not config_path:
-            raise ValueError('Set method_config to a reviewed ROI JSON file')
+        if detector is None and not method_path and not config_path:
+            raise ValueError('Set method or method_config')
 
-        # 운영 경로: 설정 JSON의 method에 선택된 판단 객체를 생성한다.
+        # 운영 경로: 내장 이름·JSON 선택 또는 module:ClassOrObject 대상을 동적으로 생성한다.
         if detector is None:
-            self.detector = create_method(config_path)
+            self.detector = load_bed_exit_method(method_path, config_path)
         # 테스트 경로: 가짜 객체가 judge(frame)를 제공하는지만 확인하고 그대로 사용한다.
         else:
             self.detector = validate_bed_exit_method(detector)

@@ -2,22 +2,25 @@
 
 ROS 노드는 웹캠 BGR 프레임을 선택한 판단 객체의 `judge(frame) -> bool`에 전달한다. 최근 5개 유효 프레임 중 3개 이상이 `True`이면 `/patient/bed_exit`에 `True`를 발행한다. 카메라 또는 판단 실패 시 이력을 초기화하고 해당 프레임은 발행하지 않는다.
 
-운영 실행은 `camera_index=0`의 웹캠과 `method_config`의 `method`로 선택한 판단 모델을 사용한다. 설정에는 실제 카메라에서 정한 단일 ROI와 모델 디렉터리도 함께 넣는다. 다른 카메라는 `camera_index`로 명시한다.
+운영 실행은 `camera_index=0`의 웹캠과 `method` 또는 `method_config`로 선택한 판단 모델을 사용한다. 설정에는 실제 카메라에서 정한 단일 ROI와 모델 디렉터리도 함께 넣는다. 다른 카메라는 `camera_index`로 명시한다.
 
 ## 런타임 구성
 
 - `bed_exit_node.py`: 카메라 입력, 프리뷰, 5프레임 투표, ROS 발행
-- `bed_exit_method.py`: `judge(frame) -> bool` 계약과 테스트 주입 객체 검사
+- `bed_exit_method.py`: `judge(frame) -> bool` 계약, 동적 로더와 객체 검사
 - `bed_exit_state.py`: 최근 5프레임 3회 이상 투표
 - `pretrained.py`: 설정의 `method`에 맞는 판단 객체 생성과 ROI 설정 검증
 - `methods/bed_exit_core.py`: 네 판단 모델의 실제 구현
 
 ## 운영 메서드
 
-운영 노드는 `method_config` JSON의 `method`로 네 내장 모델 중 하나를 선택한다.
-임의 `module:Class` 동적 로딩은 사용하지 않는다.
+운영 노드는 `method` ROS 파라미터로 내장 모델 이름이나 임의의
+`package.module:ClassOrObject`를 선택할 수 있다. `method`가 비어 있으면
+`method_config` JSON의 `method`로 네 내장 모델 중 하나를 선택한다.
 
 - 운영 실행: 검수된 `method_config` JSON 지정
+- 내장 방식 명시 선택: `-p method:=segmentation -p method_config:=...`
+- 외부 방식 동적 로딩: `-p method:=my_package.my_method:CustomMethod`
 - 단위 테스트: `BedExitNode(detector=FakeDetector())` 형태의 코드 직접 주입
 - 네 모델 비교: `research/`의 벤치마크 도구에서만 수행
 
@@ -48,6 +51,14 @@ cp src/part5_bed_exit/examples/methods.template.json \
 
 ros2 run part5_bed_exit bed_exit --ros-args \
   -p method_config:="$(pwd)/src/part5_bed_exit/examples/methods.local.json"
+```
+
+외부 자식 클래스는 무인자 생성 가능해야 하며 `judge(frame) -> bool`을 제공해야 한다.
+외부 방식에는 `method_config`를 함께 지정하지 않는다.
+
+```bash
+ros2 run part5_bed_exit bed_exit --ros-args \
+  -p method:=my_package.my_method:CustomMethod
 ```
 
 로봇 Discovery Server 없이 PC에서 단독 시험할 때는 실행 전에 다음 환경 변수를 해제한다.
