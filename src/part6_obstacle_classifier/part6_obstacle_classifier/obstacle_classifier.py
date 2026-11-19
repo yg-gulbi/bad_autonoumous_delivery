@@ -3,8 +3,51 @@
 from dataclasses import dataclass
 from importlib import import_module
 import math
+from pathlib import Path
 
 import numpy as np
+
+
+def resolve_default_model_path(model_filename: str = 'medical_box_yolo11n.pt') -> str:
+    """패키지 소스 폴더 또는 설치된 share 폴더에서 기본 학습 모델(.pt) 경로를 찾는다."""
+    local_candidate = Path(__file__).resolve().parent.parent / 'models' / model_filename
+    if local_candidate.exists():
+        return str(local_candidate)
+    try:
+        from ament_index_python.packages import get_package_share_directory
+
+        share_candidate = (
+            Path(get_package_share_directory('part6_obstacle_classifier'))
+            / 'models'
+            / model_filename
+        )
+        if share_candidate.exists():
+            return str(share_candidate)
+    except Exception:
+        pass
+    return 'yolo11n.pt'
+
+
+def crop_and_downsample(
+    frame: np.ndarray,
+    crop_ratio: tuple[float, float, float, float] | None = None,
+    size: tuple[int, int] | None = None,
+) -> np.ndarray:
+    """선택적 비율 크롭 후 지정 해상도(예: 512x288)로 다운샘플링해 반환."""
+    import cv2
+
+    out = frame
+    if crop_ratio is not None:
+        h, w = out.shape[:2]
+        rx1, ry1, rx2, ry2 = crop_ratio
+        x1 = max(0, min(int(w * rx1), w - 1))
+        y1 = max(0, min(int(h * ry1), h - 1))
+        x2 = max(x1 + 1, min(int(w * rx2), w))
+        y2 = max(y1 + 1, min(int(h * ry2), h))
+        out = out[y1:y2, x1:x2]
+    if size is not None and (out.shape[1], out.shape[0]) != size:
+        out = cv2.resize(out, size, interpolation=cv2.INTER_AREA)
+    return out
 
 
 @dataclass(frozen=True)
@@ -219,28 +262,42 @@ def process_frame(
     return build_result(detections, header)
 
 
-def draw_detections(frame: np.ndarray, detections: list[dict]) -> np.ndarray:
-    """탐지된 객체의 바운딩 박스, 라벨, 신뢰도 및 map 좌표를 BGR 이미지에 그려 반환."""
+def draw_detections(frame: np.ndarray, detections: list[dict], alpha: float = 0.35) -> np.ndarray:
+    """탐지된 객체 영역을 반투명 마스킹하고 바운딩 박스, 라벨, 신뢰도(및 선택적 map 좌표)를 그려 반환."""
     import cv2
 
     annotated = frame.copy()
-    for item in detections:
+    palette = [
+        (0, 255, 0),
+        (0, 165, 255),
+        (255, 0, 255),
+        (255, 255, 0),
+        (0, 0, 255),
+    ]
+    for idx, item in enumerate(detections):
         x1, y1, x2, y2 = map(int, item['bbox'])
         label = item['label']
         conf = item['confidence']
         pose = item.get('pose')
+        color = palette[idx % len(palette)]
         text = f'{label} {conf:.2f}'
         if pose is not None:
             # 유효한 Depth로 map 좌표가 계산된 경우 함께 표기
             text += f" ({pose['x']:.2f}, {pose['y']:.2f})"
-        cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+        # 탐지된 객체 내부를 반투명 색으로 마스킹
+        overlay = annotated.copy()
+        cv2.rectangle(overlay, (x1, y1), (x2, y2), color, -1)
+        annotated = cv2.addWeighted(overlay, alpha, annotated, 1.0 - alpha, 0)
+
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
         cv2.putText(
             annotated,
             text,
             (x1, max(15, y1 - 6)),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            (0, 255, 0),
-            1,
+            0.55,
+            color,
+            2,
         )
     return annotated

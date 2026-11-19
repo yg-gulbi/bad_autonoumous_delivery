@@ -1,61 +1,94 @@
-# `part6_obstacle_classifier` 설계도
+# `part6_obstacle_classifier` 설계도 (1~4단계 기능별 분리)
 
-## 1. 처리 플로우차트
+## 1. 전체 노드 구성 요약
 
-```mermaid
-flowchart TD
-    IN_EVT["입력: /robot{2,3}/obstacle/inspect_image<br/>(std_msgs/Empty)"] --> ARM["이미지 1회 수신 활성화<br/>(평소에는 이미지 처리 안 함)"]
-    ARM --> WAIT["카메라 1쌍 수신 대기<br/>(oakd/rgb/image_raw/compressed, oakd/stereo/image_raw, camera_info)"]
-    WAIT --> CHK{"데이터 수신 완료?<br/>(RGB, Depth, CameraInfo)"}
-
-    CHK -- 실패/타임아웃 --> ERR["출력: obstacle_classifier/result<br/>(오류 JSON, obstacle_present: null)"]
-    CHK -- 완료 --> DET["RGB 이미지 검증 및 YOLO11n 객체 탐지"]
-
-    DET --> HAS{"탐지된 객체가 있는가?"}
-    HAS -- 아니오 --> EMPTY["출력: obstacle_classifier/result<br/>(정상 JSON, obstacle_present: false)"]
-    HAS -- 예 --> DEPTH["각 탐지 객체 중심점의 깊이(Depth) 확인"]
-
-    DEPTH --> VALID{"깊이 값이 유효한가?<br/>(정상 범위 내 측정값)"}
-    VALID -- 아니오 --> INFO_ONLY["객체 정보만 기록<br/>(label, confidence, bbox)"]
-    VALID -- 예 --> MAP["3D 위치 계산 및 지도(map) 좌표 변환"]
-    IN_TF["상시 입력: /tf, /tf_static<br/>(tf2_msgs/TFMessage)"] -. 좌표 변환 정보 제공 .-> MAP
-
-    MAP --> WITH_POSE["객체 정보 + 지도 위치(pose) 기록"]
-    INFO_ONLY --> LIST["결과 목록에 추가"]
-    WITH_POSE --> LIST
-    LIST --> OK["출력: obstacle_classifier/result<br/>(정상 JSON, obstacle_present: true, detections)"]
-```
-
-## 2. 입출력 토픽 (네임스페이스 `/robot2`, `/robot3` 적용)
-
-| 방향 | 파라미터 | 기본 토픽명 | 메시지 타입 | 메시지 형태 (필드/구조) |
+| 순서 | ROS 2 실행 이름 (`ros2 run ...`) | 파일 | 역할 | 위치(`pose`) 출력 |
 |---|---|---|---|---|
-| 입력 (이벤트) | `trigger_topic` | `obstacle/inspect_image` | `std_msgs/msg/Empty` | 필드 없음 (`{}`) |
-| 입력 (RGB) | `rgb_topic` | `oakd/rgb/image_raw/compressed` | `sensor_msgs/msg/CompressedImage` | `header`, `format`, `data` (`uint8[]`) |
-| 입력 (Depth) | `depth_topic` | `oakd/stereo/image_raw` | `sensor_msgs/msg/Image` | `header`, `height`, `width`, `encoding` (`16UC1`/`32FC1`), `data` |
-| 입력 (카메라 정보) | `camera_info_topic` | `oakd/rgb/camera_info` | `sensor_msgs/msg/CameraInfo` | `k` (`float64[9]`: `fx, cx, fy, cy`) |
-| 입력 (좌표 변환) | *(TF2 자동 구독)* | `/tf`, `/tf_static` | `tf2_msgs/msg/TFMessage` | `transforms` (`TransformStamped[]`) |
-| 출력 (결과) | `output_topic` | `obstacle_classifier/result` | `std_msgs/msg/String` | `data`: JSON (`status`, `header`, `obstacle_present`, `detections[{label, confidence, bbox, pose?}]`, `error?`) |
-| 출력 (시각화 이미지) | `image_output_topic` | `obstacle_classifier/image/compressed` | `sensor_msgs/msg/CompressedImage` | `header`, `format: "jpeg"`, `data` (`uint8[]`) |
+| **1번** | `obstacle_classifier` | `step1_image_event_node.py` | 타 파트 이미지 1장 이벤트 → 객체 종류·마스킹 발행 | 없음 |
+| **2번** | `rgbd_event_classifier` | `step2_rgbd_event_node.py` | RGB + Depth(+CameraInfo/TF) 이벤트 → 객체 위치·종류·마스킹 발행 | 있음 (`map` 또는 카메라 3D) |
+| **3번** | `local_image_classifier` | `step3_local_image_node.py` | 로컬 이미지 파일/폴더 → 객체 종류·마스킹 토픽 발행 | 없음 |
+| **4번** | `bag_realtime_obstacle` | `step4_bag_realtime_node.py` | `ros2 bag play` 실시간 RGB+Depth(+CameraInfo/TF) → 실시간 위치·종류·마스킹 발행 | 있음 (`map` 또는 카메라 3D) |
+| *공통* | *(라이브러리)* | `obstacle_classifier.py`<br/>`ros_utils.py` | YOLO11n 추론, 전처리/크롭, Depth 역투영, 반투명 마스킹, ROS 디코딩/TF2/발행 | — |
+| *테스트* | `test_turtlebot_viewer`<br/>`test_image_downsample` | `test_turtlebot_viewer.py`<br/>`test_image_downsample.py` | TurtleBot4 실시간 RGB(마스크)+Depth GUI 뷰어 / 로컬 다운샘플링·크롭 CLI 테스트 | — |
 
 ---
 
-## 3. 내부 구조
+## 2. 단계별 노드 상세 설계
 
-### 3.1 `obstacle_classifier.py` (ROS 비의존 파이프라인)
-- `Detection`: 탐지 결과 데이터 클래스 (`label`, `confidence`, `bbox`, `pose`)
-- `Yolo11Classifier`: Ultralytics YOLO11n(`yolo11n.pt`) 추론 어댑터
-- `preprocess` / `classify_obstacles`: 입력 BGR 프레임 검증 및 탐지 결과 유효성 검사
-- `extract_valid_depth` / `deproject_pixel_to_3d`: 바운딩 박스 중심 깊이 추출(유한값·범위 필터링) 및 카메라 3D 역투영
-- `attach_poses`: 유효한 Depth를 가진 객체에만 `pose`를 추가하고, 무효한 객체는 감지 정보만 유지
-- `draw_detections`: 바운딩 박스, 라벨, 신뢰도, `map` 좌표를 이미지에 시각화
-- `process_frame` / `build_result` / `build_error`: 전체 파이프라인 실행 및 JSON 응답 딕셔너리 생성
+### 2.1 1번 노드: `obstacle_classifier` (`step1_image_event_node.py`)
+다른 파트에서 **이미지 1장**을 이벤트로 전송하면 즉시 `medical_box`를 탐지하고, `pose` 없는 JSON과 반투명 마스킹 이미지를 발행합니다.
 
-### 3.2 `obstacle_classifier_node.py` (ROS 2 노드)
-- `ObstacleClassifierNode`:
-  - `trigger_callback`: `obstacle/inspect_image` 수신 시 `pending_capture = True`로 1회 수신 활성화 및 타임아웃 타이머 시작
-  - `synced_callback`: `pending_capture`가 `True`일 때만 `CompressedImage` 디코딩 후 `process_frame` 실행 (평소에는 즉시 리턴해 리소스 절약)
-  - `camera_info_callback`: `CameraInfo`에서 내부 파라미터 행렬 `K` 저장
-  - `_transform_to_target`: `TF2 Buffer`를 이용해 `depth_msg.header.stamp` 시점의 `camera_frame` → `map` 좌표 변환
-  - `_on_capture_timeout`: 지정 시간 내 데이터 미수신 시 `missing_data` 오류 JSON 발행
-  - `publish_result` / `publish_annotated_image`: 결과 JSON(`String`) 및 JPEG 압축 시각화 이미지(`CompressedImage`) 발행
+```mermaid
+flowchart TD
+    IN_EVT["입력: /robot{2,3}/hospital_nav/obstacle_image<br/>(CompressedImage 1장 = 이벤트)"] --> DEC["이미지 디코딩 (BGR)"]
+    DEC --> DET["프레임 검증 및 학습 모델 추론<br/>(preprocess -> medical_box_yolo11n.pt)"]
+    DET --> OUT_IMG["출력: obstacle_classifier/image/compressed<br/>(반투명 마스킹 이미지)"]
+    DET --> OUT_JSON["출력: obstacle_classifier/result<br/>(JSON: label, confidence, bbox — pose 없음)"]
+    DEC -. 예외 .-> ERR["오류 JSON 발행<br/>(status=processing_error, obstacle_present=null)"]
+    DET -. 예외 .-> ERR
+```
+
+- **주요 파라미터**: `input_topic` (`hospital_nav/obstacle_image`), `use_compressed` (`true`), `output_topic` (`obstacle_classifier/result`), `image_output_topic` (`obstacle_classifier/image/compressed`), `model_path` (`models/medical_box_yolo11n.pt`), `conf_threshold` (`0.25`)
+
+---
+
+### 2.2 2번 노드: `rgbd_event_classifier` (`step2_rgbd_event_node.py`)
+**RGB + Depth 이벤트**를 받아 `CameraInfo`와 `/tf`, `/tf_static`을 조회해 `map` 좌표계 위치(`pose`)까지 포함한 JSON과 마스킹 이미지를 발행합니다.
+
+```mermaid
+flowchart TD
+    IN_RGB["입력: oakd/rgb/image_raw/compressed"] --> SYNC["ApproximateTimeSynchronizer<br/>(RGB + Depth 1쌍 동기화)"]
+    IN_DEP["입력: oakd/stereo/image_raw"] --> SYNC
+    IN_TRG["선택 트리거: obstacle/inspect_image (Empty)<br/>(use_trigger:=true 일 때만 대기)"] -. 1회 활성화 .-> SYNC
+
+    SYNC --> CHK{"CameraInfo 준비됨?"}
+    CHK -- 아니오 --> SKIP["경고 후 건너뜀 (트리거 모드면 타임아웃 시 missing_data)"]
+    CHK -- 예 --> DET["YOLO11n 객체 탐지"]
+
+    DET --> DEPTH["bbox 중심 픽셀 Depth 추출 (0.2m < z < 5.0m)"]
+    DEPTH --> VALID{"유효한 Depth?"}
+    VALID -- 아니오 --> NO_POSE["감지 정보만 기록 (pose 제외)"]
+    VALID -- 예 --> TF["3D 역투영 + /tf, /tf_static 조회 (depth stamp 기준)<br/>(TF 실패 + fallback_to_camera=true 시 카메라 3D 좌표 사용)"]
+    TF --> WITH_POSE["감지 정보 + pose(x, y, z) 기록"]
+    NO_POSE --> PUB["출력: obstacle_classifier/result & image/compressed"]
+    WITH_POSE --> PUB
+```
+
+- **주요 파라미터**: `use_trigger` (`false`), `rgb_topic`, `depth_topic`, `camera_info_topic`, `trigger_topic`, `target_frame` (`map`), `fallback_to_camera` (`true`), `min_depth` (`0.2`), `max_depth` (`5.0`), `sync_slop` (`0.1`), `capture_timeout_sec` (`3.0`)
+
+---
+
+### 2.3 3번 노드: `local_image_classifier` (`step3_local_image_node.py`)
+로컬 디스크에 보유한 **이미지 파일 또는 폴더(`input_path`)** 를 주기(`publish_hz`)에 맞춰 순회하며, 선택적 ROI 크롭 및 `512x288` 다운샘플링 후 **ROS 2 토픽으로 마스킹 이미지와 객체 종류 JSON을 발행**합니다.
+
+```mermaid
+flowchart TD
+    DISK["로컬 이미지 파일/폴더 (input_path)"] --> CROP["선택적 크롭 및 다운샘플링<br/>(crop_ratio, 512x288)"]
+    CROP --> DET["YOLO11n 객체 탐지"]
+    DET --> PUB["주기적(publish_hz) 토픽 발행<br/>(obstacle_classifier/result & image/compressed)"]
+```
+
+- **주요 파라미터**: `input_path` *(필수)*, `publish_hz` (`2.0`), `loop` (`false`), `resize_width` (`512`), `resize_height` (`288`), `crop_ratio` (`""`)
+
+---
+
+### 2.4 4번 노드: `bag_realtime_obstacle` (`step4_bag_realtime_node.py`)
+`ros2 bag play`로 재생되는 **실시간 RGB + Depth 스트림**을 받아, `CameraInfo`와 `/tf`, `/tf_static`이 있으면 실시간으로 객체 위치(`pose`)·종류·마스킹 이미지를 연속 발행합니다.
+*(bag에 `CameraInfo`가 없으면 감지 정보만 발행하고, `/tf`가 없으면 `fallback_to_camera=true` 설정 시 카메라 기준 3D 상대 좌표를 제공합니다.)*
+
+- **주요 파라미터**: `rgb_topic`, `depth_topic`, `camera_info_topic`, `target_frame` (`map`), `fallback_to_camera` (`true`), `min_depth` (`0.2`), `max_depth` (`5.0`), `sync_slop` (`0.1`)
+
+---
+
+## 3. 공통 입출력 토픽 규격 (네임스페이스 `/robot2`, `/robot3` 적용)
+
+| 방향 | 파라미터 | 기본 토픽명 | 메시지 타입 | 데이터 형태 |
+|---|---|---|---|---|
+| 출력 (결과 JSON) | `output_topic` | `obstacle_classifier/result` | `std_msgs/msg/String` | `{"status", "header", "obstacle_present", "detections": [{"label", "confidence", "bbox", "pose"?}], "error"?}` |
+| 출력 (마스킹 이미지) | `image_output_topic` | `obstacle_classifier/image/compressed` | `sensor_msgs/msg/CompressedImage` | `format: "jpeg"`, 반투명 마스킹·박스·라벨·좌표 이미지 |
+
+---
+
+## 4. 공통 모듈 내부 구조
+- **`obstacle_classifier.py` (ROS 비의존)**: `resolve_default_model_path`, `crop_and_downsample`, `Detection`, `Yolo11Classifier`, `preprocess`, `classify_obstacles`, `extract_valid_depth`, `deproject_pixel_to_3d`, `attach_poses`, `draw_detections`, `process_frame`, `build_result`, `build_error`
+- **`ros_utils.py` (ROS 2 공용)**: `load_node_classifier`, `header_to_dict`, `decode_compressed_bgr`, `decode_raw_bgr`, `publish_outputs`, `TfTargetTransformer`
