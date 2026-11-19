@@ -29,6 +29,11 @@
 - `integration/`: 카메라·MP4 입력부터 로더, 투표와 ROS 발행 경계까지 검증
 - `integration_benchmark/`: 공통 영상·라벨·지표·산출물 계약 검증
 
+v1.3.2의 `test_v3_mp4_replay_resilience.py`는 연구용 MP4 ROS 노드에
+`capture.read()`·publisher·프리뷰 예외를 주입하고, 예외가 콜백 밖으로 전파되지 않는지
+검증한다. 모델 정확도 테스트가 아니라 노드 생존성과 실패 프레임 미발행 정책을 확인하는
+통합 회귀 테스트다.
+
 ## 통합 코드 재사용 계약
 
 내부 리팩터링과 patch 변경은 기존 통합 테스트와 통합 벤치마크 코드를 수정하지 않고
@@ -58,3 +63,6 @@ PYTHONPATH=src/part5_bed_exit python3 -m pytest \
 실제 모델·1,024프레임 MP4·기존 벤치마크 산출물 검증은
 [v1.3 통합 벤치마크 실행 문서](test/80805b4_v1_3/integration_benchmark/README.md)의
 환경 변수와 명령을 사용한다.
+
+실험 결과는 `results/<기준선커밋>_vX_X/<실험대상커밋>_vX_X_X/`에 저장한다.
+v1.3.2 결과 경로는 `results/80805b4_v1_3/b08be95_v1_3_2/`다.

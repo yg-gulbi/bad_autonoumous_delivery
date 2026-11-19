@@ -1,8 +1,11 @@
-# 80805b4 테스트 결과
+# 80805b4 v1.3 테스트 결과
 
-`fix(part5): restore runtime method loading` 커밋 기준 결과다.
+`80805b4`에서 복구한 런타임 메서드 로딩을 공통 v1.3 기준선으로 사용한다.
+실험 결과는 기준선 바로 아래가 아니라 실제 검증한 커밋별 디렉터리에 저장한다.
 
-- `unit_tests/README.md`: 사람이 읽는 단위 테스트 결과 요약
-- `unit_tests/pytest.xml`: 테스트별 실행 결과와 실행 시간이 포함된 JUnit XML
-- `integration_tests/`: 외부 자식 클래스와 실제 MP4 통합 테스트 결과
-- `integration_benchmark/`: 런타임 로더 기반 개별·전체 모델 벤치마크 결과
+- `d7194a9_v1_3_1/`: v1.3.1 테스트·실제 MP4·4모델 벤치마크 결과
+- `b08be95_v1_3_2/`: ROS 콜백 예외 격리를 추가한 v1.3.2 결과 저장 위치
+
+각 커밋 디렉터리는 `unit_tests/`, `integration_tests/`,
+`integration_benchmark/`를 동일하게 사용한다. 따라서 patch 변경 간 결과를 비교할 때
+테스트 코드와 산출물 종류를 유지할 수 있다.
