@@ -5,7 +5,9 @@
 !/results/**/
 !/results/**/README.md
 !/results/model_tests/exploratory_prototypes/slp_two_image_prototypes/**
-/research/data/
+/research/data/*
+!/research/data/test_images/
+!/research/data/test_images/**
 /research/results/
 /examples/methods.local.json
 /examples/testbed.local.json

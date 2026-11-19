@@ -67,7 +67,7 @@ SLP 공식 공개 데모의 RGB panel 두 장 smoke test에서는 비가림에�
 
 실행 환경: `/home/mu-02/venvs/rokey_venv/bin/python` (`ultralytics 8.4.208`, `torch 2.15.0`, `opencv-python 4.9.0.80`, CPU 추론 `device='cpu'`, `imgsz=480`, `conf=0.35`).  
 사용 가중치(`src/part5_bed_exit/models/`, Git 제외): `yolo11n.pt` (5.4 MB), `yolo11n-seg.pt` (5.9 MB).  
-입력 이미지: `src/part5_bed_exit/test_images/` (이미지별 `.roi.json` 사이드카 적용).
+입력 이미지: `src/part5_bed_exit/research/data/test_images/` (이미지별 `.roi.json` 사이드카 적용).
 
 | 이미지 | 메서드 | 판정 | 세부 지표 | 신뢰도(`conf`) | 1차 실행 시간 | 2차(웜) 실행 시간 |
 | --- | --- | --- | --- | ---: | ---: | ---: |

@@ -28,7 +28,7 @@ from part5_bed_exit.pretrained import create_method, read_config
 IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
 
 SELECTED_METHODS = None
-DEFAULT_SOURCE = str(PACKAGE_ROOT / 'test_images')
+DEFAULT_SOURCE = str(PACKAGE_ROOT / 'research' / 'data' / 'test_images')
 DEFAULT_OUTPUT_DIR = PACKAGE_ROOT / 'results' / 'model_tests' / 'exploratory_prototypes' / 'single_frame_runs'
 DEFAULT_CONFIG = PACKAGE_ROOT / 'examples' / 'methods.template.json'
 
