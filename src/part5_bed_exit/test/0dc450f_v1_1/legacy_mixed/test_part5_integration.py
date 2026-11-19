@@ -89,7 +89,7 @@ def test_ros_boundary_skips_camera_exceptions_and_bad_returns_then_rewarms(monke
     monkeypatch.setitem(sys.modules, 'rclpy', SimpleNamespace())
     monkeypatch.setitem(sys.modules, 'rclpy.node', SimpleNamespace(Node=object))
     monkeypatch.setitem(sys.modules, 'std_msgs.msg', SimpleNamespace(Bool=Bool))
-    path = Path(__file__).parents[2] / 'part5_bed_exit' / 'bed_exit_node.py'
+    path = Path(__file__).parents[3] / 'part5_bed_exit' / 'bed_exit_node.py'
     spec = importlib.util.spec_from_file_location('_bed_exit_callback_test', path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -124,7 +124,7 @@ def test_ros_boundary_skips_camera_exceptions_and_bad_returns_then_rewarms(monke
 
 
 def test_notebook_cells_compile_after_interactive_execution():
-    path = Path(__file__).parents[2] / 'research' / 'notebooks' / 'part5_bed_exit.ipynb'
+    path = Path(__file__).parents[3] / 'research' / 'notebooks' / 'part5_bed_exit.ipynb'
     notebook = json.loads(path.read_text())
     assert notebook['nbformat'] == 4
     for index, cell in enumerate(notebook['cells']):
