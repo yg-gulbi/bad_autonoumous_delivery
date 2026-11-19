@@ -28,7 +28,201 @@
 전파하지 않는다. 실패 프레임은 발행하지 않으며, 판단 연속성이 깨진 경우 투표 이력을
 초기화하고 다음 유효 프레임부터 5프레임을 다시 누적한다.
 
-자세한 실행 파라미터와 예시는 [USAGE.md](USAGE.md)를 참고한다.
+## 설치와 빌드
+
+ROS 2 Jazzy가 설치된 워크스페이스 루트에서 실행한다.
+
+```bash
+python3 -m venv --system-site-packages .venv
+source .venv/bin/activate
+python -m pip install -r src/part5_bed_exit/requirements.txt
+
+source /opt/ros/jazzy/setup.bash
+colcon build --packages-select part5_bed_exit --symlink-install
+source install/setup.bash
+```
+
+로봇 Discovery Server 없이 PC에서 단독 시험할 때는 기존 설정을 해제한다.
+
+```bash
+unset ROS_DISCOVERY_SERVER ROS_SUPER_CLIENT
+```
+
+## ROS 파라미터
+
+ROS 파라미터는 노드를 다시 빌드하지 않고 실행 구성을 전달하는 값이다. PART 05는 아래
+7개 값을 노드 시작 시 한 번 읽는다. 현재 구현은 실행 중 `ros2 param set`으로 값을
+바꿔도 카메라나 판단 객체를 다시 생성하지 않으므로, 변경 후 노드를 재시작해야 한다.
+
+| 파라미터 | 형식 | 기본값 | 용도 |
+| --- | --- | --- | --- |
+| `method` | 문자열 | `""` | 내장 모델 이름 또는 `package.module:ClassOrObject` |
+| `method_config` | 문자열 | `""` | 내장 모델의 ROI·모델 경로·장치가 든 JSON 경로 |
+| `camera_index` | 정수 | `0` | OpenCV가 열 USB 카메라 번호 |
+| `video_path` | 문자열 | `""` | 웹캠 대신 한 번 재생할 MP4 경로 |
+| `output_topic` | 문자열 | `/patient/bed_exit` | 최종 Bool 결과 발행 토픽 |
+| `capture_fps` | 실수 | `30.0` | 초당 프레임 처리 시도 횟수 |
+| `show` | 불리언 | GUI 환경 존재 여부 | OpenCV 판정 프리뷰 표시 |
+
+입력 선택 규칙은 다음과 같다.
+
+- `video_path`가 비어 있으면 `camera_index`의 카메라를 사용한다.
+- `video_path`가 있으면 MP4를 사용하고 `camera_index`는 사용하지 않는다.
+- MP4는 끝에서 정지하며 자동 반복하지 않는다. `loop_video` 파라미터는 없다.
+- `capture_fps`는 타이머 주기이며 실제 처리 속도는 카메라와 추론 속도에 제한된다.
+
+## 판단 모듈 선택
+
+표현은 다섯 가지지만 운영 선택은 내장 모델과 외부 플러그인 두 범주다.
+
+| 표현 | 사용 위치 | 의미 |
+| --- | --- | --- |
+| 내장 모델 이름 + `method_config` | 운영 권장 | 실행 명령에서 모델을 명확히 선택 |
+| JSON의 `method` + `method_config` | 기존 설정 호환 | `method` 파라미터가 비었을 때 JSON 값 사용 |
+| `package.module:ClassName` | 외부 플러그인 권장 | 클래스를 import한 뒤 무인자 생성 |
+| `package.module:object_name` | 외부 플러그인 고급 | 모듈에 이미 생성된 객체를 그대로 사용 |
+| `BedExitNode(detector=...)` | 테스트 전용 | ROS 파라미터 없이 가짜 판단 객체 직접 주입 |
+
+### 내장 모델과 설정 JSON
+
+지원하는 내장 이름은 `detection`, `segmentation`, `yolo_pose`,
+`mediapipe_pose`다. 내장 모델에는 `method_config`가 반드시 필요하다.
+
+```bash
+cp src/part5_bed_exit/examples/methods.template.json \
+  src/part5_bed_exit/examples/methods.local.json
+```
+
+```json
+{
+  "method": "segmentation",
+  "model_dir": "../models",
+  "device": "cpu",
+  "roi": [[0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9]]
+}
+```
+
+- `model_dir`의 상대경로는 JSON 파일이 있는 디렉터리를 기준으로 해석한다.
+- `device`에는 `cpu`, `cuda:0` 같은 추론 장치를 지정한다.
+- `roi`에는 영상 크기에 대해 정규화한 실제 침대 다각형 좌표를 입력한다.
+- 운영용 로컬 JSON과 모델 가중치는 Git에 커밋하지 않는다.
+
+### 외부 모듈 계약
+
+외부 클래스는 Python에서 import 가능하고 인자 없이 생성할 수 있어야 한다. 필수 계약은
+OpenCV BGR 프레임을 받아 Python `bool`을 반환하는 `judge(frame)`이다.
+
+```python
+class CustomMethod:
+    def __init__(self):
+        pass
+
+    def judge(self, frame) -> bool:
+        return False
+
+    def render(self, frame):       # 선택 사항
+        return frame
+
+    def close(self) -> None:       # 선택 사항
+        pass
+```
+
+이미 생성한 객체를 모듈 변수로 공개할 수도 있지만 객체 상태가 공유될 수 있으므로 운영
+확장에는 클래스 방식을 권장한다. 외부 모듈에는 `method_config`를 함께 전달하지 않는다.
+
+## 모듈 실행 방법
+
+모든 명령은 빌드 후 워크스페이스 루트에서 실행한다.
+
+### 내장 모델과 기본 카메라
+
+```bash
+ros2 run part5_bed_exit bed_exit --ros-args \
+  -p method:=segmentation \
+  -p method_config:="$(pwd)/src/part5_bed_exit/examples/methods.local.json" \
+  -p camera_index:=0 \
+  -p show:=true
+```
+
+### 다른 USB 카메라
+
+카메라 연결 위치가 바뀌면 `camera_index`만 변경한다.
+
+```bash
+ros2 run part5_bed_exit bed_exit --ros-args \
+  -p method:=segmentation \
+  -p method_config:="$(pwd)/src/part5_bed_exit/examples/methods.local.json" \
+  -p camera_index:=1 \
+  -p show:=false
+```
+
+### JSON의 내장 모델 선택값 사용
+
+기존 JSON 설정과 호환해야 할 때만 `method`를 생략한다.
+
+```bash
+ros2 run part5_bed_exit bed_exit --ros-args \
+  -p method_config:="$(pwd)/src/part5_bed_exit/examples/methods.local.json" \
+  -p camera_index:=0
+```
+
+### 외부 클래스 동적 로딩
+
+```bash
+ros2 run part5_bed_exit bed_exit --ros-args \
+  -p method:=my_package.my_method:CustomMethod \
+  -p camera_index:=0 \
+  -p show:=false
+```
+
+### 외부 객체 동적 로딩
+
+```bash
+ros2 run part5_bed_exit bed_exit --ros-args \
+  -p method:=my_package.my_method:custom_method \
+  -p camera_index:=0 \
+  -p show:=false
+```
+
+### MP4 입력
+
+```bash
+ros2 run part5_bed_exit bed_exit --ros-args \
+  -p method:=segmentation \
+  -p method_config:="$(pwd)/src/part5_bed_exit/examples/methods.local.json" \
+  -p video_path:="$(pwd)/test_bed.mp4" \
+  -p show:=true
+```
+
+첫 번째 일반 인자로 MP4를 전달하는 기존 방식도 지원한다.
+
+```bash
+ros2 run part5_bed_exit bed_exit "$(pwd)/test_bed.mp4" --ros-args \
+  -p method:=segmentation \
+  -p method_config:="$(pwd)/src/part5_bed_exit/examples/methods.local.json"
+```
+
+### 토픽 확인
+
+```bash
+ros2 topic echo /patient/bed_exit
+```
+
+## 실행 중 실패 정책
+
+| 실패 지점 | 노드 동작 | 발행 | 투표 이력 |
+| --- | --- | --- | --- |
+| `capture.read()` 예외 | 오류 기록 후 다음 프레임 대기 | 해당 프레임 미발행 | 초기화 |
+| 웹캠의 잘못된 반환 | 오류 기록 후 다음 프레임 대기 | 해당 프레임 미발행 | 초기화 |
+| MP4 종료 | 타이머 중단 | 추가 발행 없음 | 초기화 |
+| `judge()` 예외 | 프레임 건너뜀 | 해당 프레임 미발행 | 초기화 |
+| publisher 예외 | 다음 프레임부터 재시도 | 실패 결과 미발행 | 초기화 |
+| 프리뷰 예외 | `show`만 비활성화 | 이미 계산한 결과 유지 | 유지 |
+
+설정 JSON 오류, 알 수 없는 모델, import 불가, 카메라 최초 열기 실패처럼 시작 구성이
+잘못된 경우에는 잘못된 상태로 운영하지 않도록 초기화를 실패시킨다.
+
+상세 연구·벤치마크 실행법은 [USAGE.md](USAGE.md)를 참고한다.
 
 ## 테스트 버전 규칙
 
@@ -67,7 +261,9 @@ v1.3.2의 `test_v3_mp4_replay_resilience.py`는 연구용 MP4 ROS 노드에
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-PYTHONPATH=src/part5_bed_exit python3 -m pytest \
+ROS_LOG_DIR=/tmp/part5_test_logs \
+PYTHONPATH="src/part5_bed_exit:${PYTHONPATH}" \
+/usr/bin/python3 -m pytest \
   src/part5_bed_exit/test/80805b4_v1_3/unit \
   src/part5_bed_exit/test/80805b4_v1_3/integration \
   src/part5_bed_exit/test/80805b4_v1_3/integration_benchmark -q
