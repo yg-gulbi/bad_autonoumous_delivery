@@ -27,5 +27,8 @@ setup(
     license='UNLICENSED',
     # [PART05-V5-00 ROS 실행 명령 등록]
     # ``ros2 run part5_bed_exit bed_exit`` → bed_exit_node.main() → BedExitNode.__init__()
-    entry_points={'console_scripts': ['bed_exit = part5_bed_exit.bed_exit_node:main']},
+    entry_points={'console_scripts': [
+        'bed_exit = part5_bed_exit.bed_exit_node:main',
+        'label_roi = part5_bed_exit.roi_labeler:main',
+    ]},
 )
