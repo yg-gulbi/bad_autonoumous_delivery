@@ -112,3 +112,46 @@ def test_only_state_refreshes_link_and_latest_pose_wins(cfg):
     assert p.pose == (1, 2) and p.last_event == "FUTURE_EVENT"
     assert p.online(3) and not p.online(3.1)
     assert p.receive("[1]", 4)["event"] == "WARNING"
+
+
+@pytest.mark.parametrize(("slot_key", "first", "second"), [
+    (True, "MOVE F2 3 id=L-1", "MOVE F2 3"),   # 4J PART 04: STATE has "slot"
+    (False, "MOVE F 3 id=L-1", "MOVE F 3"),    # earlier PART 04 rejects "F2": never send it
+])
+def test_55_slot_two_only_after_a_state_with_slot(cfg, slot_key, first, second):
+    p = RobotProtocol("robot3", cfg.robot_link)
+    report(p, 0, type="STATE", state="IDLE", mission_id=None, **({"slot": None} if slot_key else {}))
+    assert p.slots is slot_key
+    p.go("L-1", "F", 3, slot=2)
+    assert p.step(0) == (first, None)
+    report(p, 3, type="STATE", state="IDLE", mission_id=None)  # a STATE without "slot" does not unlearn it
+    assert p.step(3) == (second, None) and p.slots is slot_key
+    p.go("L-2", "F", 3, slot=1)
+    report(p, 7, type="STATE", state="IDLE", mission_id=None)
+    assert p.step(7)[0].split()[:3] == ["MOVE", "F", "3"]  # slot 1 never carries a number
+
+
+def test_56_via_events_and_obstacle_pairing(cfg):
+    p = RobotProtocol("robot3", cfg.robot_link)
+    state(p, 0)
+    p.go("L-1", "B", 1, slot=2)
+    p.step(0)
+    m1 = "L-1"  # the robot echoed the control leg ID
+    report(p, 0.5, type="STATUS", event="MISSION_ACCEPTED", mission_id=m1, destination="B", slot=2)
+    assert report(p, 0.6, type="STATUS", event="NAVIGATING", mission_id=m1, destination="B", via="교차로")
+    assert p.move.via is True and not p.move.via_passed
+    passed = report(p, 1, type="STATUS", event="VIA_PASSED", mission_id=m1, destination="B")
+    assert passed["event"] == "VIA_PASSED" and p.move.via_passed and p.state == "MOVING" and not p.move.finished
+    failed = report(p, 2, type="STATUS", event="MISSION_FAILED", mission_id=m1, reason="Nav2: ABORTED")
+    assert failed["event"] == "MISSION_FAILED" and p.move.finished
+    obstacle = report(p, 2.1, type="STATUS", event="OBSTACLE", mission_id=m1, lidar_m=0.4)
+    assert obstacle["event"] == "OBSTACLE" and obstacle["paired"] and obstacle["lidar_m"] == 0.4
+    other = report(p, 2.2, type="STATUS", event="OBSTACLE", mission_id="older")
+    assert not other["paired"]
+    legacy = RobotProtocol("robot2", cfg.robot_link)
+    state(legacy, 0)
+    legacy.go("L-1", "D", 1)
+    legacy.step(0)
+    report(legacy, 0.5, type="STATUS", event="MISSION_ACCEPTED", mission_id="L-1", destination="D")
+    report(legacy, 0.6, type="STATUS", event="NAVIGATING", mission_id="L-1", destination="D")
+    assert legacy.move.via is False

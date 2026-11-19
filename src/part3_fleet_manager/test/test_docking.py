@@ -111,47 +111,49 @@ def test_51_unknown_state_is_reported_once(cfg):
 
 @pytest.mark.parametrize("completion", ["DOCKED", "STATE"])
 def test_52_dock_home_requires_correlated_physical_completion(cfg, completion):
-    unit = replace(cfg.robots[A], return_to="DOCK")
-    sim = Simulation(replace(cfg, db_path=":memory:", robots={**cfg.robots, A: unit}))
+    # D-29: robot2 (robot_b, medicine) owns the measured dock beside F.
+    unit = replace(cfg.robots[B], return_to="DOCK")
+    sim = Simulation(replace(cfg, db_path=":memory:", robots={**cfg.robots, B: unit}))
     mid = "dock-native"
 
     def status(name, **fields):
-        frame = dict(type="STATUS", robot_id="robot2", mission_id=mid, event=name, **fields)
-        sim.pending.append(("status", json.dumps(frame), A))
+        frame = dict(type="STATUS", robot_id=cfg.robots[B].ns, mission_id=mid, event=name, **fields)
+        sim.pending.append(("status", json.dumps(frame), B))
 
     try:
-        sim.patient(pickup="A", dest="D")
+        sim.call("c", "A")
         sim.tick(0)
-        for ts in (1, 3):
-            sim.event(A, "MISSION_ACCEPTED")
-            sim.event(A, "ARRIVED")
-            sim.tick(ts)
-            sim.confirm(A, "p")
-            sim.tick(ts + 0.1)
-        # B starts beside robot2's measured dock in F, while robot2's home zone is D.
-        assert sim.core.collision.zone[A].peer == B
-        sim.frames[B]["pose"] = sim.pose("A")
-        assert sim.tick(5).commands == [MotionRequest(A, "DOCK")]
-        meta = sim.core.snapshot(5)["robots"][A]
+        sim.tick(1)
+        sim.event(B, "MISSION_ACCEPTED")
+        sim.event(B, "ARRIVED")
+        sim.tick(2)
+        # A now stands in F beside robot2's measured dock, while robot2 waits at A to return.
+        sim.frames[A]["pose"] = sim.pose("F")
+        sim.confirm(B, "c")
+        sim.tick(2.1)
+        assert sim.core.collision.zone[B].peer == A
+        sim.frames[A]["pose"] = sim.pose("D")
+        assert sim.tick(5).commands == [MotionRequest(B, "DOCK")]
+        meta = sim.core.snapshot(5)["robots"][B]
         assert meta["leg"]["to"] == "F" and meta["route"][-1] == [-0.330, -5.110]
         status("MISSION_ACCEPTED", destination="DOCK", priority=1)
         status("NAVIGATING", destination="DOCK")
         sim.tick(6)
         status("ARRIVED", destination="DOCK")
         status("DOCKING")
-        sim.frames[A].update(state="DOCKING", docked=False, mission_id=mid, destination="DOCK")
+        sim.frames[B].update(state="DOCKING", docked=False, mission_id=mid, destination="DOCK")
         sim.tick(7)
-        assert sim.state(A) == "RETURNING"
-        sim.frames[A].update(state="COMPLETE", docked=False)
-        assert not sim.tick(8).commands and sim.state(A) == "RETURNING"
-        sim.frames[A].update(mission_id="old", docked=True)
+        assert sim.state(B) == "RETURNING"
+        sim.frames[B].update(state="COMPLETE", docked=False)
+        assert not sim.tick(8).commands and sim.state(B) == "RETURNING"
+        sim.frames[B].update(mission_id="old", docked=True)
         sim.tick(9)
-        assert sim.state(A) == "RETURNING"
-        sim.frames[A].update(mission_id=mid, docked=completion == "STATE")
+        assert sim.state(B) == "RETURNING"
+        sim.frames[B].update(mission_id=mid, docked=completion == "STATE")
         if completion == "DOCKED":
             status("DOCKED")
         out = sim.tick(10)
-        assert sim.state(A) == "IDLE" and sim.core.links[A].docked is True
+        assert sim.state(B) == "IDLE" and sim.core.links[B].docked is True
         assert len([e for e in out.events if e["type"] == "ARRIVE"]) == 1
         assert not sim.tick(11).commands
     finally:

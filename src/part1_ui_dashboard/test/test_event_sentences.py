@@ -42,7 +42,8 @@ def traffic(cfg):
         rm.clear_unknown("CORRIDOR","현장 담당자",14)
         yield from rm.events
 
-    rm = ResourceManager(cfg)
+    # Deadlocks need the 4I room rule (a robot standing in a room keeps it).
+    rm = ResourceManager(replace(cfg, corridor=replace(cfg.corridor, room_mode="ROOM")))
     dl = DeadlockManager(rm)
     reports = {A:RobotReport(cfg.zones["B"],True), B:RobotReport(cfg.zones["E"],True)}
     for robot, dest in [(A,"E"),(B,"B")]:
@@ -63,8 +64,8 @@ def test_41_actual_fleet_event_titles_reasons_and_journal(tmp_path,monkeypatch):
     cfg = replace(cfg, safety=replace(cfg.safety, use_hazard_topic=True), assignment=replace(cfg.assignment, mode="IDLE_BEST_BATTERY"), corridor=replace(cfg.corridor, mode="SHARED_YIELD"))
     events = list(traffic(cfg))
     with ExitStack() as cleanup:
-        def simulator():
-            sim = Simulation(replace(cfg,db_path=":memory:"))
+        def simulator(mode="inspect"):
+            sim = Simulation(replace(cfg,db_path=":memory:",obstacle=replace(cfg.obstacle,mode=mode)))
             cleanup.callback(sim.core.store.close)
             return sim
 
@@ -123,6 +124,25 @@ def test_41_actual_fleet_event_titles_reasons_and_journal(tmp_path,monkeypatch):
             collect(sim,41+i/10)
         sim.frames.clear()
         collect(sim,50)
+
+        # 4J report mode: Nav2 gives up, PART 04 sends a photo, PART 06 sees nothing, then a box.
+        sim = simulator("report")
+        sim.battery(A,80)
+        sim.call("box","C")
+        collect(sim,0)
+        collect(sim,1)
+        for verdict, ts in ((False, 2), ("medical_box", 10)):
+            sim.event(A,"MISSION_ACCEPTED")
+            sim.frames[A]["pose"] = sim.pose((-1.55,-1.7))
+            collect(sim,ts)
+            sim.event(A,"MISSION_FAILED",reason="Nav2: ABORTED")
+            sim.event(A,"OBSTACLE",lidar_m=0.42,image_topic="/robot3/hospital_nav/obstacle_image")
+            sim.core.enqueue("obstacle_result",'{"status":"ok","obstacle_present":%s,"detections":%s}' % (
+                "true" if verdict else "false",
+                '[{"label":"medical_box","confidence":0.93}]' if verdict else "[]"),ts+.5,robot=A)
+            collect(sim,ts+.5)
+            collect(sim,ts+4)
+            collect(sim,ts+4.1)
 
         sim = simulator()
         sim.battery(A,80)

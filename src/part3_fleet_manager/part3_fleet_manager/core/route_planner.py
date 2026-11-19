@@ -6,15 +6,29 @@ from . import geometry as g
 from .config import FleetConfig
 
 
-def waypoints(config, pose, destination):
-    goal = config.zones[destination]
+def waypoints(config, pose, destination, slot=1, *, via_done=False):
+    """Mouths between regions. With DOOR rooms, B·E travel stops at the crossroad first (PART 04)."""
+    goal = config.slot_point(destination, slot)
     start, end = (config.corridor.region_of(p) for p in (pose, goal))
     points = []
-    if start != end:
+    if start != end and config.corridor.doors and g.ROOMS.count(start) + g.ROOMS.count(end):
+        if start in (g.TOP, g.BOTTOM):
+            points.append(config.corridor.mouths[start])
+        if not via_done:
+            points.append(config.corridor.crossroad)
+        if end in (g.TOP, g.BOTTOM):
+            points.append(config.corridor.mouths[end])
+    elif start != end:
         if start != g.CORRIDOR:
             points.append(config.corridor.mouths[start])
         points.append(config.corridor.mouths[end])
     return [*points, goal]
+
+
+def uses_crossroad(config, origin_region, destination):
+    """PART 04 drives through the crossroad into, or out of, room B or E."""
+    end = g.ZONE_REGIONS[destination]
+    return config.corridor.doors and origin_region != end and (origin_region in g.ROOMS or end in g.ROOMS)
 
 
 class RoutePlanner:

@@ -31,7 +31,8 @@ class Decisions:
         self.cards = {}
         self.record = record
 
-    def open(self, kind, robot, mission_id, reason, now, *, targets=None, obstacle_kind=None, context=None, options=None):
+    def open(self, kind, robot, mission_id, reason, now, *, targets=None, obstacle_kind=None, context=None, options=None,
+             extra=None):
         robots = list(targets) if targets is not None else [robot]
         for card in self.cards.values():
             if card["kind"] == kind and card["robots"] == robots and card.get("context") == context:
@@ -46,6 +47,8 @@ class Decisions:
                 "recommended": None, "timeout_s": None, "default": None, "created_at": now}
         if context:
             card["context"] = context
+        if extra:
+            card.update(extra)
         if mission_id is not None:
             card["mission_id"] = mission_id
         self.cards[card_id] = card

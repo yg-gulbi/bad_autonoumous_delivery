@@ -55,3 +55,30 @@ def description(observation, pose, policy):
     distances = [hypot(d["pose"]["x"]-pose[0], d["pose"]["y"]-pose[1])
                  for d in detections if pose is not None and "pose" in d]
     return text + (f" (로봇 앞 약 {min(distances):.1f} m)" if distances else "")
+
+
+def _subject(names):
+    """Korean subject particle after the last name (상자가, 가방이)."""
+    last = names[-1][-1] if names and names[-1] else ""
+    final = 0xAC00 <= ord(last) <= 0xD7A3 and (ord(last) - 0xAC00) % 28
+    return ", ".join(names) + ("이" if final else "가")
+
+
+def report_description(observation, lidar_m, policy):
+    """Card sentence for a PART 04 obstacle photo judged by PART 06 (BRIEF 5.5 report mode)."""
+    kind = observation["kind"]
+    if kind == "NONE":
+        return policy.none_text
+    if kind == "UNKNOWN":
+        return "장애물 판별 불가 — 로봇이 찍은 사진 확인"
+    detections = [d for d in observation["detections"] if d["confidence"] >= policy.min_confidence
+                  and (kind != "PERSON" or d["label"] == "person")]
+    names = list(dict.fromkeys(d["label_ko"] for d in detections))
+    text = "사람 감지" if kind == "PERSON" else _subject(names) + " 길을 막고 있음"
+    return text + (f" (로봇 앞 약 {lidar_m:.1f} m)" if finite(lidar_m) else "")
+
+
+def best_detection(observation, policy):
+    """Highest-confidence usable detection for the photo caption ("판별: 의료용 상자 0.93")."""
+    usable = [d for d in observation["detections"] if d["confidence"] >= policy.min_confidence]
+    return max(usable, key=lambda d: d["confidence"], default=None)

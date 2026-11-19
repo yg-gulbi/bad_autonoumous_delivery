@@ -26,7 +26,9 @@ class RobotLink:
             node.create_subscription(msg_type, topic(template), receive, qos)
 
         if obstacle.enabled:
-            self.inspect = node.create_publisher(Empty, topic(obstacle.inspect_topic), 10)
+            # report mode never asks for a photo; PART 04 sends one when Nav2 gives up (BRIEF 5.5).
+            if obstacle.mode == "inspect":
+                self.inspect = node.create_publisher(Empty, topic(obstacle.inspect_topic), 10)
             listen(String, obstacle.result_topic, 10, "obstacle_result", lambda msg: msg.data)
         self.command = node.create_publisher(String, topic(config.command_topic), 10)
         listen(String, config.status_topic, 10, "status", lambda msg: msg.data)

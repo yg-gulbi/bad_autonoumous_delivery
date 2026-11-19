@@ -215,3 +215,44 @@ def test_v2_fonts_served_offline_and_colors_scoped_to_tokens(monitor):
         url = f"fonts/IBMPlexSansKR-{face}.woff2"
         assert url in css and client.get("/static/" + url).data.startswith(b"wOF2")
     assert b"SIL OPEN FONT LICENSE" in client.get("/static/fonts/OFL.txt").data
+
+
+def test_63_obstacle_photo_is_memory_only_and_tied_to_the_open_card(tmp_path):
+    from part1_ui_dashboard.web import Photos
+    feed, photos = Feed(), Photos(clock=lambda: 0.0)
+    client = create_app(feed, {"robot_names": {"robot_a": "침상형 이송 로봇", "robot_b": "약품 운송 로봇"}},
+                        None, None, photos=photos, db_path=tmp_path / "missing.db").test_client()
+    jpeg = b"\xff\xd8\xff\xe0fake-jpeg\xff\xd9"
+    # No open obstacle card yet: nothing to show even with a photo in memory.
+    photos.put("robot_b", "raw", jpeg, at=100.0)
+    assert client.get("/api/obstacle_image/robot_b?kind=raw").status_code == 404
+    card = {"v": 1, "card_id": "K-1", "kind": "BLOCKED", "robots": ["robot_b"], "title": "경로 막힘",
+            "reason": "의료용 상자가 길을 막고 있음 (로봇 앞 약 0.4 m)", "options": [{"id": "retry", "label": "치웠음, 다시 출발"}],
+            "recommended": None, "default": None, "timeout_s": None, "created_at": 104.0,
+            "obstacle": {"kind": "OBJECT", "reported_at": 103.5, "label_ko": "의료용 상자", "confidence": 0.93}}
+    feed.receive("card", card)
+    reply = client.get("/api/obstacle_image/robot_b?kind=raw")
+    assert reply.status_code == 200 and reply.mimetype == "image/jpeg" and reply.data == jpeg
+    assert reply.headers["X-Received-At"] == "100.000" and reply.headers["Cache-Control"] == "no-store"
+    assert client.get("/api/obstacle_image/robot_b?kind=masked").status_code == 404  # no PART 06 photo
+    photos.put("robot_b", "masked", b"\xff\xd8masked\xff\xd9", at=103.9)
+    assert client.get("/api/obstacle_image/robot_b?kind=masked").data.startswith(b"\xff\xd8masked")
+    # An old photo (from an earlier stop) is not shown with this card.
+    photos.put("robot_b", "raw", jpeg, at=98.4)
+    assert client.get("/api/obstacle_image/robot_b?kind=raw").status_code == 404
+    for path in ("/api/obstacle_image/robot_a?kind=raw", "/api/obstacle_image/robot_b?kind=thumb",
+                 "/api/obstacle_image/robot_x?kind=raw"):
+        assert client.get(path).status_code == 404
+    feed.receive("event", {"type": "CARD_CLOSED", "detail": {"card_id": "K-1"}})
+    photos.put("robot_b", "raw", jpeg, at=104.0)
+    assert client.get("/api/obstacle_image/robot_b?kind=raw").status_code == 404
+
+
+def test_63_photo_reference_is_the_report_time_when_the_verdict_timed_out():
+    from part1_ui_dashboard.web import Photos
+    feed, photos = Feed(), Photos()
+    client = create_app(feed, {"robot_names": {"robot_a": "A"}}, None, None, photos=photos).test_client()
+    feed.receive("card", {"card_id": "K-2", "kind": "BLOCKED", "robots": ["robot_a"], "created_at": 209.0,
+                          "obstacle": {"kind": "UNKNOWN", "reported_at": 203.0}})
+    photos.put("robot_a", "raw", b"\xff\xd8x\xff\xd9", at=202.9)  # card opened 6 s after the photo
+    assert client.get("/api/obstacle_image/robot_a").status_code == 200

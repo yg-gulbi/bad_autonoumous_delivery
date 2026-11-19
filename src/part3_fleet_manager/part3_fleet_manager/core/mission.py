@@ -51,6 +51,7 @@ class Robot:
     replacing: bool = False
     fault_stop: bool = False
     resume_due: bool = False
+    slot: int | None = None  # slot of `zone` where the robot stopped (2 = entrance side / second slot)
 
     @property
     def returning(self):
@@ -68,6 +69,8 @@ class MissionManager:
         self.ready = {}
         self.dirty = {}
         self.record = resources.record
+        # fleet_core sets this in obstacle report mode: True holds the NAV_FAILED card for the photo result.
+        self.defer_failure = None
 
     def submit(self, request, now, *, manual_robot=None):
         kind = request["type"]
@@ -223,10 +226,11 @@ class MissionManager:
         job = r.job
         job.sends += 1
         destination = "DOCK" if leg.dock_path else leg.destination
-        self.links[leg.robot].go(f"L-{job.id.removeprefix('M-')}-{job.sends}", destination, leg.level)
+        self.links[leg.robot].go(f"L-{job.id.removeprefix('M-')}-{job.sends}", destination, leg.level,
+                                 slot=None if leg.dock_path else self.resources.slot_of(leg))
         r.state, r.resume_due = "SENDING", False
 
-    def fault(self, robot, kind, reason, now, diagnostic=None):
+    def fault(self, robot, kind, reason, now, diagnostic=None, *, card=True):
         r = self.robots[robot]
         if not r.job:
             return
@@ -234,7 +238,8 @@ class MissionManager:
         self.record(kind, now, reason, diagnostic=diagnostic, robot=robot, mission_id=r.job.journal_id)
         self.record("FAULT", now, reason, robot=robot, mission_id=r.job.journal_id)
         r.state, r.fault_stop = "FAULT", True
-        self.decisions.open(kind if kind != "WARNING" else "NAV_FAILED", robot, r.job.journal_id, reason, now)
+        if card:
+            self.decisions.open(kind if kind != "WARNING" else "NAV_FAILED", robot, r.job.journal_id, reason, now)
 
     def received(self, robot, data, now):
         r, link = self.robots[robot], self.links[robot]
@@ -254,7 +259,9 @@ class MissionManager:
                 return  # Wait for the terminal STATE or cancel reply.
             if r.returning and event == "ARRIVED":
                 r.zone = data["destination"]
-                self.record("ARRIVE", now, f"{self.resources.zone_label(r.zone)} 도착", robot=robot, destination=r.zone, return_home=True)
+                r.slot = data.get("slot") if data.get("slot") in (1, 2) else None
+                self.record("ARRIVE", now, f"{self.resources.zone_label(r.zone, r.slot)} 도착", robot=robot,
+                            destination=r.zone, return_home=True, slot=r.slot)
             if r.returning and event == "CANCEL_CONFIRMED" and data.get("at_home"):
                 r.zone = leg.destination if leg else self.config.robots[robot].start_zone
             if event in {"CANCEL_CONFIRMED", "ARRIVED", "MISSION_FAILED", "MISSION_CANCELED"}:
@@ -280,19 +287,23 @@ class MissionManager:
             if not r.returning and r.job.started_at is None:
                 r.job.started_at = now
                 self.dirty[r.job.id] = r.job
-            self.record("LEG_START", now, f"{self.resources.zone_label(leg.destination)} 이동 시작", robot=robot,
+            slot = self.resources.slot_of(leg) if not leg.dock_path else None
+            self.record("LEG_START", now, f"{self.resources.zone_label(leg.destination, slot)} 이동 시작", robot=robot,
                         mission_id=r.job.journal_id, destination=leg.destination, return_home=r.returning,
-                        by=r.job.requested_by if r.job.kind == "GO_ZONE" else None)
+                        slot=slot, by=r.job.requested_by if r.job.kind == "GO_ZONE" else None)
         elif event in ("MISSION_FAILED", "MOVE_REJECTED", "MISSION_CANCELED"):
             kind = {"MISSION_FAILED": "NAV_FAILED", "MOVE_REJECTED": "MOVE_REJECTED",
                     "MISSION_CANCELED": "WARNING"}[event]
             reason = {"NAV_FAILED": "목적지까지 주행하지 못했습니다.", "MOVE_REJECTED": "로봇이 이동 요청을 거절했습니다.",
                       "WARNING": "로봇에서 주행이 취소됐습니다."}[kind]
-            self.fault(robot, kind, reason, now, diagnostic=data.get("reason") or event)
+            deferred = kind == "NAV_FAILED" and self.defer_failure is not None and self.defer_failure(robot, data, now)
+            self.fault(robot, kind, reason, now, diagnostic=data.get("reason") or event, card=not deferred)
         elif event == "ARRIVED" and leg and data.get("destination") == leg.destination:
-            self.record("ARRIVE", now, "도크 복귀 완료" if leg.dock_path else f"{self.resources.zone_label(leg.destination)} 도착", robot=robot,
-                        mission_id=r.job.journal_id, destination=leg.destination, return_home=r.returning)
-            r.zone = leg.destination
+            reported = data.get("slot")
+            slot = None if leg.dock_path else reported if reported in (1, 2) else self.resources.slot_of(leg)
+            self.record("ARRIVE", now, "도크 복귀 완료" if leg.dock_path else f"{self.resources.zone_label(leg.destination, slot)} 도착", robot=robot,
+                        mission_id=r.job.journal_id, destination=leg.destination, return_home=r.returning, slot=slot)
+            r.zone, r.slot = leg.destination, slot
             link.forget()
             self.decisions.resolve(robot, now)
             if self.deadlock.arrived(leg, now):
@@ -387,7 +398,8 @@ class MissionManager:
                 or self.safety.causes[robot] or any(c["robots"] == [robot] and c["kind"] == "STOP_MISMATCH"
                                                     for c in self.decisions.cards.values())):
             raise ValueError("E-409: 확인할 정류장이 없습니다.")
-        self.record("CONFIRM_STEP", now, CONFIRM_REASONS[result], result=result, robot=robot, mission_id=mission_id, destination=r.zone, by=by)
+        self.record("CONFIRM_STEP", now, CONFIRM_REASONS[result], result=result, robot=robot, mission_id=mission_id,
+                    destination=r.zone, slot=r.slot, by=by)
         stop = r.job.stop_log[r.job.index]
         self.dirty[mission_id] = r.job
         if result == "MISMATCH":

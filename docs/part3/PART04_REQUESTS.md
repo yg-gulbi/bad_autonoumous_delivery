@@ -8,7 +8,7 @@
 
 | 항목 | 정한 내용 |
 |---|---|
-| 로봇 namespace | Robot A = `robot2`, Robot B = `robot3` (`keyboard_control.py` 예시 기준). 실제와 다르면 알려만 주세요. 관제는 설정 한 줄만 바꿉니다 |
+| 로봇 namespace | (4J 확정, D-29) 침상형 이송 로봇 = `robot3`, 약품 운송 로봇 = `robot2`. 관제는 설정 한 줄만 바꿉니다 |
 | 범퍼 | 관제가 Create 3의 `/<ns>/hazard_detection`을 직접 구독합니다 |
 | 도킹 여부 | 관제가 `/<ns>/dock_status`를 직접 구독합니다 |
 | 위치 | 관제가 `/<ns>/amcl_pose`를 직접 구독합니다 (STATE의 pose는 보조) |

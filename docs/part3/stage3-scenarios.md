@@ -1,5 +1,7 @@
 # 단계 3 · ROS 2 Jazzy mock 시나리오
 
+> 4J(11/19)부터 namespace가 바뀌었다: 침상형 이송 로봇(Robot A) = `/robot3`, 약품 운송 로봇(Robot B) = `/robot2` (D-29). 아래 기록은 그 전 이름이다.
+
 단계 2b에서 다섯 시나리오를 각각 새 DB로 실행했다. 아래 발췌는 실제 `/fleet/state`와 `/mission/event`에서 관련 필드를 골랐다. 시나리오 5는 `hospital_nav`의 명령과 응답도 함께 기록했다.
 
 ## 실행

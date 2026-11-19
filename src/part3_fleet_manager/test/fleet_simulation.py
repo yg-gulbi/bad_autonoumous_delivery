@@ -7,7 +7,7 @@ from part3_fleet_manager.core.fleet_core import FleetCore
 
 
 class Simulation:
-    def __init__(self, cfg, *, require_at_start=False):
+    def __init__(self, cfg, *, require_at_start=False, slots=False):
         # The simulator normally runs without a webcam, just like fleet_mock.launch.py.
         monitor = replace(cfg.safety.bed_monitor, require_at_start=require_at_start)
         cfg = replace(cfg, safety=replace(cfg.safety, bed_monitor=monitor))
@@ -18,6 +18,9 @@ class Simulation:
         self.frames = {r: {"type": "STATE", "robot_id": c.ns, "state": "IDLE", "mission_id": None,
                            "pose": self.pose(c.start_zone), "percent": 0}
                        for r, c in cfg.robots.items()}
+        if slots:  # 4J PART 04: every STATE carries "slot" (null while idle)
+            for frame in self.frames.values():
+                frame["slot"] = None
         self.ids = {}
         self.last = {}
         self.now = 0
@@ -79,11 +82,21 @@ class Simulation:
     def event(self, robot, name, **fields):
         f = self.frames[robot]
         if name == "MISSION_ACCEPTED":
-            _, zone, _, tag = self.last[robot].split()
-            f.update(mission_id=tag[3:], destination=zone, state="MOVING", percent=0)
-            fields.update(destination=zone)
+            words = self.last[robot].split()
+            room = words[1]  # "F" or "F2" (slot 2)
+            self.seq += 1
+            tag = words[3][3:] if len(words) > 3 else f"remote-{self.seq}"
+            slot = int(room[1]) if len(room) == 2 else 1
+            f.update(mission_id=tag, destination=room[0], state="MOVING", percent=0)
+            if "slot" in f:
+                f["slot"] = slot
+                fields.update(slot=slot)
+            fields.update(destination=room[0])
         if name == "ARRIVED":
-            fields.update(destination=f["destination"], pose=self.pose(f["destination"]))
+            slot = f.get("slot") or 1
+            fields.update(destination=f["destination"], pose=self.pose(self.cfg.slot_point(f["destination"], slot)))
+            if "slot" in f:
+                fields.update(slot=slot)
             f.update(state="COMPLETE", pose=fields["pose"], percent=100)
         if name in ("PAUSED", "RESUMED", "MISSION_FAILED", "MISSION_CANCELED"):
             f["state"] = {"PAUSED": "PAUSED", "RESUMED": "MOVING", "MISSION_FAILED": "FAILED",

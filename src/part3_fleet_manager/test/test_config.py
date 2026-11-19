@@ -10,14 +10,16 @@ from part3_fleet_manager.core.config import ConfigError, config_from_dict, load_
 
 def test_default_yaml_loads(cfg):
     assert [(r.label, r.mark) for r in cfg.robots.values()] == [("침상형 이송 로봇", "A"), ("약품 운송 로봇", "B")]
-    assert cfg.robots["robot_a"].ns == "robot2"
-    assert cfg.robots["robot_b"].ns == "robot3"
+    # D-29 (11/19): robot3 is the bed transport robot, robot2 carries medicine and owns the measured dock.
+    assert cfg.robots["robot_a"].ns == "robot3" and cfg.robots["robot_a"].dock is None
+    assert cfg.robots["robot_b"].ns == "robot2"
+    assert (cfg.robots["robot_b"].dock.x, cfg.robots["robot_b"].dock.y, cfg.robots["robot_b"].dock.yaw_deg) == (-0.330, -5.110, -3.0)
     assert {robot.start_zone for robot in cfg.robots.values()} == {"D", "F"}
     assert cfg.type_to_robot == {"PATIENT_TRANSPORT": "robot_a", "MED_ROUND": "robot_b", "CALL": "robot_b"}
     assert (cfg.assignment.mode, cfg.assignment.min_battery_pct) == ("ROLE", 20)
     assert cfg.mission.return_home and cfg.mission.return_interruptible
     assert cfg.robot_link.command_topic.format(ns=cfg.robots["robot_a"].ns) == (
-        "/robot2/hospital_nav/command"
+        "/robot3/hospital_nav/command"
     )
     assert cfg.robot_link.request_id == "auto" and cfg.robot_link.start_timeout_s == 120
     assert not cfg.safety.use_hazard_topic and all(r.return_to == "ZONE" for r in cfg.robots.values())
@@ -38,15 +40,25 @@ def test_default_yaml_loads(cfg):
     assert (cfg.mock.speed_mps, cfg.mock.stall_radius_m, cfg.mock.supports_request_id) == (0.2, 0.05, False)
     assert (cfg.publish.fleet_state_hz, cfg.publish.tick_hz) == (5, 10)
     assert cfg.db_path == str(Path("~/.bad/bad.db").expanduser())
+    # D-30: two slots per zone (PART 04 goal_manager.SLOTS), B·E doors and the shared crossroad.
+    assert cfg.slots["F"] == ((-1.4, -5.4), (-1.35, -4.7)) and cfg.slot_point("F", 2) == (-1.35, -4.7)
+    assert all(cfg.slot_count(z) == 2 for z in cfg.zones) and cfg.zones["B"] == (-2.5, -1.25)
+    assert cfg.corridor.crossroad == (-1.5, -2.18) and cfg.corridor.crossroad_clear_m == 0.6
+    assert cfg.corridor.room_mode == "DOOR" and cfg.corridor.doors
+    # D-31: obstacle report mode, medical box label, retry once when PART 06 sees nothing.
+    assert (cfg.obstacle.mode, cfg.obstacle.timeout_s, cfg.obstacle.retry_if_clear) == ("report", 6.0, True)
+    assert cfg.obstacle.label_ko["medical_box"] == "의료용 상자" and cfg.obstacle.none_text == "의료용 상자는 보이지 않음"
+    assert cfg.obstacle.image_topic.format(ns="robot2") == "/robot2/hospital_nav/obstacle_image"
+    assert cfg.mock.abort_after_s == 5.0 and cfg.safety.slot_stop_m == 0.45
 
 
 @pytest.mark.parametrize(("path", "value"), [
-    ("robots.robot_b.ns", "robot2"),
+    ("robots.robot_b.ns", "robot3"),
     ("robots.robot_b.mark", "A"),
     ("robots.robot_a.mark", "AB"),
     ("robots.robot_a.start_zone", "Z"),
     ("robots.robot_a.return_to", "HOME"),
-    ("robots.robot_a.dock.yaw_deg", float("nan")),
+    ("robots.robot_b.dock.yaw_deg", float("nan")),
     ("robot_link.start_timeout_s", 0),
     ("safety.use_hazard_topic", "false"),
     ("mock.localizing_s", -1),
@@ -64,6 +76,17 @@ def test_default_yaml_loads(cfg):
     ("zones.A", {"x": -1.6, "y": -2}),
     ("zones.E", {"x": float("nan"), "y": 0}),
     ("zones.E.x", 10 ** 350),
+    ("zones.B.slot2", {"x": -1.5, "y": -2.18}),
+    ("corridor.crossroad", {"x": -0.4, "y": -1.4}),
+    ("corridor.crossroad_clear_m", 0),
+    ("corridor.room_mode", "HALL"),
+    ("obstacle.mode", "auto"),
+    ("obstacle.retry_if_clear", "yes"),
+    ("obstacle.report_wait_s", 0),
+    ("obstacle.image_topic", "/robot2/hospital_nav/obstacle_image"),
+    ("obstacle.none_text", ""),
+    ("safety.slot_stop_m", 0),
+    ("mock.abort_after_s", 0),
     ("corridor.mode", "SHARE"),
     ("corridor.yield_enabled", "false"),
     ("corridor.yield_trigger_m", 0),
@@ -128,6 +151,23 @@ def test_core_has_no_ros_imports():
             else:
                 continue
             assert not ros_packages.intersection(name.split(".")[0] for name in imports), source
+
+
+def test_fleet_file_before_4j_keeps_one_slot_rooms_and_inspection():
+    """An older fleet.yaml (no slot2, crossroad or obstacle.mode) keeps the 4I behaviour."""
+    data = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    for zone in data["zones"].values():
+        del zone["slot2"]
+    for key in ("crossroad", "crossroad_clear_m", "room_mode"):
+        del data["corridor"][key]
+    del data["obstacle"]["mode"]
+    config = config_from_dict(data)
+    assert config.corridor.room_mode == "ROOM" and not config.corridor.doors
+    assert config.slot_count("C") == 1 and config.slot_point("C", 2) == config.zones["C"]
+    assert config.obstacle.mode == "inspect"
+    data["corridor"]["room_mode"] = "DOOR"
+    with pytest.raises(ConfigError, match="corridor.room_mode"):
+        config_from_dict(data)
 
 
 def test_previous_fleet_file_without_policy_uses_directional_defaults():

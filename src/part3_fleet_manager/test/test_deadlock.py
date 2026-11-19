@@ -14,7 +14,8 @@ MID = (-1.6, -2.0)
 
 class RoomSwap:
     def __init__(self, cfg, *, mode="SHARED_YIELD", levels=(2, 2), since=(0, 0), patients=(False, False)):
-        cfg = replace(cfg, corridor=replace(cfg.corridor, mode=mode))
+        # Deadlocks need rooms that keep a robot's claim while it stands inside (room_mode ROOM, before 4J).
+        cfg = replace(cfg, corridor=replace(cfg.corridor, mode=mode, room_mode="ROOM"))
         self.cfg = cfg
         self.resources = ResourceManager(cfg)
         self.deadlock = DeadlockManager(self.resources)
@@ -143,7 +144,8 @@ def test_only_continuous_cycle_counts_and_stale_card_closes(cfg):
 
 def test_three_robots_wait_graph_and_cycle(cfg):
     c = "robot_c"
-    fleet = replace(cfg, corridor=replace(cfg.corridor, mode="EXCLUSIVE"), robots={**cfg.robots, c: replace(cfg.robots[A], ns="robot4")})
+    fleet = replace(cfg, corridor=replace(cfg.corridor, mode="EXCLUSIVE", room_mode="ROOM"),
+                    robots={**cfg.robots, c: replace(cfg.robots[A], ns="robot4")})
     rm = ResourceManager(fleet)
     dl = DeadlockManager(rm)
     for robot, destination in ((A, "D"), (B, "B"), (c, "E")):
