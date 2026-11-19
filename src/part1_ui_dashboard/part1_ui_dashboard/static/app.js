@@ -6,6 +6,7 @@ const robotName = r => S?.robots[r]?.label || cfg.robot_names?.[r] || "관제";
 const zn = z => cfg.names[z] || "구역 미확인";
 const zs = (z, slot) => zn(z) + (slot === 2 ? " (2번 자리)" : "");
 const resNames = { FREE: "비어 있음", GRANTED: "허가", OCCUPIED: "점유 중", UNKNOWN: "점유 불명" };
+const resLabel = key => key === "CORRIDOR" ? "복도" : zn(key.slice(-1)) + " 출입";
 const routeText = m => m.stops.map(zn).join(" → ");
 function tm(t) {
     if (t == null) return "미수신";
@@ -20,6 +21,8 @@ const waitStates = new Set(["HOLD", "GIVE_WAY", "YIELDING", "WAIT_CONFIRM"]);
 const stateColor = state => ["SAFE_PAUSE", "FAULT", "OFFLINE"].includes(state) ? "red" : waitStates.has(state) ? "amber" : "";
 function displayState(id, robot) {
     const state = robot.state, road = S?.resources.CORRIDOR;
+    // 4K (D-32): a stop cause is a request until the robot's STATE reports standing still.
+    if (state === "SAFE_PAUSE") return stopConfirmed(robot) ? ["정지 확인", "red"] : ["정지 요청 중(확인 전)", "amber"];
     if (state === "HOLD" && robot.proximity) return ["가까움 정지", "amber"];
     if (state === "HOLD" && robot.zone_wait) return ["목적지 대기", "amber"];
     if (state === "HOLD" && road?.follow_stop?.rear === id) return ["후행 대기", "amber"];
@@ -162,7 +165,12 @@ function monitorBadge() {
 
 function situation(fresh) {
     const issues = [];
-    const add = (severity, title, detail, basis = false) => issues.push({severity, title, detail, basis});
+    const add = (severity, title, detail, basis = false, tone = null) => issues.push({severity, title, detail, basis, tone});
+    // 4K (D-32): stop lines say whether the robot STATE confirmed the stop. Unconfirmed is amber.
+    const stopLine = (severity, title, robots) => {
+        const [text, tone] = stopAction(robots), done = tone === "red-text";
+        add(severity, title, done ? text + " · 재개 대기" : text, false, done ? "risk" : "attention");
+    };
     if (!fresh) add(4, "관제 연결 끊김", "관제 상태 수신을 기다립니다.");
     if (!S) return issues;
     const mon = S.bed_exit.monitor, corridor = S.resources.CORRIDOR;
@@ -170,19 +178,18 @@ function situation(fresh) {
     if (monitorLocked(mon) || mon?.bypass) add(4, monitorBadge()[0], mon?.bypass ? "담당자가 감시 없이 운행을 선택했습니다." : "웹캠 신호와 대상 로봇을 확인하세요.");
     const units = Object.entries(S.robots);
     const bumped = units.filter(([,r]) => (r.pause_causes || [r.paused_by]).includes("BUMP"));
-    if (bumped.length) add(4, "범퍼 충돌", bumped.map(([,r]) => r.label).join(" · ") + " 안전 정지");
+    if (bumped.length) add(4, "범퍼 충돌", stopAction(bumped.map(([,r]) => r))[0]);
     for (const [,r] of units) {
         if (!r.link_ok) add(4, "로봇 연결 끊김", r.label + " 상태 수신을 기다립니다.");
     }
     const manual = units.filter(([,r]) => (r.pause_causes || [r.paused_by]).includes("MANUAL"));
-    if (manual.length) add(3, manual.length === units.length ? "운영자 전체 정지" : "운영자 안전 정지",
-        manual.map(([,r]) => r.label).join(", ") + " 재개 대기");
+    if (manual.length) stopLine(3, manual.length === units.length ? "운영자 전체 정지" : "운영자 안전 정지", manual.map(([,r]) => r));
     const follow = corridor.follow_stop;
     if (follow) add(1, follow.rule === "GAP" ? "앞 로봇과 간격 유지 → " + robotName(follow.rear) + " 대기" : "앞 로봇 정지 → " + robotName(follow.rear) + " 대기",
         follow.rule === "GAP" ? "재개 간격 확보 또는 선행 로봇 이탈 대기" : robotName(follow.front) + " 주행 재개 또는 복도 이탈 대기", true);
     if ([...cards.values()].some(c => c.kind === "DEADLOCK")) add(1, "교착 해소 대기", "결정 카드에서 양보할 로봇을 선택하세요.", true);
     for (const [key,res] of Object.entries(S.resources)) {
-        if (res.state === "UNKNOWN") add(1, (key === "CORRIDOR" ? "복도" : zn(key.slice(-1))) + " 점유 불명", "현장에서 점유 상태를 확인하세요.", true);
+        if (res.state === "UNKNOWN") add(1, resLabel(key) + " 점유 불명", "현장에서 점유 상태를 확인하세요.", true);
         if (res.blocked) add(1, "이동 경로 막힘", res.blocked_robots.map(robotName).join(" · "), true);
     }
     for (const [id,r] of units) {
@@ -200,7 +207,7 @@ function situation(fresh) {
             add(1, "일시 정체", r.label + " · " + Math.floor(r.stall_s) + "초 동안 이동 없음", true);
         if (r.state === "FAULT") add(1, "주행 장애", r.label);
         if (r.state === "SAFE_PAUSE" && !manual.some(([key]) => key === id) && !bumped.some(([key]) => key === id) && !S.bed_exit.value && !monitorLocked(mon))
-            add(3, "안전 정지", r.label + " 재개 대기");
+            stopLine(3, "안전 정지", [r]);
     }
     return issues.sort((a,b) => b.severity - a.severity);
 }
@@ -222,7 +229,7 @@ function renderTop() {
     $("active-count").textContent = "진행 작업 " + (S?.summary?.active ?? 0) + "건";
     $("queued-count").textContent = "배정 대기 " + (S?.missions.filter(m => m.status === "QUEUED").length ?? 0) + "건";
     const issues = situation(fresh), top = issues[0];
-    $("situation").className = top ? top.severity < 3 ? "attention" : "risk" : "";
+    $("situation").className = top ? top.tone || (top.severity < 3 ? "attention" : "risk") : "";
     const noticeButtons = [...cards.values()].map(c => btn("결정 · " + (cardNames[c.kind] || c.title), "card", c.card_id));
     if (alerts.length) noticeButtons.push(btn("경보 " + alerts.length, "alarm"));
     if (top?.basis) noticeButtons.unshift(btn("판단 근거", "basis", "", "", !basisEvent()));
@@ -233,7 +240,9 @@ function renderTop() {
     put("situation", lane + (issues.length > 1 ? '<b>외 ' + (issues.length - 1) + '건</b>' : '') +
         '<div class="buttons">' + noticeButtons.join("") + '</div>');
     if (modal === "alarm" && alerts[0]) {
-        $("alarm-action").textContent = alarmAction(alerts[0]);
+        const [action, tone] = alarmAction(alerts[0]);
+        $("alarm-action").textContent = action;
+        $("alarm-action").className = tone;
         $("mute").textContent = sound ? "경보음 끄기" : "경보음 켜기";
     }
     const elapsed = $("elapsed");
@@ -257,7 +266,7 @@ function renderTop() {
         }
     }
 }
-const cardNames = { BED_MONITOR_LOST: "침상 감시 끊김", BLOCKED: "경로 막힘", DEADLOCK: "교착 해소", NAV_FAILED: "주행 실패", MOVE_REJECTED: "이동 거절", STOP_MISMATCH: "확인 불일치" };
+const cardNames = { BED_MONITOR_LOST: "침상 감시 끊김", BLOCKED: "경로 막힘", DEADLOCK: "교착 해소", NAV_FAILED: "주행 실패", MOVE_REJECTED: "이동 거절", STOP_MISMATCH: "확인 불일치", STOP_UNCONFIRMED: "정지 미확인" };
 
 const choiceDescriptions = {
     BLOCKED: {retry:"앞이 비었는지 확인한 뒤 원래 경로로 다시 갑니다.", return:"이전 구역으로 돌아갑니다.", hold:"현재 위치에서 멈춘 채 운영자의 재시도를 기다립니다."},
@@ -267,7 +276,8 @@ const choiceDescriptions = {
     BED_MONITOR_LOST: {hold:"감시 신호를 확인할 때까지 정지를 유지합니다.", bypass:"운영자 확인으로 침상 감시 없이 운행을 허용합니다."},
     NAV_FAILED: {retry:"같은 목적지로 다시 출발합니다.", return:"이전 구역으로 돌아갑니다.", cancel:"현재 작업을 취소합니다."},
     MOVE_REJECTED: {retry:"같은 이동 명령을 다시 보냅니다.", cancel:"현재 작업을 취소합니다."},
-    STOP_MISMATCH: {recheck:"현재 정류장에서 다시 확인합니다.", skip:"이 정류장을 건너뛰고 진행합니다.", cancel:"현재 작업을 취소합니다."}
+    STOP_MISMATCH: {recheck:"현재 정류장에서 다시 확인합니다.", skip:"이 정류장을 건너뛰고 진행합니다.", cancel:"현재 작업을 취소합니다."},
+    STOP_UNCONFIRMED: {resend:"정지 명령을 다시 보내고 멈췄다는 보고를 다시 기다립니다.", confirmed:"현장에서 로봇이 멈춘 것을 봤습니다. 정지 명령을 더 보내지 않습니다."}
 };
 const elapsedSince = (t, stopped = false) => `<time id="elapsed" data-since="${t}" data-stopped="${stopped}"></time>`;
 const factList = pairs => "<dl>" + pairs.map(([k,v]) => `<dt>${h(k)}</dt><dd>${h(v)}</dd>`).join("") + "</dl>";
@@ -279,7 +289,7 @@ function showCard(id) {
     const title = c.context === "ZONE" ? "목적지 대기" : c.context === "PROXIMITY" ? "로봇 근접 정지" : c.kind === "BLOCKED" && r ? r.label + "이 막혔습니다" : c.title;
     const stalled = !c.context && c.kind === "BLOCKED" && r?.stall_s > 0;
     const facts = [["작업", job ? job.mission_id + " " + cfg.kinds[job.type] + ", Level " + job.level : "직접 이동 또는 임무 없음"],
-        ["멈춘 곳", locationText(r)]];
+        [c.kind === "STOP_UNCONFIRMED" ? "지금 위치" : "멈춘 곳", locationText(r)]];
     if (c.kind === "BLOCKED" && !c.context && !c.obstacle) facts.push(["앞에 있는 것", obstacleText(r || {}) || "분류 결과 없음"]);
     const photo = c.obstacle ? `<figure class="obstacle-photo" id="obstacle-photo" hidden><img alt="${h((r?.label || "로봇") + "이 찍은 장애물 사진")}"><figcaption></figcaption></figure>` : "";
     openModal("card", `<header class="pop-head attention">${r ? robotMark(r) : ""}<h2>${h(title)}</h2>${elapsedSince(stalled ? S.stamp-r.stall_s : c.created_at, stalled)}</header>
@@ -315,18 +325,28 @@ async function showObstaclePhoto(c) {
     }
 }
 const alarmKinds = { BED_MONITOR_LOST: "red", BED_EXIT: "red", BUMP: "red", BLOCKED: "amber", LINK_LOST: "red", FAULT: "amber" };
+// 4K (D-32): the control's stop causes are a request. Only the robot's STATE confirms it stopped:
+// PAUSED, or a state that is not driving at all. A robot whose STATE is not arriving is not confirmed.
+const stillStates = new Set(["PAUSED", "IDLE", "COMPLETE", "CANCELED", "FAILED"]);
+const stopConfirmed = r => r.link_ok !== false && stillStates.has(r.part4_state);
+function stopAction(robots) {
+    const done = robots.filter(stopConfirmed), waiting = robots.filter(r => !stopConfirmed(r));
+    const text = [done.length ? done.map(r => r.label).join(", ") + " 정지 확인" : "",
+        waiting.length ? waiting.map(r => r.label).join(", ") + " 정지 요청 중(확인 전)" : ""].filter(Boolean).join(" · ");
+    return [text, waiting.length ? "amber-text" : "red-text"];
+}
 
 function alarmAction(e) {
     if (e.type === "BED_MONITOR_LOST") {
         const targets = e.detail.targets || [];
         const paused = targets.filter(id => S?.robots[id]?.state === "SAFE_PAUSE");
-        return paused.length ? paused.map(robotName).join(", ") + " 안전 정지" : "대상 로봇 출발 제한";
+        return paused.length ? stopAction(paused.map(id => ({...S.robots[id], label: robotName(id)}))) : ["대상 로봇 출발 제한", ""];
     }
     if (e.type === "BED_EXIT" || e.type === "BUMP") {
         const robots = Object.values(S?.robots || {}).filter(r => (r.pause_causes || [r.paused_by]).includes(e.type));
-        return robots.length ? robots.map(r => r.label).join(", ") + " 안전 정지" : "안전 정지 상태 확인 중";
+        return robots.length ? stopAction(robots) : ["안전 정지 상태 확인 중", ""];
     }
-    return { BLOCKED: "신규 진입 보류 · 장애물 확인 요청", LINK_LOST: "연결 복구 대기", FAULT: "해당 구간 중단 · 운영자 판단 대기" }[e.type];
+    return [{ BLOCKED: "신규 진입 보류 · 장애물 확인 요청", LINK_LOST: "연결 복구 대기", FAULT: "해당 구간 중단 · 운영자 판단 대기" }[e.type], ""];
 }
 
 function alarm() {
@@ -336,9 +356,10 @@ function alarm() {
     const targets = e.detail.targets || (e.robot ? [e.robot] : cfg.bed_targets || []);
     const robot = S?.robots[targets[0]], job = mById(e.mission_id || robot?.mission_id);
     const facts = [["로봇", targets.map(robotName).join(" · ") || "관제"], ["작업", job ? job.mission_id + " " + cfg.kinds[job.type] : "배정된 작업 없음"], ["감지 시각", tm(e.ts)]];
+    const [action, tone] = alarmAction(e);
     openModal("alarm", `<header class="pop-head ${alarmKinds[e.type] === "red" ? "alarm-head" : "attention"}"><b aria-hidden="true">⚠</b><h2>${h(e.title)}</h2>${elapsedSince(e.ts)}</header>
         <div class="pop-body"><p class="lead">${h(e.type === "BED_EXIT" ? "침상에서 환자가 일어났습니다. 침상 카메라로 환자 상태를 확인하세요." : e.detail.reason)}</p>
-        ${factList(facts)}<div class="action-fact">관제 조치 <b id="alarm-action">${h(alarmAction(e))}</b></div>
+        ${factList(facts)}<div class="action-fact">관제 조치 <b id="alarm-action" class="${tone}">${h(action)}</b></div>
         <div class="buttons">${btn("확인", "dismiss", "", "alarm-ok")}<button id="mute" data-act="sound">경보음 끄기</button></div>
         <small>확인 후에도 현재 상황은 위쪽 상황 줄에서 볼 수 있습니다.</small></div>`);
 
@@ -361,8 +382,8 @@ Object.assign(actions, { close: () => { if (modal === "card")
     cancel: id => openModal("confirm", dialogHead("임무 취소") + `<p>${h(id)} 임무를 취소하시겠습니까?</p>` + btn("임무 취소 실행", "cancel-ok", id, "danger")),
     "cancel-ok": async (id, b) => { const ack = await command("CANCEL_MISSION", { mission_id: id }, b); if (ack?.ok)
         closeModal(); },
-    clear: () => openModal("confirm", dialogHead("현장 확인 후 복도 비움") + "<p>현장에서 복도의 점유 상태를 확인했습니까?</p>" + btn("복도 비움 확인", "clear-ok", "", "danger")),
-    "clear-ok": async (_, b) => { if ((await command("RESOURCE_CLEAR_CONFIRM", { resource: "CORRIDOR" }, b))?.ok)
+    clear: id => openModal("confirm", dialogHead("현장 확인 후 " + resLabel(id) + " 비움") + `<p>현장에서 ${h(resLabel(id))}의 점유 상태를 확인했습니까?</p>` + btn(resLabel(id) + " 비움 확인", "clear-ok", id, "danger")),
+    "clear-ok": async (id, b) => { if ((await command("RESOURCE_CLEAR_CONFIRM", { resource: id }, b))?.ok)
         closeModal(); },
     inspect, quick: () => quick("patient") });
 document.addEventListener("click", e => {

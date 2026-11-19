@@ -21,6 +21,8 @@ robot_link:
   start_timeout_s: 120.0         # 언독·위치 초기화부터 주행 시작까지
   accept_timeout_s: 3.0
   link_timeout_s: 3.0           # STATE가 1 Hz라서 3초
+  control_retry_s: 1.5          # PAUSE 뒤 이 시간이 지나도 STATE가 MOVING이면 PAUSE를 다시 보냄 (STATE 1 Hz, D-32)
+  control_retries: 3            # 다시 보낸 횟수가 이 값을 넘으면 "정지 미확인" 카드 (D-32)
 
 zones:                          # PART 04 goal_manager.py SLOTS와 같은 값. x, y = 1번 자리, slot2 = 2번 자리 (D-30)
   A: {x: -2.383, y:  1.027, slot2: {x: -2.458, y:  0.282}, name: ""}   # 1번 안쪽, 2번 입구 쪽
@@ -78,7 +80,7 @@ obstacle:                       # 장애물 (3.2a·5.5절). report: PART 04 사�
   inspect_at_s: 10.0
   timeout_s: 6.0                # OBSTACLE(또는 촬영 요청) 뒤 PART 06 결과를 기다리는 시간
   report_wait_s: 4.0            # Nav2 포기 뒤 OBSTACLE을 기다리는 시간 (PART 04 촬영 제한 3초 + 여유)
-  retry_if_clear: true          # report 모드 NONE이면 같은 구간을 한 번 자동 재출발
+  retry_if_clear: false         # report 모드 NONE이어도 자동 재출발하지 않고 카드를 띄움. "상자 없음" ≠ 길이 비었음 (D-31, 4K)
   retry_delay_s: 3.0
   none_text: "의료용 상자는 보이지 않음"
   object_blocks_now: true       # OBJECT면 30초를 기다리지 않고 바로 막힘 처리

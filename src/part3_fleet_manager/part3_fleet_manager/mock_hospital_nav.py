@@ -87,6 +87,8 @@ class MockHospitalNav(Node):
             raise ValueError(check.reason)
         for name in ("reject_next", "fail_next", "drop_link"):
             self.declare_parameter(name, False)
+        # 4K bench check: true = every PAUSE is lost (the robot keeps MOVING), to see the unconfirmed-stop card.
+        self.declare_parameter("ignore_pause", False)
         self.add_on_set_parameters_callback(self.validate)
         self.yaw = 0.0
         self.predock, self.dock_point = unit.dock.path_end() if unit.dock else (None, None)
@@ -284,6 +286,9 @@ class MockHospitalNav(Node):
         elif action == "RESUME" and self.state == "PAUSED":
             self.emit("RESUMED")
         elif action == "PAUSE" and self.state == "MOVING":
+            if self.value("ignore_pause"):
+                self.get_logger().info("시험: PAUSE 무시 (ignore_pause)")
+                return
             self.reason, self.state = "관제 요청", "STOPPING_PAUSE"
             return
         elif action == "CANCEL" and self.state in DONE:

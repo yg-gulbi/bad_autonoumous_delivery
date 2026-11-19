@@ -56,6 +56,8 @@ class RobotLinkCfg:
     accept_timeout_s: float
     link_timeout_s: float
     start_timeout_s: float = 120.0
+    control_retry_s: float = 1.5   # 4K: resend PAUSE if STATE is still MOVING after this long
+    control_retries: int = 3       # 4K: more resends than this opens the STOP_UNCONFIRMED card
 
 
 @dataclass(frozen=True)
@@ -121,7 +123,7 @@ class ObstacleCfg:
     image_topic: str = "/{ns}/hospital_nav/obstacle_image"
     marked_image_topic: str = "/{ns}/obstacle_classifier/image/compressed"
     report_wait_s: float = 4.0
-    retry_if_clear: bool = True
+    retry_if_clear: bool = False   # 4K: NONE ("no box") does not mean the path is clear (D-31)
     retry_delay_s: float = 3.0
     none_text: str = "의료용 상자는 보이지 않음"
 
@@ -330,8 +332,14 @@ def _load_robot_link(data: Mapping) -> RobotLinkCfg:
     for key in ("command_topic", "status_topic", "amcl_pose_topic", "battery_topic",
                 "hazard_topic", "dock_status_topic"):
         topics[key] = _topic(data, key, "robot_link")
+    retries = data.get("control_retries", RobotLinkCfg.control_retries)
+    if type(retries) is not int or retries < 0:
+        raise ConfigError("robot_link.control_retries: 0 이상의 정수가 필요합니다")
     return RobotLinkCfg(
         mode=_text(data.get("mode"), "robot_link.mode", ("HOSPITAL_NAV",)),
+        control_retry_s=_number(data.get("control_retry_s", RobotLinkCfg.control_retry_s),
+                                "robot_link.control_retry_s", positive=True),
+        control_retries=retries,
         request_id=_text(data.get("request_id"), "robot_link.request_id", ("auto", "always", "never")),
         start_timeout_s=_number(data.get("start_timeout_s", 120.0), "robot_link.start_timeout_s", positive=True),
         **topics,

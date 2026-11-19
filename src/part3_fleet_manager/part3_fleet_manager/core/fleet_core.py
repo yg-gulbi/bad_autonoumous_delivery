@@ -121,6 +121,12 @@ class FleetCore:
         if card["kind"] == "BED_MONITOR_LOST":
             self.safety.monitor.choose(choice, by, now)
             return
+        if card["kind"] == "STOP_UNCONFIRMED":
+            # [다시 보내기] starts a new round of PAUSE in this tick; [현장에서 멈춘 것 확인] sends no more.
+            if choice == "resend":
+                self.links[card["robots"][0]].resend_pause()
+            self.decisions.close(key, now, "selected", choice=choice, by=by)
+            return
         robot = card["robots"][0]
         r = self.mission.robots[robot]
         if (not r.job and card.get("context") != "PROXIMITY") or r.canceling:
@@ -319,6 +325,10 @@ class FleetCore:
                 safety.append((topic, payload, robot, stamp))
             else:
                 raise ValueError(f"unknown input {topic}")
+        for robot, link in self.links.items():
+            arrival = link.settle()  # a COMPLETE STATE with no ARRIVED in this batch (4K)
+            if arrival:
+                messages.append((robot, arrival))
         for robot, link in self.links.items():
             online = link.online(now)
             if online != self.link_ok[robot]:

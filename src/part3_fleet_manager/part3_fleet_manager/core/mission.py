@@ -7,6 +7,8 @@ from . import geometry as g
 from .decisions import CONFIRM_REASONS, DONE_REASON
 from .robot_protocol import DONE, PREPARING
 
+ARRIVED_FROM_STATE = "도착 알림이 빠져 로봇 상태 보고(완료)로 도착을 확인했습니다."
+
 
 @dataclass
 class Mission:
@@ -260,6 +262,7 @@ class MissionManager:
             if r.returning and event == "ARRIVED":
                 r.zone = data["destination"]
                 r.slot = data.get("slot") if data.get("slot") in (1, 2) else None
+                self._from_state(robot, data, now, r.slot)
                 self.record("ARRIVE", now, f"{self.resources.zone_label(r.zone, r.slot)} 도착", robot=robot,
                             destination=r.zone, return_home=True, slot=r.slot)
             if r.returning and event == "CANCEL_CONFIRMED" and data.get("at_home"):
@@ -301,6 +304,7 @@ class MissionManager:
         elif event == "ARRIVED" and leg and data.get("destination") == leg.destination:
             reported = data.get("slot")
             slot = None if leg.dock_path else reported if reported in (1, 2) else self.resources.slot_of(leg)
+            self._from_state(robot, data, now, slot)
             self.record("ARRIVE", now, "도크 복귀 완료" if leg.dock_path else f"{self.resources.zone_label(leg.destination, slot)} 도착", robot=robot,
                         mission_id=r.job.journal_id, destination=leg.destination, return_home=r.returning, slot=slot)
             r.zone, r.slot = leg.destination, slot
@@ -328,6 +332,14 @@ class MissionManager:
                     r.state = "WAIT_CONFIRM"
                 else:
                     self.advance(robot, now)
+
+    def _from_state(self, robot, data, now, slot):
+        """4K: the arrival came from a COMPLETE STATE because the STATUS ARRIVED was lost."""
+        if data.get("from_state"):
+            job = self.robots[robot].job
+            self.record("ARRIVED_FROM_STATE", now, ARRIVED_FROM_STATE, robot=robot,
+                        mission_id=job.journal_id if job else None, destination=data["destination"], slot=slot,
+                        part4_mission_id=data.get("mission_id"))
 
     def _cancel_job(self, job, now, reason, by):
         job.status, job.finished_at, job.cancel_reason = "CANCELED", now, reason
@@ -430,6 +442,9 @@ class MissionManager:
             if not r.fault_stop:
                 self.fault(robot, "NAV_FAILED", "도크 동작을 중단했습니다. 정지 사유가 풀리면 다시 시도하세요.", now)
             link.cancel()
+        if not stop or link.state == "PAUSED" or link.state in DONE:
+            # The robot reported a stop (or ended its move), or no stop is needed any more.
+            self.decisions.resolve(robot, now, {"STOP_UNCONFIRMED"})
         if (local_stop and r.job) or corridor_command == "RESUME":
             r.resume_due = True
         resume = r.resume_due and (r.state == "MOVING" or (not r.job and link.state == "PAUSED")) and not stop and not stalled
@@ -437,7 +452,12 @@ class MissionManager:
             stop, resume = True, False
         if r.state == "FAULT" and not link.cancel_wait and not stop:
             return None
+        unconfirmed = link.stop_unconfirmed
         command, error = link.step(now, stop=stop, resume=resume)
+        if command == "PAUSE" and link.pause_sends > 1:
+            self._stop_event(robot, "STOP_RESENT", now, attempt=link.pause_sends - 1)
+        if link.stop_unconfirmed and not unconfirmed:
+            self._stop_event(robot, "STOP_UNCONFIRMED", now, attempt=link.pause_sends - 1)
         if command == "PAUSE":
             r.resume_due = True
         if command == "RESUME" or (not stop and link.state == "MOVING" and link.control_sent != "PAUSE"):
@@ -445,3 +465,17 @@ class MissionManager:
         if error:
             self.fault(robot, "MOVE_REJECTED", "이동 명령 수락을 확인하지 못했습니다.", now, diagnostic=error)
         return command
+
+    def _stop_event(self, robot, kind, now, *, attempt):
+        """4K: PAUSE resent while STATE stays MOVING, or the resends ran out (card for the operator)."""
+        job = self.robots[robot].job
+        label = self.resources.robot_label(robot)
+        mission_id = job.journal_id if job else None
+        if kind == "STOP_RESENT":
+            self.record(kind, now, f"{label} 정지 보고 없음 → 정지 다시 보냄 ({attempt}번째)", robot=robot,
+                        mission_id=mission_id, attempt=attempt, part4_state=self.links[robot].state)
+            return
+        reason = f"{label}에 정지를 보냈지만 멈췄다는 보고가 없습니다. 현장에서 확인하세요"
+        self.record(kind, now, reason, robot=robot, mission_id=mission_id, attempt=attempt,
+                    part4_state=self.links[robot].state)
+        self.decisions.open("STOP_UNCONFIRMED", robot, mission_id, reason, now)
