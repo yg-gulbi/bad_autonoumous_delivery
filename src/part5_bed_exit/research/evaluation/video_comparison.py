@@ -1,4 +1,8 @@
-"""Stream one MP4 through replaceable raw judges and the shared 3/5 gate."""
+"""한 MP4를 여러 원시 판단 메서드와 공통 3/5 투표에 통과시키는 비교 도구.
+
+모델별 프레임 판정, 요약 CSV, 비교 영상과 실행 메타데이터를 저장한다. 웹캠 대신
+파일을 사용하며 ROS 토픽을 발행하지 않는 오프라인 실험 경로다.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +17,7 @@ import av
 import cv2
 import numpy as np
 
-from research.datasets.downloads import save_json, sha256
+from research.dataset_download_label.downloads import save_json, sha256
 from research.evaluation.evaluation import video_frames
 from part5_bed_exit.methods.bed_exit_core import MODEL_FILES
 from part5_bed_exit.pretrained import create_method, read_config
@@ -45,6 +49,7 @@ def inspect_mp4(path):
 
 
 def _panel(frame, detector, row, roi, width):
+    """메서드 하나의 프레임 판정과 지표를 표시하는 패널을 만든다."""
     height = max(2, round(frame.shape[0] * width / frame.shape[1]))
     image = cv2.resize(frame, (width, height))
     cv2.polylines(image, [np.rint(roi.pixels(image.shape)).astype(np.int32)],
@@ -76,6 +81,7 @@ def _panel(frame, detector, row, roi, width):
 
 
 def _grid(panels):
+    """같은 크기의 메서드 패널들을 비교용 격자로 배치한다."""
     if len(panels) == 1:
         canvas = panels[0]
     else:
@@ -129,7 +135,11 @@ def run_video_comparison(video_path, config_path, output_dir, methods=None,
     close_errors = []
     try:
         for name in methods:
-            detectors[name] = (factory or create_method)(name, config_path)
+            detectors[name] = (
+                factory(name, config_path)
+                if factory is not None
+                else create_method(config_path, name)
+            )
             gates[name] = EventGate()
             analyses[name] = ConsecutiveExitAnalysis()
             counts[name] = {'valid_frames': 0, 'invalid_frames': 0, 'raw_true': 0,
@@ -277,6 +287,7 @@ def run_video_comparison(video_path, config_path, output_dir, methods=None,
 
 
 def main():
+    """명령행 인자를 해석해 MP4 다중 메서드 비교를 실행한다."""
     parser = argparse.ArgumentParser(
         description='Replay one MP4 through the four Part 5 methods and save a comparison table.')
     parser.add_argument('--video', required=True, help='Input MP4 path')

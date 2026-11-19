@@ -1,4 +1,8 @@
-"""Common event-level benchmark using original video presentation timestamps."""
+"""원본 영상 시간축을 기준으로 이벤트 단위 성능을 계산하는 공통 평가 모듈.
+
+평가 매니페스트 검증, 영상 프레임 순회, 이벤트 일대일 매칭, 지연·오탐·추적 손실
+지표와 여러 클립의 집계를 담당한다. 실시간 ROS 발행에는 사용되지 않는다.
+"""
 from __future__ import annotations
 
 import csv
@@ -15,12 +19,12 @@ import numpy as np
 from part5_bed_exit.methods.bed_exit_core import (
     JudgmentUnavailable, PolygonROI, make_method,
 )
-from research.datasets.downloads import save_json, sha256
+from research.dataset_download_label.downloads import save_json, sha256
 from research.evaluation.monitoring import ConsecutiveExitAnalysis, EventGate
 
 
 def video_frames(path):
-    """PyAV PTS handles VFR too. Missing/non-monotonic PTS fails explicitly."""
+    """PyAV PTS 기준 시간과 BGR 프레임을 순회하며 잘못된 타임스탬프를 거부한다."""
     import av
     with av.open(str(path)) as container:
         stream=container.streams.video[0]
@@ -40,12 +44,14 @@ def video_frames(path):
 
 
 def _finite(value,name):
+    """값이 불리언이 아닌 유한 숫자인지 확인하고 ``float``로 변환한다."""
     if isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value):
         raise ValueError(f"{name} must be a finite number")
     return float(value)
 
 
 def validate_events(events,duration):
+    """정답 이벤트 ID·시간 순서·비중첩·영상 길이 범위를 검증한다."""
     previous_end=0.0
     seen=set()
     for e in sorted(events,key=lambda e:e["risk_start_s"]):
@@ -61,6 +67,7 @@ def validate_events(events,duration):
 
 
 def validate_manifest(manifest,base_dir,split="test"):
+    """평가 매니페스트의 스키마·데이터 누출·ROI·정답·파일 해시를 검증한다."""
     if manifest.get("schema_version")!=1:
         raise ValueError("Unsupported manifest schema_version")
     if manifest.get("policy")!="any_body":
@@ -122,10 +129,12 @@ def validate_manifest(manifest,base_dir,split="test"):
 
 
 def _ratio(a,b):
+    """분모가 0이면 ``None``, 아니면 두 값의 비율을 반환한다."""
     return float(a/b) if b else None
 
 
 def _percentile(values,q):
+    """값 목록이 비어 있지 않을 때 지정 백분위수를 반환한다."""
     return float(np.percentile(values,q)) if len(values) else None
 
 
@@ -196,6 +205,7 @@ def tracking_durations(rows,present_intervals,duration):
 
 
 def _sync(method):
+    """CUDA 비동기 실행 시간을 정확히 재기 위해 필요 시 장치를 동기화한다."""
     if str(getattr(method,"device","cpu"))=="cpu":
         return
     import torch
@@ -205,6 +215,7 @@ def _sync(method):
 
 
 def benchmark_clip(method,clip,base_dir,output_dir,warmup=3,gate_kwargs=None):
+    """메서드 하나를 단일 클립에 실행해 프레임·이벤트·성능 결과를 저장한다."""
     path=(Path(base_dir)/clip["video"]).resolve()
     out=Path(output_dir)
     out.mkdir(parents=True,exist_ok=True)
@@ -298,6 +309,7 @@ def benchmark_clip(method,clip,base_dir,output_dir,warmup=3,gate_kwargs=None):
 
 
 def aggregate_summaries(summaries,rows_by_clip,metric_key="events"):
+    """여러 클립 요약과 프레임 행을 하나의 전체 성능 지표로 집계한다."""
     events=[s[metric_key] for s in summaries]
     tp=sum(x["tp"] for x in events)
     fp=sum(x["fp"] for x in events)
@@ -341,6 +353,7 @@ def target_checks(metrics):
 
 
 def environment_record():
+    """재현성을 위해 Python·플랫폼·주요 패키지 버전을 기록한다."""
     packages={}
     for p in ("numpy","ultralytics","mediapipe","av","torch","opencv-python"):
         try:
@@ -355,6 +368,7 @@ def environment_record():
 
 
 def run_benchmark(manifest_path,model_dir,output_dir,methods=None,device="cpu",split="test",factory=None):
+    """검증된 매니페스트의 모든 클립·메서드 조합을 벤치마크한다."""
     manifest_path=Path(manifest_path).resolve()
     manifest=json.loads(manifest_path.read_text(encoding="utf-8"))
     clips=validate_manifest(manifest,manifest_path.parent,split)
@@ -384,8 +398,8 @@ def run_benchmark(manifest_path,model_dir,output_dir,methods=None,device="cpu",s
         for name in methods:
             summaries,all_rows=[],[]
             for clip in clips:
-                method=factory(name,PolygonROI(clip["roi"]),model_dir,device=device,
-                               initial_bbox=clip.get("initial_patient_bbox"),**settings)
+                method=factory(name,PolygonROI(clip["roi"]),model_dir,
+                               device=device,**settings)
                 try:
                     summary,rows=benchmark_clip(method,clip,manifest_path.parent,
                                                output_dir/name/clip["clip_id"],gate_kwargs=gate_kwargs)

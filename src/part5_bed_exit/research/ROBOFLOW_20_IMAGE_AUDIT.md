@@ -67,8 +67,8 @@ ROI: 원본 `hospital_bed` 최대 box를 사용한 `roboflow_hospital_bed_box_v1
 ```bash
 PYTHONPATH=src/part5_bed_exit .venv/bin/python \
   src/part5_bed_exit/research/poc/render_review_sheet.py \
-  --summary src/part5_bed_exit/results/pose_mediapipe_roboflow20_v1/summary.json \
-  --output src/part5_bed_exit/results/pose_mediapipe_roboflow20_v1/review_sheet.jpg
+  --summary src/part5_bed_exit/results/model_tests/archived_runs/pose_mediapipe_roboflow20_v1/summary.json \
+  --output src/part5_bed_exit/results/model_tests/archived_runs/pose_mediapipe_roboflow20_v1/review_sheet.jpg
 ```
 
 검수 시트 SHA-256: `45c531192446418ac115484c92cf502e01ab4b387d51cfe6312711e623a41d10`
