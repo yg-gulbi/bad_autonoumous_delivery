@@ -21,25 +21,30 @@ CONTROL = ("PAUSE", "RESUME", "CANCEL", "UNDOCK")
 
 
 def parse_command(text):
+    """-> (action, room, priority, slot). Room: A~F, or A1/A2 ... F1/F2 for a
+    specific slot (slot is None when not given -> the robot uses slot 1)."""
     words = text.strip().upper().split()
     if len(words) == 1 and words[0] in CONTROL:
-        return words[0], None, None
+        return words[0], None, None, None
     if words == ["DOCK"]:
-        return "MOVE", "DOCK", 1
+        return "MOVE", "DOCK", 1, None
     if words and words[0] == "MOVE":
         words = words[1:]
-    if len(words) not in (1, 2) or words[0] not in set("ABCDEF"):
-        raise ValueError("A~F, MOVE F [1~3], DOCK, UNDOCK, PAUSE, RESUME, CANCEL 중 하나")
+    room = words[0] if words else ""
+    if (len(words) not in (1, 2) or len(room) not in (1, 2) or room[0] not in "ABCDEF"
+            or (len(room) == 2 and room[1] not in "12")):
+        raise ValueError("A~F 또는 A1/A2, MOVE F [1~3], DOCK, UNDOCK, PAUSE, RESUME, CANCEL 중 하나")
     if len(words) == 2 and words[1] not in ("1", "2", "3"):
         raise ValueError("응급도는 1~3 정수")
-    return "MOVE", words[0], int(words[1]) if len(words) == 2 else 1
+    slot = int(room[1]) if len(room) == 2 else None
+    return "MOVE", room[0], int(words[1]) if len(words) == 2 else 1, slot
 
 
 def execute(mission, text):
     """Parse and run one command. Returns (action, accepted)."""
-    action, room, priority = parse_command(text)
+    action, room, priority, slot = parse_command(text)
     if action == "MOVE":
-        return action, mission.start(room, priority=priority)
+        return action, mission.start(room, priority=priority, slot=slot or 1)
     return action, {"PAUSE": lambda: mission.pause("관제 요청"),
                     "RESUME": mission.resume,
                     "CANCEL": mission.cancel_mission,
@@ -55,7 +60,7 @@ def init_ros():
 
 def run(mission, *extra_nodes):
     """Spin all nodes in the background; on any exit cancel and wait for Nav2."""
-    nodes = (mission, mission.nav, mission.dock, *extra_nodes)
+    nodes = (mission, mission.nav, mission.dock, mission.obstacle, *extra_nodes)
     executor = MultiThreadedExecutor(num_threads=4)
     for node in nodes:
         executor.add_node(node)

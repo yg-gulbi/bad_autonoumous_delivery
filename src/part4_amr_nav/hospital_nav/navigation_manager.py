@@ -30,6 +30,7 @@ class NavigationManager(Node):
         self._finished = threading.Event()
         self._finished.set()
         self._remaining: float | None = None  # latest Nav2 distance_remaining
+        self._recoveries = 0  # Nav2 number_of_recoveries for the current goal
 
     def status(self) -> tuple[str, str | None]:
         with self._lock:
@@ -43,6 +44,11 @@ class NavigationManager(Node):
     def ready(self) -> bool:
         """True when Nav2's navigate_to_pose action server is up (Nav2 active)."""
         return self._client.server_is_ready()
+
+    def recoveries(self) -> int:
+        """Recovery behaviours (spin/backup/wait) Nav2 ran for the current goal."""
+        with self._lock:
+            return self._recoveries
 
     def is_busy(self) -> bool:
         with self._lock:
@@ -66,6 +72,7 @@ class NavigationManager(Node):
             self._handle = None
             self._cancel_requested = False
             self._remaining = None
+            self._recoveries = 0
             self._finished.clear()
 
         if not self._client.wait_for_server(timeout_sec=5.0):
@@ -152,6 +159,7 @@ class NavigationManager(Node):
         with self._lock:
             if self._state == "MOVING":
                 self._remaining = float(feedback_msg.feedback.distance_remaining)
+                self._recoveries = int(feedback_msg.feedback.number_of_recoveries)
 
     def _request_cancel(self, handle) -> None:
         try:

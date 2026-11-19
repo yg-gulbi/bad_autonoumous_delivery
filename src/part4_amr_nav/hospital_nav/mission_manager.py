@@ -24,8 +24,9 @@ from sensor_msgs.msg import BatteryState
 from std_msgs.msg import String
 
 from .dock_manager import DockManager
-from .goal_manager import DOCKS, get_goal, predock
+from .goal_manager import CROSSROAD, DOCKS, VIA_ROOMS, GoalPoint, get_goal, predock
 from .navigation_manager import NavigationManager
+from .obstacle_reporter import ObstacleReporter
 
 # AMCL publishes amcl_pose latched and only when its filter updates, so a
 # volatile subscriber never sees the pose of a robot that is standing still.
@@ -58,10 +59,17 @@ class MissionManager(Node):
         self._mission_lock = threading.RLock()
         self.nav = NavigationManager("/" + self.robot)
         self.dock = DockManager("/" + self.robot)
+        self.obstacle = ObstacleReporter(self.robot, self._on_obstacle_report)
+        self.yaw_deg = None
+        self._precaptured = False  # photo taken at the first recovery of this goal
         self.dock_pose = dock_pose or DOCKS.get(self.robot)
         self.status_pub = self.create_publisher(String, f"/{self.robot}/hospital_nav/status", 10)
         self.pose = None
         self.state, self.mission_id, self.dest, self.priority = "IDLE", None, None, 1
+        self.slot = None  # 1 or 2 of the destination room
+        self._via_pending = False  # next Nav2 leg is the crossroad, not the destination
+        self._on_via = False       # the active Nav2 leg is the crossroad
+        self._in_room = None       # "B"/"E" while parked inside one of the side rooms
         self.reason, self.total = "", None  # total = first path length Nav2 reported
         self._init_tries, self._next_init, self._pose_ok = 0, 0.0, False
         self._was_ready = False
@@ -76,8 +84,10 @@ class MissionManager(Node):
 
     @locked
     def _pose(self, msg):
-        p = msg.pose.pose.position
+        p, q = msg.pose.pose.position, msg.pose.pose.orientation
         self.pose = float(p.x), float(p.y)
+        self.yaw_deg = math.degrees(math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                                               1.0 - 2.0 * (q.y * q.y + q.z * q.z)))
         self._pose_seq += 1
         if (self._init_tries and not self._pose_ok and self.dock_pose
                 and math.dist(self.pose, (self.dock_pose.x, self.dock_pose.y)) < POSE_MATCH_M):
@@ -95,13 +105,16 @@ class MissionManager(Node):
 
     # ------------------------------------------------------------- commands
     @locked
-    def start(self, destination, *, mission_id=None, priority=1):
-        """MOVE to A~F, or DOCK (drive in front of the dock, then dock)."""
+    def start(self, destination, *, mission_id=None, priority=1, slot=1):
+        """MOVE to A~F (slot 1 or 2 of that room), or DOCK (front of dock, then dock)."""
         if self.state not in DONE or self._busy():
             self.get_logger().warning(f"진행 중인 임무가 있어 거절 (state={self.state})")
             return False
         if priority not in (1, 2, 3):
             self.get_logger().warning("응급도는 1~3")
+            return False
+        if slot not in (1, 2):
+            self.get_logger().warning("자리는 1 또는 2")
             return False
         # On the dock Nav2 may not be active yet (power saver: no lidar -> no map TF),
         # so only require Nav2 up front when the robot is already off the dock.
@@ -110,7 +123,7 @@ class MissionManager(Node):
             return False
         dest = str(destination).strip().upper()
         try:
-            self._goal(dest)
+            self._goal(dest, slot)
         except ValueError as exc:
             self.get_logger().error(str(exc))
             return False
@@ -119,7 +132,11 @@ class MissionManager(Node):
             return False
         self.mission_id = str(mission_id or uuid.uuid4().hex[:12])
         self.dest, self.priority, self.reason, self.total = dest, priority, "", None
-        self.emit("MISSION_ACCEPTED", destination=dest, priority=priority)
+        self.slot = slot if dest != "DOCK" else None
+        # Into B/E, or out of B/E to anywhere else: go through the crossroad first.
+        self._via_pending = dest in VIA_ROOMS or (self._in_room is not None
+                                                  and dest != self._in_room)
+        self.emit("MISSION_ACCEPTED", destination=dest, priority=priority, slot=self.slot)
         if self.dock.is_docked:  # auto undock, then LOCALIZING, then drive
             if not self.dock.undock():
                 self.reason = "언독 실패"
@@ -137,7 +154,7 @@ class MissionManager(Node):
             self.get_logger().warning("UNDOCK 거절 (임무 진행 중이거나 도크 위가 아님)")
             return False
         self.mission_id = uuid.uuid4().hex[:12]
-        self.dest, self.reason, self.total = "UNDOCK", "", None
+        self.dest, self.slot, self.reason, self.total = "UNDOCK", None, "", None
         if not self.dock.undock():
             self.reason = "언독 실패"
             self._finish("FAILED")
@@ -194,21 +211,30 @@ class MissionManager(Node):
         """Off the dock, Nav2 active and AMCL has a pose."""
         return self.dock.is_docked is False and self.pose is not None and self.nav.ready()
 
-    def _goal(self, dest):
-        """A~F room goal, or the point in front of the dock for DOCK."""
+    def _goal(self, dest, slot=None):
+        """A~F room goal (slot 1/2), or the point in front of the dock for DOCK."""
         if dest != "DOCK":
-            return get_goal(dest)
+            return get_goal(dest, slot or self.slot or 1)
         if self.dock_pose is None:
             raise ValueError(f"{self.robot} 도크 좌표 없음 (goal_manager.DOCKS 또는 --dock)")
         return predock(self.dock_pose)
 
     def _go(self):
-        if not self.nav.send_pose(self._goal(self.dest), label=self.dest):
+        self.obstacle.discard()  # new goal / resume: forget any held capture
+        self._precaptured = False
+        self._on_via = self._via_pending
+        if self._on_via:  # leg 1: crossroad, facing the final goal so it can drive straight on
+            goal = self._goal(self.dest)
+            yaw = math.degrees(math.atan2(goal.y - CROSSROAD.y, goal.x - CROSSROAD.x))
+            target, label = GoalPoint(CROSSROAD.x, CROSSROAD.y, yaw), f"{self.dest}(경유)"
+        else:
+            target, label = self._goal(self.dest), self.dest
+        if not self.nav.send_pose(target, label=label):
             self.reason = "Nav2 Goal 전송 실패"
             self._finish("FAILED")
             return False
         self.state = "MOVING"
-        self.emit("NAVIGATING", destination=self.dest)
+        self.emit("NAVIGATING", destination=self.dest, via="교차로" if self._on_via else None)
         return True
 
     def _auto_initial_pose(self):
@@ -284,6 +310,20 @@ class MissionManager(Node):
         if self.state != "MOVING":
             return
         nav_state, _ = self.nav.status()
+        if nav_state == "MOVING" and not self._precaptured and self.nav.recoveries() >= 1:
+            # Nav2 just started its first recovery: the robot has stopped and still faces
+            # the blocked path. Take the one photo now; it is sent only if Nav2 aborts.
+            self._precaptured = True
+            self.obstacle.capture(self._obstacle_context())
+            return
+        if nav_state in ("SUCCEEDED", "CANCELED", "REJECTED", "FAILED", "SERVER_UNAVAILABLE"):
+            self.obstacle.discard()  # got through (or stopped): nothing to report
+        if nav_state == "SUCCEEDED" and self._on_via:  # crossroad reached: final leg
+            self._via_pending = self._on_via = False
+            self._in_room = self.dest if self.dest in VIA_ROOMS else None
+            self.emit("VIA_PASSED", destination=self.dest)
+            self._go()
+            return
         if nav_state == "SUCCEEDED" and self.dest == "DOCK":
             if self.dock.dock():
                 self.state = "DOCKING"
@@ -293,13 +333,31 @@ class MissionManager(Node):
                 self._finish("FAILED")
         elif nav_state == "SUCCEEDED":
             self.state = "COMPLETE"
-            goal = get_goal(self.dest)
+            goal = self._goal(self.dest)
             error = round(math.dist(self.pose, (goal.x, goal.y)), 3) if self.pose else None
-            self.emit("ARRIVED", destination=self.dest, percent=100.0,
+            self.emit("ARRIVED", destination=self.dest, slot=self.slot, percent=100.0,
                       pose=self._pose_dict(), goal_error_m=error)
         elif nav_state in NAV_FAILURES:
             self.reason = "Nav2: " + nav_state
             self._finish("FAILED")
+            # Blocked path = Nav2 tried recoveries and then gave up. An abort with no
+            # recovery (e.g. costmap never updated) is a Nav2 problem, not an obstacle.
+            if nav_state == "ABORTED" and self.nav.recoveries() >= 1:
+                if not self._precaptured:  # missed the first recovery: capture now
+                    self.obstacle.capture(self._obstacle_context())
+                self.obstacle.release({"reason": self.reason})
+            else:
+                self.obstacle.discard()
+
+    def _obstacle_context(self):
+        robot_pose = self._pose_dict()
+        if robot_pose is not None and self.yaw_deg is not None:
+            robot_pose["yaw_deg"] = round(self.yaw_deg, 1)
+        return {"mission_id": self.mission_id, "destination": self.dest, "robot_pose": robot_pose}
+
+    def _on_obstacle_report(self, report, jpeg):
+        """Called once per capture (from the reporter node, not under the lock)."""
+        self.emit("OBSTACLE", **report)  # report's mission_id = the aborted mission
 
     def _finish(self, outcome):
         self.state = outcome
@@ -310,6 +368,9 @@ class MissionManager(Node):
         remaining = self.nav.remaining()
         if remaining is None:
             return {"remaining_m": None, "percent": None}
+        if self._on_via:  # add the straight crossroad -> destination part still ahead
+            goal = self._goal(self.dest)
+            remaining += math.dist((CROSSROAD.x, CROSSROAD.y), (goal.x, goal.y))
         if self.total is None or remaining > self.total:
             self.total = remaining  # first feedback (or a longer replanned path)
         percent = 100.0 * (1.0 - remaining / self.total) if self.total > 0.05 else 0.0
@@ -342,7 +403,8 @@ class MissionManager(Node):
     @locked
     def snapshot(self):
         return {"robot_id": self.robot, "mission_id": self.mission_id, "state": self.state,
-                "destination": self.dest, "priority": self.priority, "reason": self.reason,
+                "destination": self.dest, "slot": self.slot, "priority": self.priority,
+                "reason": self.reason,
                 "docked": self.dock.is_docked, "ready": self._ready(), "pose": self._pose_dict(),
                 "battery": self.battery,
                 **(self._progress() if self.state == "MOVING"
