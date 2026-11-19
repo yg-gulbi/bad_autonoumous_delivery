@@ -1,1 +1,5 @@
-"""Offline Part 5 dataset and evaluation tools; not installed with the ROS node."""
+"""Part 5의 데이터 수집·POC·평가·통합 실험 코드를 묶는 연구용 패키지.
+
+``setup.py`` 설치 대상에서 제외되므로 ROS 운영 노드 실행에는 포함되지 않는다.
+운영 코드와 연구 결과를 구분하기 위한 디렉터리 경계 역할을 한다.
+"""

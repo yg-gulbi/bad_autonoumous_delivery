@@ -145,6 +145,15 @@ PYTHONPATH=src/part5_bed_exit python3 -m pytest -q src/part5_bed_exit/test
 | [docs/part3/PART04_REQUESTS.md](docs/part3/PART04_REQUESTS.md) · [PART05_REQUESTS.md](docs/part3/PART05_REQUESTS.md) | 관제가 다른 파트에 요청한 변경 |
 | [docs/troubleshooting/README.md](docs/troubleshooting/README.md) | 문제 해결 기록 |
 
+## PART 05 처리 흐름
+
+```mermaid
+flowchart LR
+    CAM["웹캠/MP4 BGR 프레임"] --> JUDGE["선택한 메서드 객체의 judge(frame)"]
+    JUDGE --> VOTE["최근 5프레임 다수결 (3회 이상 True)"]
+    VOTE --> PUB["/patient/bed_exit (std_msgs/msg/Bool) 발행"]
+```
+
 ## 저장소 구조
 
 ```text

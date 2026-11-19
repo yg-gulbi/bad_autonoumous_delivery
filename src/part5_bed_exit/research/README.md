@@ -16,7 +16,7 @@ Roboflow v4 export가 로컬에 있으면 고정 20장에 YOLO Pose와 MediaPipe
 
 ```bash
 PYTHONPATH=src/part5_bed_exit .venv/bin/python -m research.poc.run_static_pose_poc \
-  --output-dir src/part5_bed_exit/results/pose_mediapipe_roboflow20_v1
+  --output-dir src/part5_bed_exit/results/model_benchmarks/roboflow_pose_20_images_rerun
 ```
 
 실행기는 Bool·시간·실패 이유뿐 아니라 Pose 추론 근거를 함께 저장한다.
@@ -41,7 +41,7 @@ PYTHONPATH=src/part5_bed_exit .venv/bin/python \
   --uncovered /path/to/uncovered.png \
   --covered /path/to/covered.png \
   --roi-config /path/to/reviewed-pair-roi.json \
-  --output-dir src/part5_bed_exit/results/pose_pair_run_v1
+  --output-dir src/part5_bed_exit/results/model_benchmarks/slp_pose_pair_2_images_rerun
 ```
 
 이 실행기는 입력을 같은 표시 폭으로 확대하고 `roi_reviewed=true`인 단일 Bed ROI 설정을
@@ -78,7 +78,7 @@ jupyter lab src/part5_bed_exit/research/notebooks/part5_bed_exit.ipynb
 from part5_bed_exit.bed_exit_method import BedExitMethod
 from part5_bed_exit.pretrained import create_method
 
-detector: BedExitMethod = create_method('yolo_pose', 'methods.local.json')
+detector: BedExitMethod = create_method('methods.local.json', 'yolo_pose')
 try:
     unsafe = detector.judge(bgr_frame)  # 유효 프레임: Python bool, 다수결 전
 finally:
@@ -87,20 +87,21 @@ finally:
 
 정상 출력은 `SAFE=False`, `EXIT=True` 두 가지다. 사람/관절 미검출, 모호한 환자 선택, 잘못된 프레임은 `JudgmentUnavailable` 예외다. ROS가 이를 잡아 이력을 초기화하고 발행을 생략한다. 모델은 무인 이탈 허가 여부를 판단하지 않는다.
 
-단일 ROI는 카메라별로 지정해야 한다. [examples/methods.template.json](../examples/methods.template.json)을 `methods.local.json`으로 복사해 실제 화면에서 검수한다. 좌표는 정규화 다각형이다. 검수 전 `roi_reviewed=false`인 예제는 실행을 거부한다. `bed_roi`와 `safe_roi`가 남은 구형 설정은 실행을 거부한다. `model_dir` 상대 경로는 JSON 파일 위치를 기준으로 해석한다.
+운영 단일 ROI는 카메라별로 지정한다. [examples/methods.template.json](../examples/methods.template.json)을 `methods.local.json`으로 복사하고 실제 화면의 정규화 다각형 좌표로 교체한다. `model_dir` 상대 경로는 JSON 파일 위치를 기준으로 해석한다.
 
 기본 `any_body`는 신체 일부의 이탈을 보는 실험 정책이다. Detection/Segmentation/Pose가 보는 신체 표현은 다르므로 팔만 나옴·이불 가림·몸통 이탈을 각각 평가한다. `outside_fraction=0.05`, `point_conf=0.5`, `tolerance_px=3.0`은 미검증 초기값이다. 추가 상태나 행동 분류기는 넣지 않았다.
 
-### 네 방법을 ROS에서 선택
+### 운영 ROS 노드와 네 방법 비교의 경계
 
-아래 명령의 `method`만 표의 네 값으로 바꾼다. `method_config`에는 실제 검수한 설정 파일을 지정한다.
+운영 ROS 노드는 `method_config`의 `method`로 모델 하나를 선택한다. 네 방법을 동시에
+비교하는 실행은 이 디렉터리의 벤치마크 도구에서만 수행한다. 운영 실행에는 실제 검수한
+`method_config`를 지정한다.
 
 ```bash
 source /opt/ros/jazzy/setup.bash
 colcon build --packages-select part5_bed_exit --symlink-install
 source install/setup.bash
 ros2 run part5_bed_exit bed_exit --ros-args \
-  -p method:=yolo_pose \
   -p method_config:="$(pwd)/src/part5_bed_exit/examples/methods.local.json" \
   -p output_topic:=/patient/bed_exit \
   -p camera_index:=0 \
@@ -145,8 +146,8 @@ class YourBedExitMethod(BedExitMethod):
         ...
 ```
 
-- **ROS 파라미터로 객체 선정**: `-p method:=your_package.your_method:YourBedExitMethod`처럼 `module:ClassName`을 지정하면 노드가 무인자 생성자(`cls()`)로 객체를 생성하며, `module:detector_obj`처럼 이미 생성된 인스턴스 객체를 지정할 수도 있다.
-- **코드 직접 주입**: Python 코드에서 `BedExitNode(detector=YourBedExitMethod())`처럼 객체를 직접 생성해 전달하는 방식도 지원한다.
+- **운영 객체 선정**: 노드는 검수 설정으로 `SegmentationROI`를 생성하며 임의 클래스 경로를 받지 않는다.
+- **코드 직접 주입**: 단위 테스트에서는 `BedExitNode(detector=FakeDetector())`처럼 테스트 대역을 전달할 수 있다.
 - 실제 판단 알고리즘(YOLO 추론 등)은 이 공통 노드 골격과 분리해 각 메서드 클래스 내부에 구현한다.
 
 ## 빌드와 실행
@@ -158,7 +159,7 @@ source /opt/ros/jazzy/setup.bash
 colcon build --packages-select part5_bed_exit --symlink-install
 source install/setup.bash
 ros2 run part5_bed_exit bed_exit --ros-args \
-  -p method:=your_package.your_method:YourBedExitMethod \
+  -p method_config:="$(pwd)/src/part5_bed_exit/examples/methods.local.json" \
   -p output_topic:=/patient/bed_exit \
   -p camera_index:=0 \
   -p capture_fps:=30.0

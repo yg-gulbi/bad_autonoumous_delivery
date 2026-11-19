@@ -1,4 +1,8 @@
-"""Evaluate all 9 Part 5 bed-exit methods on Roboflow Bed Exit v4 (hospital_bed ROI + Yes/No GT)."""
+"""Roboflow Bed Exit v4 정적 이미지에서 아홉 가지 연구 메서드를 비교하는 평가 도구.
+
+침대 라벨을 ROI로, Yes·No 라벨을 정답으로 사용해 YOLO·MediaPipe·ViTPose·MAE 등
+여러 접근의 판정과 시각화를 생성한다. 운영 시스템에 포함되지 않는 확장 비교 실험이다.
+"""
 
 from __future__ import annotations
 
@@ -23,17 +27,17 @@ if str(PKG_ROOT) not in sys.path:
 
 from part5_bed_exit.methods.bed_exit_core import (
     COCO_COMMON,
+    DetectionROI,
     MP_COMMON,
     MediaPipePoseROI,
     PolygonROI,
+    SegmentationROI,
     YoloPoseROI,
     pose_decision,
 )
-from part5_bed_exit.methods.detection_method import DetectionBedExitMethod
-from part5_bed_exit.methods.segmentation_method import SegmentationBedExitMethod
 
 DEFAULT_ROBOFLOW_ROOT = PKG_ROOT / 'research' / 'data' / 'datasets' / 'roboflow_bed_exit_v4' / 'raw'
-DEFAULT_OUT_DIR = PKG_ROOT / 'results' / 'roboflow106_compare'
+DEFAULT_OUT_DIR = PKG_ROOT / 'results' / 'model_benchmarks' / 'roboflow_bed_exit_106_images'
 
 COCO_EDGES = (
     (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),
@@ -43,6 +47,7 @@ COCO_EDGES = (
 
 
 def yolo_box_to_polygon(cx: float, cy: float, bw: float, bh: float) -> list[list[float]]:
+    """정규화 YOLO 중심 BBox를 네 꼭짓점 ROI 다각형으로 변환한다."""
     x1 = float(np.clip(cx - bw / 2.0, 0.0, 1.0))
     y1 = float(np.clip(cy - bh / 2.0, 0.0, 1.0))
     x2 = float(np.clip(cx + bw / 2.0, 0.0, 1.0))
@@ -51,6 +56,7 @@ def yolo_box_to_polygon(cx: float, cy: float, bw: float, bh: float) -> list[list
 
 
 def collect_samples(root: Path, splits: list[str]) -> list[dict]:
+    """지정 split에서 침대 ROI와 이탈 정답을 함께 가진 샘플을 수집한다."""
     samples = []
     for split in splits:
         img_dir = root / split / 'images'
@@ -91,6 +97,7 @@ def collect_samples(root: Path, splits: list[str]) -> list[dict]:
 
 
 def vitpose_infer(processor, model, pil_img: Image.Image, box_xyxy: np.ndarray, device: str) -> np.ndarray:
+    """사람 BBox를 조건으로 ViTPose 관절 좌표와 신뢰도를 추론한다."""
     x1, y1, x2, y2 = (float(v) for v in box_xyxy)
     boxes = [[[x1, y1, max(1.0, x2 - x1), max(1.0, y2 - y1)]]]
     inputs = processor(pil_img, boxes=boxes, return_tensors='pt').to(device)
@@ -108,6 +115,7 @@ def vitpose_infer(processor, model, pil_img: Image.Image, box_xyxy: np.ndarray, 
 def mae_reconstruct_lower_bed(
     mae_proc, mae_model, frame_bgr: np.ndarray, roi_poly: np.ndarray, device: str
 ) -> np.ndarray:
+    """침대 하단 영역을 MAE로 복원해 Pose 입력용 BGR 영상을 만든다."""
     h, w = frame_bgr.shape[:2]
     rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
     inputs = mae_proc(images=Image.fromarray(rgb), return_tensors='pt').to(device)
@@ -136,8 +144,9 @@ def mae_reconstruct_lower_bed(
 
 
 def select_bed_person_box(yolo_model, frame_bgr: np.ndarray, roi: PolygonROI, device: str):
+    """YOLO 사람 후보 중 침대 ROI와 가장 많이 겹치는 BBox를 선택한다."""
     res = yolo_model.predict(
-        source=frame_bgr, classes=[0], conf=0.25, imgsz=640, device=device, verbose=False
+        source=frame_bgr, classes=[0], conf=0.5, imgsz=640, device=device, verbose=False
     )[0]
     if res.boxes is None or len(res.boxes) == 0:
         return None
@@ -153,6 +162,7 @@ def select_bed_person_box(yolo_model, frame_bgr: np.ndarray, roi: PolygonROI, de
 
 
 def eval_points(pts: np.ndarray, roi: PolygonROI, shape, policy: str):
+    """관절 배열을 공통 Pose 이탈 규칙으로 평가한다."""
     decision, _, reason = pose_decision(
         pts, roi, shape, COCO_COMMON, (5, 6, 11, 12),
         point_conf=0.5, tolerance_px=3.0, policy=policy,
@@ -174,6 +184,7 @@ def draw_pose_canvas(
     bbox=None,
     point_conf: float = 0.5,
 ) -> np.ndarray:
+    """관절 연결선·ROI 안팎 점·판정 문구를 한 프레임에 그린다."""
     canvas = frame.copy()
     h, w = canvas.shape[:2]
     poly = np.rint(roi.pixels((h, w))).astype(np.int32)
@@ -203,6 +214,7 @@ def draw_pose_canvas(
 
 
 def main() -> None:
+    """아홉 연구 메서드를 불러 전체 Roboflow 샘플 비교를 실행한다."""
     parser = argparse.ArgumentParser(description='Compare all 9 Part 5 methods on Roboflow Bed Exit v4.')
     parser.add_argument('--data-root', type=Path, default=DEFAULT_ROBOFLOW_ROOT)
     parser.add_argument('--out-dir', type=Path, default=DEFAULT_OUT_DIR)
@@ -224,8 +236,9 @@ def main() -> None:
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f'Device: {device}, Pose policy: {args.policy}')
 
-    det = DetectionBedExitMethod(roi_config=samples[0]['roi_pts'], device=device)
-    seg = SegmentationBedExitMethod(roi_config=samples[0]['roi_pts'], device=device)
+    initial_roi = PolygonROI(samples[0]['roi_pts'])
+    det = DetectionROI(initial_roi, PKG_ROOT / 'models' / 'yolo11n.pt', device=device)
+    seg = SegmentationROI(initial_roi, PKG_ROOT / 'models' / 'yolo11n-seg.pt', device=device)
     yolo_det = YOLO(str(PKG_ROOT / 'models' / 'yolo11n.pt'))
 
     vp_simple_proc = AutoImageProcessor.from_pretrained('usyd-community/vitpose-base-simple')
@@ -249,6 +262,7 @@ def main() -> None:
     thumbs = []
 
     def record(name: str, gt: str, verdict: str, reason: str, dt_ms: float):
+        """메서드 판정을 혼동행렬·처리시간·사유 통계에 누적한다."""
         s = stats[name]
         s['ms'].append(dt_ms)
         s['reasons'][reason] = s['reasons'].get(reason, 0) + 1
@@ -277,20 +291,20 @@ def main() -> None:
         row = {'split': sample['split'], 'image': img_path.name, 'gt': gt}
 
         # 1. Detection
-        det.reset(roi_config=roi_pts)
+        det.set_roi(roi)
         t0 = time.perf_counter()
         try:
-            v, r = ('EXIT' if det.judge(frame) else 'SAFE'), det.last_result.reason
+            v, r = ('EXIT' if det.judge(frame) else 'SAFE'), det.last.reason
         except Exception as exc:
             v, r = 'UNAVAIL', str(exc)
         record('detection', gt, v, r, (time.perf_counter() - t0) * 1000.0)
         row['detection'] = v
 
         # 2. Segmentation
-        seg.reset(roi_config=roi_pts)
+        seg.set_roi(roi)
         t0 = time.perf_counter()
         try:
-            v, r = ('EXIT' if seg.judge(frame) else 'SAFE'), seg.last_result.reason
+            v, r = ('EXIT' if seg.judge(frame) else 'SAFE'), seg.last.reason
         except Exception as exc:
             v, r = 'UNAVAIL', str(exc)
         record('segmentation', gt, v, r, (time.perf_counter() - t0) * 1000.0)

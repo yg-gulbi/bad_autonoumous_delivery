@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
-"""Compare bed-boundary exit cues on real and synthetic blanket occlusion.
+"""실제·합성 담요 가림 조건에서 여러 침대 경계 이탈 단서를 비교하는 POC.
 
-This is a research runner, not a deployment decision path.  It keeps three
-evidence tracks separate:
-
-* 45 real SLP RGB cover2 frames without public bed-exit ground truth;
-* deterministic mannequin composites with known synthetic boundary crossing;
-* one generated blanket-removal image, reported as hallucinated restoration.
+공개 이탈 정답이 없는 SLP RGB, 경계 통과 여부를 아는 마네킹 합성 자료, 생성 모델의
+담요 제거 복원 자료를 서로 섞지 않고 별도 근거로 평가한다. 운영 판정 경로가 아니며
+여러 휴리스틱·Pose·앙상블의 결과표와 시각화 산출물을 만드는 대형 연구 스크립트다.
 """
 from __future__ import annotations
 
@@ -34,7 +31,7 @@ from part5_bed_exit.methods.bed_exit_core import (
     SegmentationROI,
     YoloPoseROI,
 )
-from research.datasets.downloads import save_json, sha256
+from research.dataset_download_label.downloads import save_json, sha256
 from research.poc.pose_visualization import METHOD_METADATA, write_image
 
 
@@ -71,6 +68,8 @@ CSV_FIELDS = (
 
 @dataclass(frozen=True)
 class Sample:
+    """실험 트랙 하나의 입력 이미지·ROI·정답·출처 메타데이터."""
+
     track: str
     sample_id: str
     variant: str
@@ -83,6 +82,8 @@ class Sample:
 
 @dataclass
 class MethodSpec:
+    """비교 메서드 객체와 계열·표시명·Pose 백엔드를 묶은 설정."""
+
     name: str
     family: str
     model: str
@@ -91,9 +92,10 @@ class MethodSpec:
 
 
 class HaarFaceAnchorROI(BedExitMethod):
-    """Classical face-only anchor; useful as a weak, inspectable baseline."""
+    """사람 얼굴만 기준점으로 쓰는 약하지만 해석 가능한 고전 기준선."""
 
     def __init__(self, roi: PolygonROI, outside_fraction: float = 0.25):
+        """Haar 얼굴 검출기와 ROI 밖 허용 BBox 비율을 초기화한다."""
         super().__init__(roi)
         root = Path(cv2.data.haarcascades)
         self.frontal = cv2.CascadeClassifier(
@@ -108,6 +110,7 @@ class HaarFaceAnchorROI(BedExitMethod):
 
     @staticmethod
     def _nms(boxes: list[np.ndarray], threshold: float = 0.35) -> list[np.ndarray]:
+        """겹치는 얼굴 BBox를 IoU 기반 비최대 억제로 제거한다."""
         if not boxes:
             return []
         pending = sorted(boxes, key=lambda box: float(np.prod(box[2:] - box[:2])),
@@ -129,6 +132,7 @@ class HaarFaceAnchorROI(BedExitMethod):
         return kept
 
     def candidates(self, frame: np.ndarray) -> list[Candidate]:
+        """정면·측면 Haar 검출 결과를 환자 후보 BBox 목록으로 만든다."""
         scale = min(1.0, 560.0 / max(frame.shape[:2]))
         small = cv2.resize(frame, None, fx=scale, fy=scale,
                            interpolation=cv2.INTER_AREA)
@@ -156,18 +160,21 @@ class HaarFaceAnchorROI(BedExitMethod):
                 for box in self._nms(boxes)]
 
     def decide(self, candidate: Candidate, shape) -> tuple[bool, float, str]:
+        """선택된 얼굴 BBox의 ROI 밖 비율로 이탈 여부를 판단한다."""
         score = self.roi.box_outside(candidate.bbox, shape)
         return score > self.outside_fraction, score, "face_box_outside_fraction"
 
 
 class BlueBlanketProxyROI(BedExitMethod):
-    """Blue textile spill proxy; intentionally not treated as patient evidence."""
+    """파란 직물의 경계 넘침만 보는 대리 지표이며 환자 근거로 사용하지 않는다."""
 
     def __init__(self, roi: PolygonROI, outside_fraction: float = 0.05):
+        """파란 담요 마스크의 ROI 밖 허용 비율을 초기화한다."""
         super().__init__(roi)
         self.outside_fraction = outside_fraction
 
     def candidates(self, frame: np.ndarray) -> list[Candidate]:
+        """HSV 색상·형태 연산으로 가장 큰 파란 직물 마스크 후보를 만든다."""
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         mask = cv2.inRange(hsv, (85, 22, 38), (132, 205, 245))
         radius = max(3, round(min(frame.shape[:2]) / 180))
@@ -192,6 +199,7 @@ class BlueBlanketProxyROI(BedExitMethod):
         return out
 
     def decide(self, candidate: Candidate, shape) -> tuple[bool | None, float | None, str]:
+        """담요 마스크의 ROI 밖 픽셀 비율을 대리 이탈 지표로 계산한다."""
         if candidate.mask is None or not np.any(candidate.mask):
             return None, None, "empty_blanket_mask"
         area = int(np.count_nonzero(candidate.mask))
@@ -201,6 +209,7 @@ class BlueBlanketProxyROI(BedExitMethod):
 
 
 def load_roi_config(path: Path) -> tuple[dict, PolygonROI]:
+    """사람이 검수한 단일 ROI 설정을 읽고 다각형 객체를 만든다."""
     config = json.loads(Path(path).read_text(encoding="utf-8"))
     if config.get("roi_reviewed") is not True:
         raise ValueError("roi_reviewed must be true")
@@ -208,6 +217,7 @@ def load_roi_config(path: Path) -> tuple[dict, PolygonROI]:
 
 
 def make_methods(roi: PolygonROI, model_dir: Path) -> dict[str, MethodSpec]:
+    """담요 비교에 사용할 휴리스틱·YOLO·Pose 메서드 집합을 생성한다."""
     from ultralytics import YOLO
 
     model_dir = Path(model_dir)
@@ -223,7 +233,7 @@ def make_methods(roi: PolygonROI, model_dir: Path) -> dict[str, MethodSpec]:
         MethodSpec(
             "yolo_detect_standard", "detection", MODEL_FILES["detection"],
             DetectionROI(roi, model_dir / MODEL_FILES["detection"], model=detection_model,
-                         device="cpu", confidence=0.25, imgsz=640,
+                         device="cpu", confidence=0.5, imgsz=640,
                          outside_fraction=0.05),
         ),
         MethodSpec(
@@ -235,7 +245,7 @@ def make_methods(roi: PolygonROI, model_dir: Path) -> dict[str, MethodSpec]:
         MethodSpec(
             "yolo_segment_standard", "segmentation", MODEL_FILES["segmentation"],
             SegmentationROI(roi, model_dir / MODEL_FILES["segmentation"],
-                            model=segmentation_model, device="cpu", confidence=0.25,
+                            model=segmentation_model, device="cpu", confidence=0.5,
                             imgsz=640, outside_fraction=0.05),
         ),
         MethodSpec(
@@ -247,7 +257,7 @@ def make_methods(roi: PolygonROI, model_dir: Path) -> dict[str, MethodSpec]:
         MethodSpec(
             "yolo_pose_any", "pose", MODEL_FILES["yolo_pose"],
             YoloPoseROI(roi, model_dir / MODEL_FILES["yolo_pose"], model=pose_model,
-                        device="cpu", confidence=0.25, imgsz=640, policy="any_body",
+                        device="cpu", confidence=0.5, imgsz=640, policy="any_body",
                         point_conf=0.35),
             pose_backend="yolo_pose",
         ),
@@ -283,19 +293,21 @@ def make_methods(roi: PolygonROI, model_dir: Path) -> dict[str, MethodSpec]:
 
 
 def configure_roi(spec: MethodSpec, roi: PolygonROI) -> None:
+    """독립 샘플의 ROI를 메서드와 환자 선택기에 함께 적용한다."""
     spec.method.roi = roi
     spec.method.selector.roi = roi
-    spec.method.selector.initial_bbox = None
     spec.method.reset()
 
 
 def _selected(candidate: Candidate, bbox) -> bool:
+    """후보가 메서드에서 최종 선택한 환자 BBox인지 비교한다."""
     return bbox is not None and np.allclose(
         candidate.bbox, np.asarray(bbox), rtol=0, atol=1e-3
     )
 
 
 def _status_text(predicted: bool | None) -> tuple[str, tuple[int, int, int]]:
+    """선택적 판정을 화면 문구와 BGR 상태 색상으로 변환한다."""
     if predicted is None:
         return "UNAVAILABLE", (30, 210, 255)
     if predicted:
@@ -305,6 +317,7 @@ def _status_text(predicted: bool | None) -> tuple[str, tuple[int, int, int]]:
 
 def _draw_pose(canvas: np.ndarray, candidate: Candidate, backend: str,
                selected: bool, point_conf: float) -> None:
+    """YOLO·MediaPipe 백엔드에 맞는 Pose 연결선과 관절을 그린다."""
     if candidate.points is None:
         return
     points = np.asarray(candidate.points, dtype=float)
@@ -333,6 +346,7 @@ def _draw_pose(canvas: np.ndarray, candidate: Candidate, backend: str,
 def render_tile(frame: np.ndarray, roi: PolygonROI, spec: MethodSpec | None,
                 predicted: bool | None = None, elapsed_ms: float = 0.0,
                 tile_width: int = 300) -> np.ndarray:
+    """메서드 하나의 후보·ROI·판정·처리시간을 단일 타일로 렌더링한다."""
     canvas = frame.copy()
     roi_pixels = np.rint(roi.pixels(frame.shape)).astype(np.int32)
     cv2.polylines(canvas, [roi_pixels], True, (255, 0, 255), 6, cv2.LINE_AA)
@@ -381,6 +395,7 @@ def render_tile(frame: np.ndarray, roi: PolygonROI, spec: MethodSpec | None,
 def render_ensemble_tile(frame: np.ndarray, roi: PolygonROI, name: str,
                          predicted: bool | None, reason: str,
                          elapsed_ms: float, tile_width: int = 300) -> np.ndarray:
+    """앙상블 이름·판정·근거를 ROI 위에 표시한 타일을 만든다."""
     canvas = frame.copy()
     roi_pixels = np.rint(roi.pixels(frame.shape)).astype(np.int32)
     cv2.polylines(canvas, [roi_pixels], True, (255, 0, 255), 6, cv2.LINE_AA)
@@ -399,6 +414,7 @@ def render_ensemble_tile(frame: np.ndarray, roi: PolygonROI, name: str,
 
 
 def tile_grid(tiles: list[np.ndarray], columns: int = 4) -> np.ndarray:
+    """크기가 같은 결과 타일을 지정 열 수의 격자로 배치한다."""
     if not tiles:
         raise ValueError("tiles cannot be empty")
     target_height = max(tile.shape[0] for tile in tiles)
@@ -418,6 +434,7 @@ def tile_grid(tiles: list[np.ndarray], columns: int = 4) -> np.ndarray:
 
 def contact_sheet(items: list[tuple[str, np.ndarray]], columns: int = 3,
                   item_width: int = 600) -> np.ndarray:
+    """여러 샘플 이미지를 제목과 함께 검수용 연락 시트로 배치한다."""
     rendered = []
     for label, image in items:
         height = round(image.shape[0] * item_width / image.shape[1])
@@ -431,6 +448,7 @@ def contact_sheet(items: list[tuple[str, np.ndarray]], columns: int = 3,
 
 def _translate(image: np.ndarray, dx: int, dy: int,
                interpolation: int) -> np.ndarray:
+    """이미지 또는 마스크를 지정 픽셀만큼 평행 이동한다."""
     matrix = np.float32([[1, 0, dx], [0, 1, dy]])
     return cv2.warpAffine(
         image, matrix, (image.shape[1], image.shape[0]),
@@ -440,6 +458,7 @@ def _translate(image: np.ndarray, dx: int, dy: int,
 
 def composite_person(frame: np.ndarray, person_mask: np.ndarray,
                      dx: int, dy: int) -> tuple[np.ndarray, np.ndarray]:
+    """사람 픽셀을 배경에서 분리해 이동시킨 합성 프레임과 마스크를 만든다."""
     mask = np.asarray(person_mask, dtype=np.uint8)
     if mask.shape != frame.shape[:2] or not np.any(mask):
         raise ValueError("person mask must be a nonempty frame-size mask")
@@ -463,6 +482,7 @@ def composite_person(frame: np.ndarray, person_mask: np.ndarray,
 
 def add_textured_blanket(frame: np.ndarray, person_mask: np.ndarray,
                          texture: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """사람 하체 영역에 크기 조정한 담요 질감을 합성한다."""
     ys, xs = np.nonzero(person_mask)
     if not len(xs):
         raise ValueError("person mask cannot be empty")
@@ -493,6 +513,7 @@ def add_textured_blanket(frame: np.ndarray, person_mask: np.ndarray,
 
 
 def largest_person_mask(segmentation_model, frame: np.ndarray) -> np.ndarray:
+    """Segmentation 결과에서 면적이 가장 큰 사람 마스크를 반환한다."""
     result = segmentation_model.predict(
         source=frame, classes=[0], conf=0.10, imgsz=960, device="cpu",
         retina_masks=True, verbose=False,
@@ -509,6 +530,7 @@ def largest_person_mask(segmentation_model, frame: np.ndarray) -> np.ndarray:
 
 def build_synthetic_samples(mannequin_dir: Path, texture_path: Path,
                             output_dir: Path, segmentation_model) -> list[Sample]:
+    """마네킹 사람 이동과 담요 합성으로 정답을 아는 경계 통과 샘플을 만든다."""
     mannequin_dir, output_dir = Path(mannequin_dir), Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     texture_frame = cv2.imread(str(texture_path), cv2.IMREAD_COLOR)
@@ -587,6 +609,7 @@ def build_synthetic_samples(mannequin_dir: Path, texture_path: Path,
 
 def real_samples(real_dir: Path, roi: PolygonROI, roi_version: str,
                  max_real: int) -> list[Sample]:
+    """SLP 실제 RGB 파일을 정답 없는 관찰용 샘플 목록으로 만든다."""
     paths = sorted(Path(real_dir).glob("*.png"))[:max_real]
     if not paths:
         raise FileNotFoundError(f"No PNG frames in {real_dir}")
@@ -604,6 +627,7 @@ def real_samples(real_dir: Path, roi: PolygonROI, roi_version: str,
 
 def restoration_samples(original: Path, restored: Path, roi: PolygonROI,
                         roi_version: str) -> list[Sample]:
+    """원본과 생성형 담요 제거 복원 이미지를 별도 실험 샘플로 만든다."""
     samples = []
     for variant, path, note in (
         ("covered_original", Path(original),
@@ -627,12 +651,14 @@ def restoration_samples(original: Path, restored: Path, roi: PolygonROI,
 
 
 def _bool_text(value: bool | None) -> str:
+    """선택적 불리언을 CSV용 소문자 문자열로 변환한다."""
     return "" if value is None else str(value).lower()
 
 
 def derive_ensemble_predictions(
     predictions: dict[str, bool | None],
 ) -> dict[str, tuple[bool | None, str, tuple[str, ...]]]:
+    """개별 메서드 판정으로 보수적 Pose·마스크 앙상블 결과를 계산한다."""
     components = (
         "yolo_segment_sensitive", "yolo_pose_any", "mediapipe_pose_any"
     )
@@ -666,6 +692,7 @@ def derive_ensemble_predictions(
 
 def run_sample(sample: Sample, methods: dict[str, MethodSpec],
                output_dir: Path) -> tuple[list[dict], np.ndarray]:
+    """샘플 하나에 모든 메서드·앙상블을 실행하고 행 데이터와 패널을 만든다."""
     frame = cv2.imread(str(sample.path), cv2.IMREAD_COLOR)
     if frame is None:
         raise ValueError(f"Cannot decode {sample.path}")
@@ -741,6 +768,7 @@ def run_sample(sample: Sample, methods: dict[str, MethodSpec],
 
 
 def _method_summary(rows: list[dict]) -> dict:
+    """프레임별 결과를 메서드·트랙별 판정 수와 시간 통계로 집계한다."""
     grouped: dict[str, list[dict]] = defaultdict(list)
     for row in rows:
         grouped[row["method"]].append(row)
@@ -788,6 +816,7 @@ def _method_summary(rows: list[dict]) -> dict:
 
 
 def _environment() -> dict:
+    """실험 재현을 위한 플랫폼·Python·패키지 버전을 수집한다."""
     packages = {}
     for name in ("numpy", "opencv-python", "torch", "ultralytics", "mediapipe"):
         try:
@@ -803,6 +832,7 @@ def _environment() -> dict:
 
 
 def run(args) -> dict:
+    """모든 실험 트랙을 준비·실행하고 CSV·JSON·검수 이미지를 저장한다."""
     output_dir = Path(args.output_dir)
     if output_dir.exists():
         raise FileExistsError(f"Refusing to overwrite output: {output_dir}")
@@ -907,6 +937,7 @@ def run(args) -> dict:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """담요 이탈 비교 실험의 명령행 인자 파서를 구성한다."""
     package_root = Path(__file__).resolve().parents[2]
     data_root = package_root / "research" / "data" / "datasets"
     slp_root = data_root / "slp2022"
@@ -942,6 +973,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    """명령행 인자를 읽어 담요 이탈 비교 실험을 실행한다."""
     parser = build_parser()
     args = parser.parse_args()
     if args.max_real < 1:

@@ -1,1 +1,1 @@
-"""Offline comparison and benchmark tools."""
+"""ROS 운영 경로 밖에서 메서드 성능을 비교·평가하는 도구 모음."""

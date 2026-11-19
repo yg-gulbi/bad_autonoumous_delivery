@@ -1,6 +1,6 @@
 # POC 실험 기록 형식
 
-`research/templates/poc_experiment.template.csv`는 `run_static_pose_poc.py`의 실제 CSV 열과 같다. 정적 frame의 모델 원판정을 기록하며 런타임 3/5 결과와 섞지 않는다.
+`run_static_pose_poc.py`가 생성하는 CSV는 정적 frame의 모델 원판정을 기록하며 런타임 3/5 결과와 섞지 않는다.
 
 | 열 | 기록 규칙 |
 |---|---|

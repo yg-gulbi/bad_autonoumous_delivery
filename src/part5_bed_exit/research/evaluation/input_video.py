@@ -1,10 +1,14 @@
-"""Connect downloaded original RGB media to the local notebook."""
+"""평가·노트북에 사용할 원본 RGB 영상을 탐색하거나 준비하는 보조 모듈.
+
+명시 경로와 다운로드 폴더에서 실제 영상만 찾고, 없으면 허용된 공급자의 파일을
+준비한다. 가중치나 가공 결과물을 입력 영상으로 잘못 선택하지 않도록 분리한다.
+"""
 
 import os
 from pathlib import Path
 import re
 
-from research.datasets.downloads import (
+from research.dataset_download_label.downloads import (
     download_fallvision_files, extract_zip, fallvision_inventory, save_json,
 )
 
@@ -34,6 +38,7 @@ def first_video_frame(path):
 
 
 def _words(value):
+    """파일명 비교를 위해 영숫자 소문자 토큰 집합으로 정규화한다."""
     return set(re.findall(r'[a-z0-9]+', str(value).lower()))
 
 
@@ -65,6 +70,7 @@ def discover_videos(roots):
 
 
 def _original_bed_files(inventory, max_bytes):
+    """원격 목록에서 용량 제한 안의 원본 침대 RGB 영상 후보를 고른다."""
     candidates = []
     for entry in inventory:
         text = ' '.join(str(entry.get(key, '')) for key in

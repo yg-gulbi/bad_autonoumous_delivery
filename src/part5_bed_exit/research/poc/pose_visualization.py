@@ -1,4 +1,8 @@
-"""Inspectable pose artifacts for the static Roboflow proof of concept."""
+"""정적 Pose POC의 관절·ROI 판정 근거를 사람이 검수할 수 있게 그리는 모듈.
+
+Pose 후보, 선택된 환자, 관절 신뢰도와 ROI 안팎 상태를 레코드와 이미지로 만들고
+여러 결과를 비교 시트로 배치한다. Pose 추론 모델 자체는 구현하지 않는다.
+"""
 from __future__ import annotations
 
 from dataclasses import asdict
@@ -51,6 +55,7 @@ METHOD_METADATA = {
 
 
 def _is_selected(candidate: Candidate, selected_bbox) -> bool:
+    """후보 BBox가 환자 선택기가 고른 BBox와 같은지 허용 오차로 비교한다."""
     return selected_bbox is not None and np.allclose(
         candidate.bbox, np.asarray(selected_bbox), rtol=0, atol=1e-3
     )
@@ -65,6 +70,7 @@ def _point_payload(
     point_conf: float,
     tolerance_px: float,
 ) -> dict:
+    """관절 하나의 좌표·신뢰도·ROI 안팎 상태를 JSON용 사전으로 만든다."""
     values = np.asarray(point, dtype=float)
     finite = bool(values.shape == (3,) and np.isfinite(values).all())
     confidence = float(values[2]) if finite else None
@@ -152,6 +158,7 @@ def _draw_pose(
     point_conf: float,
     tolerance_px: float,
 ) -> None:
+    """후보 한 명의 관절 연결선·점·BBox를 캔버스에 그린다."""
     box = np.rint(candidate.bbox).astype(int)
     box_color = (255, 210, 40) if selected else (125, 125, 125)
     cv2.rectangle(canvas, tuple(box[:2]), tuple(box[2:]), box_color, 2 if selected else 1)
@@ -335,6 +342,7 @@ def render_comparison_sheet(items, tile_width: int = 768, columns: int = 2) -> n
 
 
 def write_image(path, image) -> None:
+    """부모 디렉터리를 만들고 OpenCV 이미지를 저장하며 실패를 검사한다."""
     path.parent.mkdir(parents=True, exist_ok=True)
     if not cv2.imwrite(str(path), image):
         raise OSError(f"Cannot write pose visualization: {path}")

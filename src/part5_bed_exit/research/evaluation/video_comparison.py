@@ -1,7 +1,12 @@
-"""Stream one MP4 through replaceable raw judges and the shared 3/5 gate."""
+"""한 MP4를 여러 원시 판단 메서드와 공통 3/5 투표에 통과시키는 비교 도구.
+
+모델별 프레임 판정, 요약 CSV, 비교 영상과 실행 메타데이터를 저장한다. 웹캠 대신
+파일을 사용하며 ROS 토픽을 발행하지 않는 오프라인 실험 경로다.
+"""
 
 from __future__ import annotations
 
+import argparse
 import csv
 from fractions import Fraction
 import math
@@ -12,7 +17,7 @@ import av
 import cv2
 import numpy as np
 
-from research.datasets.downloads import save_json, sha256
+from research.dataset_download_label.downloads import save_json, sha256
 from research.evaluation.evaluation import video_frames
 from part5_bed_exit.methods.bed_exit_core import MODEL_FILES
 from part5_bed_exit.pretrained import create_method, read_config
@@ -44,6 +49,7 @@ def inspect_mp4(path):
 
 
 def _panel(frame, detector, row, roi, width):
+    """메서드 하나의 프레임 판정과 지표를 표시하는 패널을 만든다."""
     height = max(2, round(frame.shape[0] * width / frame.shape[1]))
     image = cv2.resize(frame, (width, height))
     cv2.polylines(image, [np.rint(roi.pixels(image.shape)).astype(np.int32)],
@@ -75,6 +81,7 @@ def _panel(frame, detector, row, roi, width):
 
 
 def _grid(panels):
+    """같은 크기의 메서드 패널들을 비교용 격자로 배치한다."""
     if len(panels) == 1:
         canvas = panels[0]
     else:
@@ -89,6 +96,10 @@ def _grid(panels):
 CSV_FIELDS = ['frame_index', 'media_s', 'method', 'valid', 'raw_bool', 'output_bool',
               'state', 'warmup', 'history_size', 'event', 'three_consecutive_exit',
               'judge_ms', 'score', 'reason', 'error']
+
+COMPARISON_FIELDS = ['method', 'valid_frames', 'invalid_frames', 'valid_rate',
+                     'raw_true', 'voted_exit_frames', 'events', 'judge_p95_ms',
+                     'shared_processing_fps']
 
 
 def run_video_comparison(video_path, config_path, output_dir, methods=None,
@@ -124,7 +135,11 @@ def run_video_comparison(video_path, config_path, output_dir, methods=None,
     close_errors = []
     try:
         for name in methods:
-            detectors[name] = (factory or create_method)(name, config_path)
+            detectors[name] = (
+                factory(name, config_path)
+                if factory is not None
+                else create_method(config_path, name)
+            )
             gates[name] = EventGate()
             analyses[name] = ConsecutiveExitAnalysis()
             counts[name] = {'valid_frames': 0, 'invalid_frames': 0, 'raw_true': 0,
@@ -249,10 +264,52 @@ def run_video_comparison(video_path, config_path, output_dir, methods=None,
         for name, count in counts.items():
             times = count.pop('judge_ms')
             record['summary'][name] = dict(count, judge_p95_ms=float(np.percentile(times, 95)) if times else None)
+        with (out / 'comparison.csv').open('w', newline='', encoding='utf-8') as csv_file:
+            csv_writer = csv.DictWriter(csv_file, fieldnames=COMPARISON_FIELDS)
+            csv_writer.writeheader()
+            for name, summary in record['summary'].items():
+                total = summary['valid_frames'] + summary['invalid_frames']
+                csv_writer.writerow({
+                    'method': name,
+                    **summary,
+                    'valid_rate': summary['valid_frames'] / total if total else None,
+                    'shared_processing_fps': record['processing_fps'],
+                })
         record['stopped_at_frame_limit'] = max_frames is not None and frames == max_frames
         record['artifacts'] = {'video': str(out / 'comparison.mp4'),
-                               'frames': str(out / 'frames.csv'), 'summary': str(out / 'run.json')}
+                               'frames': str(out / 'frames.csv'),
+                               'comparison': str(out / 'comparison.csv'),
+                               'summary': str(out / 'run.json')}
         save_json(out / 'run.json', record)
     if close_errors:
         raise RuntimeError('; '.join(close_errors))
     return record
+
+
+def main():
+    """명령행 인자를 해석해 MP4 다중 메서드 비교를 실행한다."""
+    parser = argparse.ArgumentParser(
+        description='Replay one MP4 through the four Part 5 methods and save a comparison table.')
+    parser.add_argument('--video', required=True, help='Input MP4 path')
+    parser.add_argument('--config', required=True, help='Reviewed single-ROI method config')
+    parser.add_argument('--output-dir', required=True, help='New result directory')
+    parser.add_argument('--methods', nargs='+', choices=tuple(MODEL_FILES), default=None)
+    parser.add_argument('--max-frames', type=int, default=None,
+                        help='Optional frame limit; omit to process the full MP4')
+    parser.add_argument('--panel-width', type=int, default=640)
+    args = parser.parse_args()
+    record = run_video_comparison(
+        args.video, args.config, args.output_dir, methods=args.methods,
+        max_frames=args.max_frames, panel_width=args.panel_width)
+    print(f"status={record['status']} frames={record['frames']} "
+          f"shared_processing_fps={record['processing_fps']:.3f}")
+    print('method,valid,invalid,raw_true,voted_exit,events,p95_ms')
+    for name, summary in record['summary'].items():
+        print(f"{name},{summary['valid_frames']},{summary['invalid_frames']},"
+              f"{summary['raw_true']},{summary['voted_exit_frames']},"
+              f"{summary['events']},{summary['judge_p95_ms']:.3f}")
+    print(record['artifacts']['comparison'])
+
+
+if __name__ == '__main__':
+    main()
