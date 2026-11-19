@@ -30,7 +30,7 @@ IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
 SELECTED_METHODS = None
 DEFAULT_SOURCE = str(PACKAGE_ROOT / 'research' / 'data' / 'test_images')
 DEFAULT_OUTPUT_DIR = PACKAGE_ROOT / 'results' / 'model_tests' / 'exploratory_prototypes' / 'single_frame_runs'
-DEFAULT_CONFIG = PACKAGE_ROOT / 'examples' / 'methods.template.json'
+DEFAULT_CONFIG = PACKAGE_ROOT / 'config' / 'methods.template.json'
 
 
 def resolve_roi(roi_config) -> PolygonROI:

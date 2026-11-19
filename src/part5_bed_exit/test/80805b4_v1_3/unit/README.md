@@ -22,19 +22,8 @@
 
 ```bash
 cd ~/workspaces/bad_autonoumous_delivery
-source /home/hyunwoong/venvs/rokey_venv/bin/activate
-source /opt/ros/jazzy/setup.bash
-source install/setup.bash
-unset ROS_DISCOVERY_SERVER ROS_SUPER_CLIENT
-export ROS_DOMAIN_ID=98
-export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
-
-mkdir -p src/part5_bed_exit/results/unit_runs/YYYYMMDD_HHMMSS_part5_unit/ros_logs
-ROS_LOG_DIR=$PWD/src/part5_bed_exit/results/unit_runs/YYYYMMDD_HHMMSS_part5_unit/ros_logs \
-python3 -m pytest src/part5_bed_exit/test/80805b4_v1_3/unit -q \
-  --junitxml=src/part5_bed_exit/results/unit_runs/YYYYMMDD_HHMMSS_part5_unit/part5_unit_junit.xml
+bash src/part5_bed_exit/test/80805b4_v1_3/run_validation.sh unit
 ```
 
 통과 조건은 전체 테스트 성공과 테스트 종료 후 실제 카메라·모델·DDS 자원이 생성되지 않는 것이다.
-실행 결과는 `results/unit_runs/<실행 시각>_part5_unit/part5_unit_junit.xml`에서
-테스트별로 확인한다. `YYYYMMDD_HHMMSS`는 실제 실행 시각으로 바꿔서 사용한다.
+실행 결과는 `results/80805b4_v1_3/<실행시각>_unit[_실험명]/`에서 확인한다.

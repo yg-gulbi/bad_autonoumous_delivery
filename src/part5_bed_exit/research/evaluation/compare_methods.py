@@ -24,7 +24,7 @@ from part5_bed_exit.pretrained import create_method
 
 SELECTED_METHODS = None
 DEFAULT_SOURCE = 0
-DEFAULT_CONFIG = PACKAGE_ROOT / 'examples' / 'methods.template.json'
+DEFAULT_CONFIG = PACKAGE_ROOT / 'config' / 'methods.template.json'
 
 
 @dataclass

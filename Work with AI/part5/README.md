@@ -6,13 +6,13 @@ colcon build --packages-select part5_bed_exit --symlink-install
 source install/setup.bash
 
 # 2. ROI 설정 파일 준비 (파일 내 roi 수정 및 roi_reviewed: true 설정 필요)
-cp src/part5_bed_exit/examples/methods.template.json \
-  src/part5_bed_exit/examples/methods.local.json
+cp src/part5_bed_exit/config/methods.template.json \
+  src/part5_bed_exit/config/methods.local.json
 
 # 3. 노드 실행
 ros2 run part5_bed_exit bed_exit --ros-args \
   -p method:=segmentation \
-  -p method_config:="$(pwd)/src/part5_bed_exit/examples/methods.local.json"
+  -p method_config:="$(pwd)/src/part5_bed_exit/config/methods.local.json"
   
 ====================================
  
@@ -100,8 +100,8 @@ cv2.destroyAllWindows()"
 ###0.
 cd ~/workspaces/bad_autonoumous_delivery
 
-cp src/part5_bed_exit/examples/methods.template.json \
-   src/part5_bed_exit/examples/methods.webcam.json
+cp src/part5_bed_exit/config/methods.template.json \
+   src/part5_bed_exit/config/methods.webcam.json
 >>>"roi_reviewed": true
 ### 1. USB 입력 실행
 이 화면을 녹화하면 “USB 입력 → ROI 표시 → 판정 상태”의 입력 방향 증거가 됩니다.
@@ -118,7 +118,7 @@ export ROS_DOMAIN_ID=0
 
 ros2 run part5_bed_exit bed_exit --ros-args \
   -p method:=segmentation \
-  -p method_config:="$PWD/src/part5_bed_exit/examples/methods.webcam.json" \
+  -p method_config:="$PWD/src/part5_bed_exit/config/methods.webcam.json" \
   -p camera_index:=2 \
   -p capture_fps:=30.0 \
   -p show:=true

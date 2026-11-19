@@ -4,6 +4,254 @@
 `/patient/bed_exit`에 `std_msgs/msg/Bool`을 발행한다. `True`는 이탈 감지,
 `False`는 정상 상태다.
 
+## 1. 우리 파트 실행
+
+### 1.1 사전 준비
+
+모든 명령은 워크스페이스 루트에서 실행한다.
+
+```bash
+cd ~/workspaces/bad_autonoumous_delivery
+source /opt/ros/jazzy/setup.bash
+python -m pip install -r src/part5_bed_exit/requirements.txt
+colcon build --packages-select part5_bed_exit --symlink-install
+source install/setup.bash
+```
+
+모델 가중치와 시험 영상은 Git 커밋 대상이 아니다. 가중치 4개는 공식 배포 URL에서
+자동 다운로드할 수 있다.
+
+```bash
+PYTHONPATH=src/part5_bed_exit python -c \
+  'from research.dataset_download_label.downloads import download_models; download_models("src/part5_bed_exit/models")'
+```
+
+다운로드 결과는 다음 위치에 저장되며, 각 파일 옆에 출처 URL과 SHA-256이 든
+`*.source.json` 영수증이 생성된다.
+
+```text
+src/part5_bed_exit/models/yolo11n.pt
+src/part5_bed_exit/models/yolo11n-seg.pt
+src/part5_bed_exit/models/yolo11n-pose.pt
+src/part5_bed_exit/models/pose_landmarker_full.task
+```
+
+시험 영상 `src/part5_bed_exit/research/data/videos/test_input_sequence1.mp4`은 자동 다운로드
+대상이 아니므로 별도로 전달받아 배치한다. 카메라·MP4 기본 실행은 `yolo11n-seg.pt`가
+필요하고, 4모델 `benchmark`는 네 가중치가 모두 필요하다.
+
+### 1.2 카메라 ROI 설정
+
+카메라와 침대 위치를 고정한 뒤, 실제 카메라 영상에서 침대 경계 네 점을 지정한다.
+`camera_index`에는 OpenCV가 인식하는 카메라 포트 번호를 넣는다.
+
+```bash
+ros2 run part5_bed_exit label_roi \
+  --camera-index 0 \
+  --output "$(pwd)/src/part5_bed_exit/config/methods.local.json"
+```
+
+기존 `methods.local.json`을 의도적으로 교체할 때만 `--force`를 추가한다.
+
+```bash
+ros2 run part5_bed_exit label_roi \
+  --camera-index 0 \
+  --output "$(pwd)/src/part5_bed_exit/config/methods.local.json" \
+  --force
+```
+
+ROI 라벨러 조작법은 다음과 같다.
+
+- 왼쪽 클릭: 첫 클릭에서 화면을 고정하고 침대 경계점 추가
+- 오른쪽 클릭: 마지막 점 취소
+- `Space`: 고정 해제 후 실시간 화면으로 복귀
+- `R`: 선택한 점 초기화
+- `S`: 네 점을 정규화해 설정 JSON으로 저장
+- `Q` 또는 `Esc`: 저장하지 않고 종료
+
+네 점은 침대 외곽을 따라 서로 교차하지 않도록 순서대로 찍는다. 저장된
+`config/methods.local.json`은 해당 카메라 구도 전용이다. 기준 MP4에는 이 파일을
+사용하지 않고 MP4 전용 검수 설정을 사용한다.
+
+### 1.3 MP4 입력 우회 실행
+
+카메라 대신 저장소의 기준 MP4를 런타임 노드에 입력한다. MP4와 촬영 구도가 같은 전용
+ROI 설정을 반드시 함께 사용한다.
+
+```bash
+ros2 run part5_bed_exit bed_exit --ros-args \
+  -p method_config:="$(pwd)/src/part5_bed_exit/research/configs/test_input_sequence1_methods_v1.json" \
+  -p video_path:="$(pwd)/src/part5_bed_exit/research/data/videos/test_input_sequence1.mp4" \
+  -p capture_fps:=30.0 \
+  -p output_topic:=/patient/bed_exit \
+  -p loop_video:=true \
+  -p show:=false
+```
+
+`loop_video:=true`이면 MP4를 반복하며 `Ctrl+C`로 종료한다. 한 번만 처리하려면
+`loop_video:=false`로 바꾼다. 이 경우 영상 종료 후 타이머만 정지하므로
+`Video playback finished` 로그를 확인한 다음 `Ctrl+C`로 노드를 종료한다.
+
+정답 라벨인
+`research/configs/test_input_sequence1_timeline_v1.json`은 런타임 노드 파라미터가
+아니다. Part 5 통합 벤치마크가 정량평가할 때만 사용한다.
+
+별도 터미널에서 최종 Bool 토픽을 확인할 수 있다.
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+ros2 topic echo /patient/bed_exit
+```
+
+### 1.4 실제 카메라 실행
+
+ROI 라벨링에 사용한 고정 카메라와 같은 구도에서 실행한다.
+
+```bash
+ros2 run part5_bed_exit bed_exit --ros-args \
+  -p method_config:="$(pwd)/src/part5_bed_exit/config/methods.local.json" \
+  -p camera_index:=0 \
+  -p capture_fps:=30.0 \
+  -p output_topic:=/patient/bed_exit \
+  -p show:=true
+```
+
+카메라 번호가 다르면 `camera_index`만 변경한다. 운영 중 OpenCV 프리뷰가 필요하지
+않으면 `show:=false`로 실행한다. `video_path`를 함께 지정하면 카메라가 아니라 MP4 입력이
+우선되므로 카메라 실행에서는 `video_path`를 넣지 않는다.
+
+### 1.5 실행 파라미터
+
+| 파라미터 | 형식 | 기본값 | 필요한 경우 | 역할 |
+| --- | --- | --- | --- | --- |
+| `method_config` | 문자열 | `""` | 내장 모델 실행 시 필수 | 모델 이름·가중치 경로·장치·ROI가 든 JSON |
+| `method` | 문자열 | `""` | JSON 선택을 덮어쓸 때 | `detection`, `segmentation`, `yolo_pose`, `mediapipe_pose` 또는 외부 클래스 경로 |
+| `camera_index` | 정수 | `0` | 실제 카메라 입력 | OpenCV 카메라 포트 번호 |
+| `video_path` | 문자열 | `""` | MP4 입력 시 필수 | 값이 있으면 카메라 대신 MP4 사용 |
+| `capture_fps` | 실수 | `30.0` | 선택 | 프레임 처리 시도 주기. 실제 FPS는 추론 속도에 제한됨 |
+| `output_topic` | 문자열 | `/patient/bed_exit` | 선택 | `std_msgs/msg/Bool` 발행 토픽 |
+| `loop_video` | 불리언 | `false` | MP4 반복 시 | MP4 EOF에서 프레임 0부터 다시 시작 |
+| `show` | 불리언 | GUI 환경 여부 | 선택 | OpenCV 판정 프리뷰 표시 |
+
+최소 필수 조합은 다음과 같다.
+
+- 카메라: `method_config`와 올바른 `camera_index`
+- MP4: MP4 전용 `method_config`와 `video_path`
+- 내장 모델을 명령에서 직접 선택: `method`와 `method_config`
+- 외부 플러그인: `method=package.module:ClassOrObject`; `method_config`는 사용하지 않음
+
+`capture_fps:=30.0`은 30 FPS 처리를 보장하는 값이 아니라 프레임 처리 시도 주기다. 실제
+처리율은 모델 추론 시간과 실행 장치 성능에 제한된다.
+
+## 2. part3_part5 통합 테스트
+
+PART 03 mock 관제와 PART 05 MP4 노드를 같은 ROS domain에서 실행해
+`/patient/bed_exit=true` 이후 로봇 `PAUSE`와 `SAFE_PAUSE`를 검증한다. 핵심 5개 토픽은
+MCAP rosbag으로 저장하며, 종료 후 bag을 다시 읽은 메시지 순서까지 통과해야 PASS다.
+
+기록 대상은 다음과 같다.
+
+```text
+/ui/mission_req
+/ui/ack
+/robot2/hospital_nav/command
+/fleet/state
+/patient/bed_exit
+```
+
+```bash
+source /opt/ros/jazzy/setup.bash
+colcon build \
+  --packages-select part3_fleet_manager part5_bed_exit \
+  --symlink-install
+
+bash part_integration/part3_part5/run.sh
+```
+
+실험명을 미리 지정하려면 다음과 같이 실행한다.
+
+```bash
+bash part_integration/part3_part5/run.sh --experiment-name part3_part5_final
+```
+
+실시간 관측 6개가 끝나면 7번째 `rosbag_evidence` 테스트가 MCAP을 다시 읽어 다음 인과
+흐름을 검증한다.
+
+6번째 판정 이후에는 최종 `SAFE_PAUSE + PAUSED + BED_EXIT` 상태를 3회 확인하는
+`BAG SYNC` 구간을 거친다. recorder가 마지막 `/fleet/state`를 기록하기 전에 종료되는 것을
+방지하기 위한 절차이며, 그 뒤에 MCAP을 닫고 7번째 판정을 수행한다.
+
+```text
+MISSION → ACK/MOVE → MOVING → bed_exit=false → bed_exit=true
+                                             ├→ PAUSE
+                                             └→ SAFE_PAUSE(BED_EXIT)
+```
+
+`PAUSE`와 `SAFE_PAUSE`는 서로 다른 토픽의 DDS 수신 시각이므로 둘 다
+`bed_exit=true` 이후인지 검증하고 상호 기록 순서는 참고값으로 남긴다. 실시간 테스트가
+통과해도 bag에 토픽이 없거나 위 인과 흐름을 증명하지 못하면 전체 결과는 FAIL이다.
+
+정상 완료 시 콘솔에는 다음 항목이 출력된다.
+
+```text
+[PLAN] planned_tests=7
+[TEST 7/7 START] rosbag_evidence
+[TEST 7/7 END] PASS
+bag_messages=...
+bag_topic_counts=...
+[RUN END] PASS
+```
+
+결과는 다음 위치에 저장된다.
+
+```text
+part_integration/part3_part5/results/80805b4_v1_3/YYYYMMDD_HHMMSS_part3_part5[_실험명]/
+├── summary.json
+├── bag_evidence.json
+├── execution.log
+├── rosbag_recorder.log
+└── rosbag/
+    ├── metadata.yaml
+    └── *.mcap
+```
+
+`rosbag/`이 원본 통신 증거다. `bag_evidence.json`과 `summary.json`의 `bag_evidence`에는
+토픽별 메시지 수, 검증에 사용한 상태 전이의 상대 시각과 전체 관측값이 기록된다.
+콘솔과 `execution.log`에는 전체 `/fleet/state` 대신 핵심 8단계가 한 줄씩 출력된다. 상세 계약은
+[`part_integration/part3_part5/README.md`](../../part_integration/part3_part5/README.md)를 참고한다.
+
+## 3. Part 5 내부 테스트
+
+세 프로필은 각각 별도로 실행한다. 스크립트가 ROS 환경과 현재 워크스페이스의
+`install/setup.bash`를 소싱하며, OpenCV 창은 표시하지 않는다.
+
+```bash
+# 단위 테스트
+bash src/part5_bed_exit/test/80805b4_v1_3/run_validation.sh unit
+
+# 동적 로더·예외 안전·실제 MP4 통합 테스트
+bash src/part5_bed_exit/test/80805b4_v1_3/run_validation.sh integration
+
+# 4개 모델 개별 실행·전체 비교·정량평가
+bash src/part5_bed_exit/test/80805b4_v1_3/run_validation.sh benchmark
+```
+
+각 suite는 콘솔에 `[START]`, `[EXPECTED]`, `[END]`를 표시한다. 전체 실행이 끝나면
+정량 결과, PASS/FAIL, 산출물 경로를 출력하고 선택적으로 실험명을 입력받는다.
+
+```text
+src/part5_bed_exit/results/80805b4_v1_3/YYYYMMDD_HHMMSS_PROFILE[_실험명]/
+```
+
+`benchmark`는 CPU에서 1,024프레임을 여러 모델로 반복 추론하므로 수 시간이 걸릴 수
+있다. MediaPipe의 `NORM_RECT without IMAGE_DIMENSIONS` 한 줄은 라이브러리 내부 경고이며,
+후속 `[PROGRESS]`가 계속 출력되면 실행 중인 상태다.
+
+세부 테스트 구성과 산출물 계약은
+[`test/80805b4_v1_3/README.md`](test/80805b4_v1_3/README.md)를 참고한다. v1.3.1과
+v1.3.2처럼 공개 계약을 변경하지 않는 patch 버전도 같은 테스트 트리를 사용한다.
+
 ## 실행 구조
 
 운영 노드는 `BedExitNode`가 웹캠·MP4 입력, 판단 메서드, 5프레임 다수결과 ROS 발행을
@@ -122,8 +370,8 @@ ROS 파라미터는 노드를 다시 빌드하지 않고 실행 구성을 전달
 실제 카메라용 로컬 설정을 처음 만들 때만 템플릿을 복사한다.
 
 ```bash
-cp src/part5_bed_exit/examples/methods.template.json \
-  src/part5_bed_exit/examples/methods.local.json
+cp src/part5_bed_exit/config/methods.template.json \
+  src/part5_bed_exit/config/methods.local.json
 ```
 
 ```json
@@ -193,7 +441,7 @@ MP4는 필요하지 않다. `methods.local.json`의 ROI를 실제 카메라 화�
 
 ```bash
 ros2 run part5_bed_exit label_roi --camera-index 0 \
-  --output "$(pwd)/camera_0_methods.json"
+  --output "$(pwd)/src/part5_bed_exit/config/methods.local.json"
 ```
 
 - 왼쪽 클릭: 첫 클릭에서 화면을 고정하고 침대 경계점을 순서대로 추가
@@ -208,13 +456,13 @@ ros2 run part5_bed_exit label_roi --camera-index 0 \
 
 ```bash
 ros2 run part5_bed_exit bed_exit --ros-args \
-  -p method_config:="$(pwd)/camera_0_methods.json" \
+  -p method_config:="$(pwd)/src/part5_bed_exit/config/methods.local.json" \
   -p camera_index:=0
 ```
 
 ```bash
 ros2 run part5_bed_exit bed_exit --ros-args \
-  -p method_config:="$(pwd)/src/part5_bed_exit/examples/methods.local.json"
+  -p method_config:="$(pwd)/src/part5_bed_exit/config/methods.local.json"
 ```
 
 판단 방법과 카메라 번호를 명시하려면 다음과 같이 실행한다.
@@ -222,7 +470,7 @@ ros2 run part5_bed_exit bed_exit --ros-args \
 ```bash
 ros2 run part5_bed_exit bed_exit --ros-args \
   -p method:=segmentation \
-  -p method_config:="$(pwd)/src/part5_bed_exit/examples/methods.local.json" \
+  -p method_config:="$(pwd)/src/part5_bed_exit/config/methods.local.json" \
   -p camera_index:=0 \
   -p show:=true
 ```
@@ -234,7 +482,7 @@ ros2 run part5_bed_exit bed_exit --ros-args \
 ```bash
 ros2 run part5_bed_exit bed_exit --ros-args \
   -p method:=segmentation \
-  -p method_config:="$(pwd)/src/part5_bed_exit/examples/methods.local.json" \
+  -p method_config:="$(pwd)/src/part5_bed_exit/config/methods.local.json" \
   -p camera_index:=1 \
   -p show:=false
 ```
@@ -245,7 +493,7 @@ ros2 run part5_bed_exit bed_exit --ros-args \
 
 ```bash
 ros2 run part5_bed_exit bed_exit --ros-args \
-  -p method_config:="$(pwd)/src/part5_bed_exit/examples/methods.local.json" \
+  -p method_config:="$(pwd)/src/part5_bed_exit/config/methods.local.json" \
   -p camera_index:=0
 ```
 
@@ -359,19 +607,14 @@ v1.3.2의 `test_v3_mp4_replay_resilience.py`는 연구용 MP4 ROS 노드에
 
 ## 검증 명령
 
+Part 5 검증은 결과 로그와 정량 요약을 함께 생성하는 래퍼를 사용한다.
+
 ```bash
-source /opt/ros/jazzy/setup.bash
-ROS_LOG_DIR=/tmp/part5_test_logs \
-PYTHONPATH="src/part5_bed_exit:${PYTHONPATH}" \
-/usr/bin/python3 -m pytest \
-  src/part5_bed_exit/test/80805b4_v1_3/unit \
-  src/part5_bed_exit/test/80805b4_v1_3/integration \
-  src/part5_bed_exit/test/80805b4_v1_3/integration_benchmark -q
+bash src/part5_bed_exit/test/80805b4_v1_3/run_validation.sh unit
+bash src/part5_bed_exit/test/80805b4_v1_3/run_validation.sh integration
+bash src/part5_bed_exit/test/80805b4_v1_3/run_validation.sh benchmark
 ```
 
-실제 모델·1,024프레임 MP4·기존 벤치마크 산출물 검증은
-[v1.3 통합 벤치마크 실행 문서](test/80805b4_v1_3/integration_benchmark/README.md)의
-환경 변수와 명령을 사용한다.
-
-실험 결과는 `results/<기준선커밋>_vX_X/<실험대상커밋>_vX_X_X/`에 저장한다.
-v1.3.2 결과 경로는 `results/80805b4_v1_3/b08be95_v1_3_2/`다.
+실험 결과는
+`results/80805b4_v1_3/YYYYMMDD_HHMMSS_PROFILE[_실험명]/`에 저장한다. 세부 테스트
+구성과 산출물 계약은 [v1.3 검증 문서](test/80805b4_v1_3/README.md)를 참고한다.

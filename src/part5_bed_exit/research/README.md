@@ -87,7 +87,7 @@ finally:
 
 정상 출력은 `SAFE=False`, `EXIT=True` 두 가지다. 사람/관절 미검출, 모호한 환자 선택, 잘못된 프레임은 `JudgmentUnavailable` 예외다. ROS가 이를 잡아 이력을 초기화하고 발행을 생략한다. 모델은 무인 이탈 허가 여부를 판단하지 않는다.
 
-운영 단일 ROI는 카메라별로 지정한다. [examples/methods.template.json](../examples/methods.template.json)을 `methods.local.json`으로 복사하고 실제 화면의 정규화 다각형 좌표로 교체한다. `model_dir` 상대 경로는 JSON 파일 위치를 기준으로 해석한다.
+운영 단일 ROI는 카메라별로 지정한다. [config/methods.template.json](../config/methods.template.json)을 `methods.local.json`으로 복사하고 실제 화면의 정규화 다각형 좌표로 교체한다. `model_dir` 상대 경로는 JSON 파일 위치를 기준으로 해석한다.
 
 기본 `any_body`는 신체 일부의 이탈을 보는 실험 정책이다. Detection/Segmentation/Pose가 보는 신체 표현은 다르므로 팔만 나옴·이불 가림·몸통 이탈을 각각 평가한다. `outside_fraction=0.05`, `point_conf=0.5`, `tolerance_px=3.0`은 미검증 초기값이다. 추가 상태나 행동 분류기는 넣지 않았다.
 
@@ -102,7 +102,7 @@ source /opt/ros/jazzy/setup.bash
 colcon build --packages-select part5_bed_exit --symlink-install
 source install/setup.bash
 ros2 run part5_bed_exit bed_exit --ros-args \
-  -p method_config:="$(pwd)/src/part5_bed_exit/examples/methods.local.json" \
+  -p method_config:="$(pwd)/src/part5_bed_exit/config/methods.local.json" \
   -p output_topic:=/patient/bed_exit \
   -p camera_index:=0 \
   -p capture_fps:=30.0
@@ -159,7 +159,7 @@ source /opt/ros/jazzy/setup.bash
 colcon build --packages-select part5_bed_exit --symlink-install
 source install/setup.bash
 ros2 run part5_bed_exit bed_exit --ros-args \
-  -p method_config:="$(pwd)/src/part5_bed_exit/examples/methods.local.json" \
+  -p method_config:="$(pwd)/src/part5_bed_exit/config/methods.local.json" \
   -p output_topic:=/patient/bed_exit \
   -p camera_index:=0 \
   -p capture_fps:=30.0
@@ -183,6 +183,6 @@ python3 src/part5_bed_exit/research/evaluation/compare_methods.py --source 0
 python3 src/part5_bed_exit/research/evaluation/compare_methods.py --source sample.mp4 --no-show
 # 네 사전학습 방법을 설정 파일로 연결 (동시 비교용, 정식 속도 평가는 노트북에서 독립 실행)
 python3 src/part5_bed_exit/research/evaluation/compare_methods.py \
-  --config src/part5_bed_exit/examples/methods.local.json \
+  --config src/part5_bed_exit/config/methods.local.json \
   --methods detection segmentation yolo_pose mediapipe_pose --source sample.mp4 --no-show
 ```

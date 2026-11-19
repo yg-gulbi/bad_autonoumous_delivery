@@ -28,4 +28,4 @@ src/part5_bed_exit/results/integration_runs/
 src/part5_bed_exit/results/unit_runs/
 
 # Cross-part integration run artifacts
-/part_integration/results/
+/part_integration/part3_part5/results/

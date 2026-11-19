@@ -9,8 +9,9 @@
 !/research/data/test_images/
 !/research/data/test_images/**
 /research/results/
-/examples/methods.local.json
-/examples/testbed.local.json
+/config/methods.local.json
+/config/methods.webcam.json
+/config/testbed.local.json
 /notebooks/.ipynb_checkpoints/
 *.task
 *.zip

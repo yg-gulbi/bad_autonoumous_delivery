@@ -24,7 +24,7 @@ ROS 노드는 웹캠 BGR 프레임을 선택한 판단 객체의 `judge(frame) -
 - 단위 테스트: `BedExitNode(detector=FakeDetector())` 형태의 코드 직접 주입
 - 네 모델 비교: `research/`의 벤치마크 도구에서만 수행
 
-판단 객체는 `judge(frame) -> bool`을 제공해야 한다. `examples/methods.template.json`을 로컬 설정으로 복사한 뒤 실제 카메라의 ROI 좌표로 교체한다.
+판단 객체는 `judge(frame) -> bool`을 제공해야 한다. `config/methods.template.json`을 로컬 설정으로 복사한 뒤 실제 카메라의 ROI 좌표로 교체한다.
 
 ### 메서드별 구현 · 기본값 차이
 
@@ -46,11 +46,11 @@ colcon build --packages-select part5_bed_exit --symlink-install
 source install/setup.bash
 
 # 실제 USB 카메라 화면을 기준으로 roi 좌표를 수정한다.
-cp src/part5_bed_exit/examples/methods.template.json \
-  src/part5_bed_exit/examples/methods.local.json
+cp src/part5_bed_exit/config/methods.template.json \
+  src/part5_bed_exit/config/methods.local.json
 
 ros2 run part5_bed_exit bed_exit --ros-args \
-  -p method_config:="$(pwd)/src/part5_bed_exit/examples/methods.local.json"
+  -p method_config:="$(pwd)/src/part5_bed_exit/config/methods.local.json"
 ```
 
 외부 자식 클래스는 무인자 생성 가능해야 하며 `judge(frame) -> bool`을 제공해야 한다.
@@ -91,7 +91,7 @@ ros2 run part5_bed_exit bed_exit --ros-args -p video_path:=test_bed.mp4
 ```bash
 # 통합 시험에서 MP4를 계속 반복
 ros2 run part5_bed_exit bed_exit --ros-args \
-  -p method_config:="$(pwd)/src/part5_bed_exit/examples/methods.local.json" \
+  -p method_config:="$(pwd)/src/part5_bed_exit/config/methods.local.json" \
   -p video_path:="$(pwd)/test_bed.mp4" \
   -p loop_video:=true
 ```
@@ -107,7 +107,7 @@ ros2 run part5_bed_exit bed_exit --ros-args -p camera_index:=0 -p show:=false
 ros2 run part5_bed_exit bed_exit --ros-args \
   -p camera_index:=0 \
   -p show:=false \
-  -p method_config:="$(pwd)/src/part5_bed_exit/examples/methods.local.json"
+  -p method_config:="$(pwd)/src/part5_bed_exit/config/methods.local.json"
 
 ```
 

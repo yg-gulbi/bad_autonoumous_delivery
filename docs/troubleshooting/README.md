@@ -10,5 +10,7 @@
 | [첫 설치 셀·Matplotlib inline 충돌](2026-11-15-part5-matplotlib-inline.md) | 해결 / 커널 재시작 필요 | 실행 설치 셀 추가, Matplotlib 업데이트 후 inline 표시 확인 |
 | [Part 5 colcon test가 pytest를 수집하지 못함](2026-11-16-part5-colcon-pytest-discovery.md) | 해결 | setuptools test extra를 선언해 60건 수집·통과 |
 | [Part 5 실시간 웹캠 Tracked patient lost 오류](2026-11-16-part5-tracked-patient-lost.md) | 검증 대기 | 중심 거리 보조 추적 및 침대 ROI 재획득 추가 (`pytest` 23건 통과, 실웹캠 재확인 대기) |
+| [part3_part5 rosbag 최종 안전 상태 누락](2026-11-19-part3-part5-rosbag-final-state-race.md) | 코드 수정 / 재실행 검증 대기 | 최종 안전 상태 3회 수신 후 recorder 종료하도록 동기화 |
+| [part3_part5 rosbag ACK 구독 준비 경쟁 상태](2026-11-19-part3-part5-rosbag-ack-subscription-race.md) | 코드 수정 / 재실행 검증 대기 | 임무 전 mission·ack·command·fleet recorder 구독 확인 |
 
 새 기록 양식: [_template.md](_template.md)

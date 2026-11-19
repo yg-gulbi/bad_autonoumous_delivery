@@ -15,7 +15,7 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/part5_bed_exit']),
         ('share/part5_bed_exit', ['package.xml']),
-        ('share/part5_bed_exit/examples', glob('examples/*.template.json')),
+        ('share/part5_bed_exit/config', glob('config/*.template.json')),
         ('share/part5_bed_exit', ['USAGE.md', 'requirements.txt']),
     ],
     install_requires=['setuptools'],

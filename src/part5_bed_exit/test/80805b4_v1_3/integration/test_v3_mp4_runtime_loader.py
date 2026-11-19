@@ -1,7 +1,9 @@
 """실제 MP4를 런타임 로더로 만든 Segmentation 판단 객체에 연결한다."""
 
+import json
 import os
 from pathlib import Path
+import time
 
 import cv2
 import pytest
@@ -30,6 +32,7 @@ def test_mp4_uses_runtime_loader_segmentation_and_five_frame_vote():
     detector = load_bed_exit_method('segmentation', str(CONFIG_PATH))
     state = BedExitState()
     total_frames = unavailable_frames = published_true = published_false = 0
+    started = time.perf_counter()
 
     try:
         while True:
@@ -37,6 +40,12 @@ def test_mp4_uses_runtime_loader_segmentation_and_five_frame_vote():
             if not ok or frame is None:
                 break
             total_frames += 1
+            if total_frames % 256 == 0:
+                print(
+                    f'[PROGRESS] MP4 frame={total_frames}/1024 '
+                    f'percent={total_frames / 1024 * 100:.1f}',
+                    flush=True,
+                )
             try:
                 unsafe = state.update(detector.judge(frame))
             except JudgmentUnavailable:
@@ -50,14 +59,24 @@ def test_mp4_uses_runtime_loader_segmentation_and_five_frame_vote():
         detector.close()
 
     published = published_true + published_false
-    print({
+    elapsed_s = time.perf_counter() - started
+    metrics = {
         'loader': 'load_bed_exit_method',
         'total_frames': total_frames,
         'unavailable_frames': unavailable_frames,
         'published': published,
         'published_true': published_true,
         'published_false': published_false,
-    })
+        'elapsed_s': round(elapsed_s, 6),
+        'processing_fps': round(total_frames / elapsed_s, 3) if elapsed_s else None,
+    }
+    print(metrics, flush=True)
+    metrics_path = os.environ.get('PART5_INTEGRATION_METRICS_PATH')
+    if metrics_path:
+        Path(metrics_path).write_text(
+            json.dumps(metrics, ensure_ascii=False, indent=2) + '\n',
+            encoding='utf-8',
+        )
     assert total_frames == 1024
     assert published > 0
     assert published + unavailable_frames == total_frames

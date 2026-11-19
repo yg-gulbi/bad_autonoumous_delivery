@@ -297,6 +297,8 @@ def run(video, config, timeline, output_dir, methods=None, final_method='yolo_po
     recorder = writer = None
     rows = []
     frames = 0
+    progress_total = min(info['reported_frames'], max_frames or info['reported_frames'])
+    progress_interval = max(1, progress_total // 4)
     started = time.perf_counter()
     status = 'complete'
     try:
@@ -375,6 +377,13 @@ def run(video, config, timeline, output_dir, methods=None, final_method='yolo_po
                         break
                 rclpy.spin_once(node, timeout_sec=0)
                 frames += 1
+                if frames % progress_interval == 0 or frames == progress_total:
+                    percent = frames * 100.0 / progress_total
+                    print(
+                        f"[PROGRESS] methods={','.join(methods)} "
+                        f"frame={frames}/{progress_total} percent={percent:.1f}",
+                        flush=True,
+                    )
     except KeyboardInterrupt:
         status = 'interrupted'
     except Exception as exc:

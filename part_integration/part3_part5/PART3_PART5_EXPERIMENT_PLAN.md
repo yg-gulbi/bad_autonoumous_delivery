@@ -1,4 +1,4 @@
-# PART 03–05 통합 실험 계획
+# part3_part5 통합 실험 계획
 
 ## 1. 목적과 범위
 
@@ -17,6 +17,7 @@ Robot A에 `PAUSE`를 발행한 뒤 `/fleet/state`를 `SAFE_PAUSE`로 변경하�
 - 임무: `PATIENT_TRANSPORT`, C → A, level 2
 - ROS 격리: `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`, 기본 domain 96
 - UI는 판정 경로에 포함하지 않고 별도 관찰자로만 사용한다.
+- 원본 증거: 핵심 5개 ROS 토픽을 MCAP rosbag으로 기록하고 종료 후 재검증한다.
 
 ## 3. 자동 실험 순서와 합격 기준
 
@@ -27,10 +28,13 @@ Robot A에 `PAUSE`를 발행한 뒤 `/fleet/state`를 `SAFE_PAUSE`로 변경하�
 | 입력 준비 | PART 05 MP4 loop 기동 | `/patient/bed_exit` | `false` 1회 이상 |
 | 이탈 | MP4의 이탈 구간 | `/patient/bed_exit` | `true` 확인 |
 | 정지 | PART 03 안전 처리 | command, `/fleet/state` | `PAUSE`, `SAFE_PAUSE`, `BED_EXIT` 원인 |
+| bag 동기화 | 최종 상태 반복 발행 대기 | `/fleet/state` | `SAFE_PAUSE + PAUSED + BED_EXIT` 3회 수신 |
+| 증거 검증 | rosbag 정상 종료 후 재생 | 5개 토픽의 메시지·기록 시각 | `MISSION → ACK/MOVE → MOVING → false → true` 이후 `PAUSE`와 `SAFE_PAUSE(BED_EXIT)` 확인 |
 | 종료 | 실험 프로세스 SIGINT | 프로세스 종료 코드·로그 | 자식 프로세스 정리, 산출물 저장 |
 
 `BED_MONITOR_LOST`만으로 정지한 경우는 합격으로 처리하지 않는다. 최종 상태의
-`pause_causes`에 반드시 `BED_EXIT`가 있어야 한다.
+`pause_causes`에 반드시 `BED_EXIT`가 있어야 한다. 실시간 관측 6개가 통과해도 rosbag
+증거 검증이 실패하면 전체 결과는 FAIL이다.
 
 ## 4. 실행
 
@@ -41,7 +45,7 @@ cd ~/workspaces/bad_autonoumous_delivery
 source /opt/ros/jazzy/setup.bash
 colcon build --packages-select part3_fleet_manager part5_bed_exit --symlink-install
 
-bash part_integration/run.sh --domain-id 104
+bash part_integration/part3_part5/run.sh --domain-id 104
 ```
 
 기존 domain 96을 사용 중이면 `--domain-id 97`처럼 변경한다.
@@ -51,15 +55,19 @@ bash part_integration/run.sh --domain-id 104
 각 실행은 다음 디렉터리를 새로 만든다.
 
 ```text
-part_integration/results/
-└── YYYYMMDD_HHMMSS_part3_part5/
-    ├── summary.json       # 합격 기준별 결과, 명령, 상태 전이
-    ├── result.txt         # PASS/FAIL 한 줄 요약
-    ├── events.jsonl       # 시간순 토픽 관측값
-    ├── part3_launch.log   # fleet manager와 mock 로그
-    ├── part5_mp4.log      # MP4 추론·반복 로그
-    ├── fleet.db           # 해당 실행 전용 PART 03 DB
-    └── ros_logs/          # rclpy 로그
+part_integration/part3_part5/results/
+└── 80805b4_v1_3/
+    └── YYYYMMDD_HHMMSS_part3_part5[_실험명]/
+        ├── summary.json       # 합격 기준별 결과, 명령, 상태 전이
+        ├── result.txt         # PASS/FAIL 한 줄 요약
+        ├── events.jsonl       # 시간순 토픽 관측값
+        ├── execution.log      # 시작·진행·종료 콘솔 로그
+        ├── part3_launch.log   # fleet manager와 mock 로그
+        ├── part5_mp4.log      # MP4 추론·반복 로그
+        ├── rosbag_recorder.log
+        ├── rosbag/            # 핵심 5개 토픽의 metadata.yaml·MCAP 원본 증거
+        ├── fleet.db           # 해당 실행 전용 PART 03 DB
+        └── ros_logs/          # rclpy 로그
 ```
 
 ## 6. 후속 단계
