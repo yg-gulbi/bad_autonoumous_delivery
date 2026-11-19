@@ -289,13 +289,6 @@ button.table-link {
   gap: var(--gutter);
 }
 
-.signals span:first-child::before {
-  content: "●";
-  font-size: var(--small);
-  margin-right: var(--s);
-  color: var(--muted);
-}
-
 #situation {
   display: flex;
   min-height: 52px;
@@ -306,6 +299,11 @@ button.table-link {
 
 #situation strong {
   font-size: var(--section);
+}
+
+#situation .zone-notice {
+  display: grid;
+  gap: var(--u);
 }
 
 #situation .buttons {

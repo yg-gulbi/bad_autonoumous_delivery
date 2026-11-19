@@ -210,6 +210,17 @@ def parse_fleet_state(text: str) -> dict:
                 if detection.get("pose") is not None:
                     _fields(detection, {"pose": dict})
                     _fields(detection["pose"], {"x": NUMBER, "y": NUMBER})
+        for key in ("zone_wait", "proximity"):
+            if robot.get(key) is not None:
+                _fields(robot, {key: dict}, path=path)
+                wait = robot[key]
+                _fields(wait, {"peer": str, "since": NUMBER, "reason": str}, path=path+key+".")
+                if wait["peer"] == robot_id or wait["peer"] not in data["robots"]:
+                    raise SchemaError(f"{path}{key}.peer: 상대 로봇 ID가 필요합니다")
+                if key == "zone_wait":
+                    _choice(wait.get("zone"), ZONE_REGIONS, path+"zone_wait.zone")
+        if "returning" in robot:
+            _fields(robot, {"returning": bool}, path=path)
         if "state_since" in robot:
             _fields(robot, {"state_since": NUMBER}, path=path)
         if "route" in robot:

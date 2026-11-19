@@ -35,7 +35,7 @@ class Metrics:
                 self.waiting[key] = ts, detail.get("level")
             elif kind == "RESOURCE_GRANT" and trip and req and req[1] == 3:
                 trip["level3_wait_s"].append(ts - req[0])
-        elif kind == "RESOURCE_HOLD" and key not in self.holds:
+        elif kind in {"RESOURCE_HOLD", "ZONE_OCCUPIED_HOLD"} and key not in self.holds:
             self.holds[key] = ts
             self.hold_count += 1
         elif kind == "LEG_START" and trip and trip["departure"] is None:

@@ -130,6 +130,18 @@ def test_41_actual_fleet_event_titles_reasons_and_journal(tmp_path,monkeypatch):
         for ts in (0,3,6):
             collect(sim,ts)
 
+        sim = simulator()
+        sim.cmd("GO_ZONE", robot=A, zone="F")
+        collect(sim,0)
+        sim.frames[B]["pose"] = sim.pose("A")
+        collect(sim,1)
+        sim.event(A,"MISSION_ACCEPTED")
+        sim.frames[B]["pose"] = sim.pose((-.6,.9))
+        collect(sim,2)
+        sim.event(A,"PAUSED")
+        sim.frames[B]["pose"] = sim.pose("C")
+        collect(sim,3)
+
     assert {e["type"] for e in events} == set(EVENTS)
     path = tmp_path / "bad.db"
     store = Store(path)

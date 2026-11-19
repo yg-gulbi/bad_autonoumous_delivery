@@ -1,4 +1,4 @@
-"""11/18 field regression cases (BRIEF 44–46)."""
+"""Field traffic regression cases (BRIEF 44–49)."""
 from dataclasses import replace
 
 import pytest
@@ -104,7 +104,7 @@ def test_45_bumper_stops_neighbors_until_individually_resumed(cfg, distance, tar
             if r == B:
                 assert sim.state(A) == "SAFE_PAUSE"
                 sim.event(B, "RESUMED")
-                sim.frames[B]["pose"]["y"] -= 0.2
+                sim.frames[B]["pose"]["y"] -= 0.7  # clear the independent 1.4 m following hold
     finally:
         sim.core.store.close()
 
@@ -321,8 +321,8 @@ def test_47_live_stall_window_stops_rear_before_obstacle_card(cfg):
     sim = Simulation(replace(cfg, db_path=":memory:"))
     try:
         sim.frames[B]["pose"] = sim.pose("A")
-        for robot in (A, B):
-            sim.cmd("GO_ZONE", robot=robot, zone="F")
+        for robot, zone in ((A, "C"), (B, "F")):
+            sim.cmd("GO_ZONE", robot=robot, zone=zone)
         sim.tick(0)
         sim.tick(1)
         for robot in (A, B):
@@ -354,3 +354,257 @@ def test_44_same_tick_opposite_requests_grant_only_one(cfg, a_from, a_to, b_from
     assert rm.snapshot()["CORRIDOR"]["holders"] == granted
     if levels[0] != levels[1]:
         assert granted == [A if levels[0] > levels[1] else B]
+
+
+@pytest.fixture
+def field(cfg):
+    sim = Simulation(replace(cfg, db_path=":memory:", corridor=replace(cfg.corridor, mode="DIRECTIONAL")))
+    yield sim
+    sim.core.store.close()
+
+
+def start_convoy(sim):
+    sim.frames[B]["pose"] = sim.pose("A")
+    for robot, goal in ((A, "C"), (B, "F")):
+        sim.cmd("GO_ZONE", robot=robot, zone=goal)
+    sim.tick(0)
+    assert len(sim.tick(1).commands) == 2
+    for robot in (A, B):
+        sim.event(robot, "MISSION_ACCEPTED")
+
+
+def test_47_moving_leader_gap_hysteresis(field):
+    sim = field
+    start_convoy(sim)
+    sim.frames[A]["pose"] = sim.pose((-1.55, -2.8))
+    sim.frames[B]["pose"] = sim.pose((-1.55, -1.2))
+    assert not sim.tick(2).commands
+    sim.frames[B]["pose"]["y"] = -2
+    out = sim.tick(2.1)
+    assert out.commands == [MotionRequest(B, "PAUSE")]
+    assert next(e for e in out.events if e["type"] == "CORRIDOR_FOLLOW_STOP")["detail"]["rule"] == "GAP"
+    sim.event(B, "PAUSED")
+    for i, gap in enumerate((1.09, 1.32, 1.03, 1.39)):
+        sim.frames[A]["pose"]["y"] = -2 - gap
+        assert not sim.tick(3+i).commands
+    sim.frames[A]["pose"]["y"] = -3.5
+    assert sim.tick(7).commands == [MotionRequest(B, "RESUME")]
+    sim.event(B, "RESUMED")
+    sim.frames[A]["pose"]["y"] = -3.1
+    assert not sim.tick(8).commands
+
+
+def test_47_entrance_gap_defers_first_move(field):
+    sim = field
+    sim.frames[B]["pose"] = sim.pose("A")
+    sim.cmd("GO_ZONE", robot=A, zone="C")
+    sim.tick(0)
+    sim.tick(1)
+    sim.event(A, "MISSION_ACCEPTED")
+    sim.frames[A]["pose"] = sim.pose((-1.45, -1.3))
+    sim.cmd("GO_ZONE", robot=B, zone="F")
+    sim.tick(2)
+    assert not sim.tick(3).commands
+    assert sim.core.resources.follow.rule == "GAP" and sim.core.links[B].move.attempts == 0
+    sim.frames[A]["pose"]["y"] = -2.1
+    assert sim.tick(4).commands[0].command.startswith("MOVE F")
+
+
+@pytest.mark.parametrize("choice", ["retry", "hold", "return"])
+def test_48_idle_occupant_card_and_clear(field, choice):
+    sim = field
+    sim.cmd("GO_ZONE", robot=A, zone="F")
+    out = sim.tick(0)
+    assert any(e["type"] == "ZONE_OCCUPIED_HOLD" for e in out.events)
+    assert not sim.tick(29.99).cards and A not in sim.last
+    card, = sim.tick(30).cards
+    assert card["context"] == "ZONE" and [o["label"] for o in card["options"]] == ["다시 확인", "되돌아가기", "보류"]
+    sim.choose(card, choice)
+    out = sim.tick(31)
+    assert out.acks[0]["ok"] and not out.commands
+    assert not sim.tick(31.1).cards
+    sim.frames[B]["pose"] = sim.pose("C")
+    if choice == "hold":
+        assert not sim.tick(32).commands and sim.state(A) == "FAULT"
+        sim.cmd("RETRY", robot=A)
+    out = sim.tick(33)
+    if choice == "return":
+        assert sim.last[A].startswith("MOVE D")
+    else:
+        if choice == "hold":
+            out = sim.tick(34)
+        assert sim.last[A].startswith("MOVE F")
+        if choice == "retry":
+            assert "ZONE_OCCUPIED_CLEAR" in {e["type"] for e in out.events}
+
+
+def test_48_same_destination_stays_reserved_through_arrival(field):
+    sim = field
+    sim.frames[B]["pose"] = sim.pose("A")
+    for robot in (A, B):
+        sim.cmd("GO_ZONE", robot=robot, zone="C")
+    sim.tick(0)
+    out = sim.tick(1)
+    assert len(out.commands) == 1 and out.commands[0].robot == A
+    assert sim.core.snapshot(1)["robots"][B]["zone_wait"]["peer"] == A
+    sim.event(A, "MISSION_ACCEPTED")
+    sim.event(A, "ARRIVED")
+    assert not sim.tick(2).commands  # still physically at the reserved destination
+    sim.frames[A]["pose"] = sim.pose("D")
+    assert sim.tick(3).commands[0].robot == B
+
+
+def test_48_return_waits_for_home(field):
+    sim = field
+    sim.call("trip", "C")
+    sim.tick(0)
+    sim.tick(1)
+    sim.event(B,"MISSION_ACCEPTED")
+    sim.event(B,"ARRIVED")
+    sim.tick(2)
+    sim.frames[A]["pose"] = sim.pose("F")
+    sim.confirm(B,"trip")
+    assert not sim.tick(3).commands
+    home = sim.core.snapshot(3)["robots"][B]
+    assert home["returning"] and home["zone_wait"]["zone"] == "F"
+    sim.frames[A]["pose"] = sim.pose("D")
+    assert sim.tick(4).commands[0].command.startswith("MOVE F")
+
+
+def test_48_recheck_granted_but_unsent_leg(field):
+    sim = field
+    sim.frames[B]["pose"] = sim.pose("A")
+    sim.cmd("GO_ZONE", robot=A, zone="C")
+    sim.tick(0)
+    sim.tick(1)
+    sim.event(A, "MISSION_ACCEPTED")
+    sim.frames[A]["pose"] = sim.pose((-1.45,-1.3))
+    sim.cmd("GO_ZONE", robot=B, zone="F")
+    sim.tick(2)
+    assert not sim.tick(3).commands
+    sim.frames[A]["pose"] = sim.pose("F")
+    assert not sim.tick(4).commands and sim.core.links[B].move.attempts == 0
+    sim.frames[A]["pose"] = sim.pose("C")
+    assert sim.tick(5).commands[0].command.startswith("MOVE F")
+
+
+def test_49_only_moving_robot_and_manual_overlap(field):
+    sim = field
+    sim.cmd("GO_ZONE",robot=A,zone="A")
+    sim.tick(0)
+    sim.tick(1)
+    sim.event(A,"MISSION_ACCEPTED")
+    sim.frames[A]["pose"] = sim.pose((0,0))
+    sim.frames[B]["pose"] = sim.pose((.6,0))
+    assert not sim.tick(2).commands
+    sim.frames[B]["pose"] = sim.pose((.5,0))
+    out = sim.tick(2.1)
+    assert out.commands == [MotionRequest(A,"PAUSE")] and set(sim.core.collision.near) == {A}
+    sim.event(A,"PAUSED")
+    sim.frames[B]["pose"] = sim.pose((.89,0))
+    sim.cmd("PAUSE_ROBOT", robot=A)
+    assert not sim.tick(3).commands
+    sim.frames[B]["pose"] = sim.pose((.9,0))
+    out = sim.tick(4)
+    assert not out.commands and [e["robot"] for e in out.events if e["type"] == "PROXIMITY_CLEAR"] == [A]
+    sim.cmd("RESUME_ROBOT",robot=A)
+    assert sim.tick(5).commands == [MotionRequest(A,"RESUME")]
+
+
+def test_49_follow_clears_before_proximity(field):
+    sim = field
+    start_convoy(sim)
+    sim.frames[A]["pose"] = sim.pose((-1.7,-4.1))
+    sim.frames[B]["pose"] = sim.pose((-1.7,-3.6))
+    assert sim.tick(2).commands == [MotionRequest(r,"PAUSE") for r in (A,B)]
+    for r in (A,B):
+        sim.event(r,"PAUSED")
+    sim.frames[A]["pose"]["y"] = -4.48
+    out = sim.tick(3)
+    assert not out.commands and "CORRIDOR_FOLLOW_CLEAR" in {e["type"] for e in out.events}
+    assert set(sim.core.collision.near) == {A,B}
+    sim.frames[A]["pose"]["y"] = -4.6
+    assert sim.tick(4).commands == [MotionRequest(r,"RESUME") for r in (A,B)]
+
+
+def test_49_cards_authorize_only_one_robot(field):
+    sim = field
+    sim.frames[A]["pose"] = sim.pose((-2.0,-.3))
+    sim.frames[B]["pose"] = sim.pose((-.9,-.15))
+    sim.cmd("GO_ZONE", robot=A, zone="A")
+    sim.cmd("GO_ZONE", robot=B, zone="D")
+    assert len(sim.tick(0).commands) == 2
+    for robot in (A,B):
+        sim.event(robot,"MISSION_ACCEPTED")
+    # Hall-only trips isolate operator sequencing from the independent follow hold.
+    sim.frames[A]["pose"] = sim.pose((-2.6,.5))
+    sim.frames[B]["pose"] = sim.pose((-2.1,.5))
+    assert sim.tick(2).commands == [MotionRequest(r,"PAUSE") for r in (A,B)]
+    for r in (A,B):
+        sim.event(r,"PAUSED")
+    assert not sim.tick(11.99).cards
+    cards = sim.tick(12).cards
+    card = next(c for c in cards if c["robots"] == [A])
+    assert card["options"][-1] == {"id":"peer_first","label":"약품 운송 로봇 먼저 보내기"}
+    sim.choose(card, "peer_first")
+    assert sim.tick(13).commands == [MotionRequest(B,"RESUME")]
+    sim.event(B,"RESUMED")
+    assert not sim.tick(14).commands and set(sim.core.collision.near) == {A}
+    sim.frames[B]["pose"]["x"] = -.6
+    assert sim.tick(15).commands == [MotionRequest(A,"RESUME")]
+
+
+@pytest.mark.parametrize("inhibit", ["MANUAL", "BUMP", "APPROACH"])
+def test_49_peer_first_respects_other_stops_and_separation(field, inhibit):
+    sim = field
+    sim.frames[A]["pose"] = sim.pose((-2.0, -.3))
+    sim.frames[B]["pose"] = sim.pose((-.9, -.15))
+    sim.cmd("GO_ZONE", robot=A, zone="A")
+    sim.cmd("GO_ZONE", robot=B, zone="D")
+    sim.tick(0)
+    for robot in (A, B):
+        sim.event(robot, "MISSION_ACCEPTED")
+    sim.frames[A]["pose"] = sim.pose((-2.6, .5))
+    sim.frames[B]["pose"] = sim.pose((-2.1, .5))
+    assert sim.tick(2).commands == [MotionRequest(r, "PAUSE") for r in (A, B)]
+    for robot in (A, B):
+        sim.event(robot, "PAUSED")
+    card = next(c for c in sim.tick(12).cards if c["robots"] == [A])
+    if inhibit == "MANUAL":
+        sim.cmd("PAUSE_ROBOT", robot=B)
+    elif inhibit == "BUMP":
+        sim.pending.append(("hazards", ["BUMP"], B))
+    sim.choose(card, "peer_first")
+    out = sim.tick(13)
+    if inhibit == "APPROACH":
+        assert out.commands == [MotionRequest(B, "RESUME")]
+        sim.event(B, "RESUMED")
+        sim.frames[B]["pose"]["x"] -= .05
+        assert sim.tick(14).commands == [MotionRequest(B, "PAUSE")]
+    else:
+        assert not out.commands and sim.state(B) == "SAFE_PAUSE"
+
+
+def test_49_clear_proximity_still_waits_for_follow_gap(field):
+    sim = field
+    start_convoy(sim)
+    sim.frames[A]["pose"] = sim.pose((-1.55, -2.6))
+    sim.frames[B]["pose"] = sim.pose((-1.55, -2.1))
+    assert sim.tick(2).commands == [MotionRequest(r, "PAUSE") for r in (A, B)]
+    for robot in (A, B):
+        sim.event(robot, "PAUSED")
+    sim.frames[A]["pose"]["y"] = -3.2
+    assert sim.tick(3).commands == [MotionRequest(A, "RESUME")]
+    assert sim.state(B) == "HOLD"
+    sim.event(A, "RESUMED")
+    sim.frames[A]["pose"]["y"] = -3.7
+    assert sim.tick(4).commands == [MotionRequest(B, "RESUME")]
+
+@pytest.mark.parametrize("goal", list("ABCDEF"))
+def test_48_all_zone_points_including_halls(field, goal):
+    sim = field
+    sim.frames[A]["pose"] = sim.pose("C" if goal == "D" else "D")
+    sim.frames[B]["pose"] = sim.pose(goal)
+    sim.cmd("GO_ZONE", robot=A, zone=goal)
+    assert not sim.tick(0).commands and not sim.tick(2).commands
+    assert sim.core.snapshot(2)["robots"][A]["zone_wait"]["zone"] == goal

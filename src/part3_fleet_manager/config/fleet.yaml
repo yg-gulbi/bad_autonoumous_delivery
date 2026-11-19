@@ -29,6 +29,8 @@ zones:                          # PART 04 goal_manager.py와 같은 값
 
 corridor:
   mode: DIRECTIONAL
+  follow_gap_m: 1.0              # 복도 축 간격이 이 값 이하면 뒤 로봇 정지
+  follow_resume_m: 1.4           # 이 간격 이상으로 벌어져야 후행 재개
   yield_enabled: true
   yield_trigger_m: 1.2
   yield_release_m: 0.5
@@ -43,6 +45,7 @@ corridor:
     ROOM_E: {x: -1.08, y: -2.25}
 
 resources:
+  zone_occupied_m: 0.6           # 목적지 중심에서 다른 로봇까지의 점유 반경
   clear_margin_m: 0.20
   clear_hold_s: 1.0
   decision_window_s: 1.0
@@ -70,6 +73,8 @@ obstacle:                       # PART 06 장애물 분류 (3.2a·5.5절, 단계
   label_ko: {person: 사람, chair: 의자, suitcase: 가방, backpack: 가방, bottle: 병, bed: 침대, couch: 소파, dining table: 탁자, potted plant: 화분, dog: 개, cat: 고양이}
 
 safety:
+  proximity_stop_m: 0.6          # 중심 간 거리가 이 값 미만이면 주행 중인 로봇 정지
+  proximity_resume_m: 0.9        # 이 거리 이상에서 근접 정지 해제
   bump_neighbor_m: 1.0
   bed_monitor:
     warn_s: 1.0

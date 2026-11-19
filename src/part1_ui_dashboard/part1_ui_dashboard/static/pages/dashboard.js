@@ -31,10 +31,20 @@ function obstacleText(r) {
     return obs.kind === "NONE" ? "카메라에 보이는 장애물 없음" : "장애물 분류 불가";
 }
 
-const locationText = r => r?.zone ? zn(r.zone) : ({CORRIDOR:"복도 안",ROOM_B:zn("B"),ROOM_E:zn("E"),TOP:"A·D 구역 쪽",BOTTOM:"C·F 구역 쪽"})[r?.region] || "위치 미수신";
+const locationText = r => r?.zone ? zn(r.zone) : ({CORRIDOR:"복도 안",ROOM_B:zn("B"),ROOM_E:zn("E"),TOP:"A, D 구역 쪽",BOTTOM:"C, F 구역 쪽"})[r?.region] || "위치 미수신";
 const robotMark = r => `<span class="mark ${r.mark === "B" ? "square" : ""}">${h(r.mark)}</span>`;
+function destinationText(r, job) {
+    if (!r.leg) return "—";
+    let purpose = "직접 이동";
+    if (r.leg.purpose) purpose = r.leg.purpose;
+    else if (r.returning || r.state === "RETURNING") purpose = "홈 복귀";
+    else if (job?.type === "PATIENT_TRANSPORT") purpose = job.stop_index === 0 ? "환자 탑승" : "환자 인계";
+    else if (job?.type === "MED_ROUND") purpose = "정류장 " + (job.stop_index + 1) + "번째";
+    else if (job?.type === "CALL") purpose = "수령 확인";
+    return zn(r.leg.to) + " (" + purpose + ")";
+}
 function robotCard(id, r) {
-    const job = mById(r.mission_id), st = r.state, home = st === "RETURNING";
+    const job = mById(r.mission_id), st = r.state, home = r.returning || st === "RETURNING";
     let controls = "";
     if (st === "IDLE")
         controls = `<select aria-label="${r.label} 이동 구역" data-go="${id}">${zoneOptions(goZones[id])}</select>` + btn("보내기", "go", id);
@@ -49,7 +59,7 @@ function robotCard(id, r) {
     else
         controls = (st === "FAULT" ? btn("다시 시도", "retry", id) : btn("정지", "pause", id)) + btn("임무 취소", "cancel", r.mission_id || "", "", !r.mission_id);
     const mark = r.mark;
-    const fields = [["경로", r.leg ? zn(r.leg.from) + " → " + zn(r.leg.to) : "—"], ["지금", locationText(r)],
+    const fields = [["가는 곳", destinationText(r, job)], ["지금", locationText(r)],
         ["배터리", r.battery_pct == null ? "미수신" : Math.round(r.battery_pct) + "%"], ["연결", "/" + r.ns]];
     return `<div class="unit-title">${robotMark(r)}<div><h2>${h(r.label)}</h2><small>Robot ${h(mark)}</small></div>${pill(...displayState(id, r))}</div>
         <p>${h(job ? job.mission_id + "　" + cfg.kinds[job.type] + "　Level " + job.level : home ? "홈 구역 복귀" : r.leg ? "직접 이동" : "배정된 작업 없음")}</p>
@@ -61,13 +71,13 @@ function robotCard(id, r) {
 function roadPanel() {
     const c = S.resources.CORRIDOR, track = S.resume_track;
     const directions = [...new Set((c.holder_detail || []).map(entry => entry.direction))];
-    const heading = directions.map(d => d > 0 ? "왼쪽에서 오른쪽 →" : d < 0 ? "← 오른쪽에서 왼쪽" : "횡단 또는 방향 미확인").join(" · ");
+    const heading = directions.map(d => d > 0 ? "왼쪽에서 오른쪽 →" : d < 0 ? "← 오른쪽에서 왼쪽" : "횡단 또는 방향 미확인").join(", ");
     const waiting = [...new Set([...c.queue.map(q => q.robot), c.follow_stop?.rear, c.give_way?.yielding].filter(Boolean))];
-    const labels = track?.kind === "follow" ? ["선행 로봇 재출발·이탈", "뒤 로봇 연결", "별도 정지 없음", "출발 응답"] : track?.kind === "yield" ? ["우선 로봇 통과", "양보 로봇 연결", "별도 정지 없음", "양보 로봇 재출발"] :
+    const labels = track?.kind === "follow" ? [c.follow_stop?.rule === "GAP" ? "재개 간격 확보" : "선행 로봇 재출발 또는 이탈", "뒤 로봇 연결", "별도 정지 없음", "출발 응답"] : track?.kind === "yield" ? ["우선 로봇 통과", "양보 로봇 연결", "별도 정지 없음", "양보 로봇 재출발"] :
         ["선행 로봇 완전 통과", "복도 비움 확인", "진입 허가", "출발 응답"];
     const passing = (c.holder_detail || []).filter(entry => !waiting.includes(entry.robot));
-    return `<div class="road-line"><h2>복도</h2><strong>${h(passing.map(entry => robotName(entry.robot) + (stateColor(S.robots[entry.robot].state) === "red" ? " 정지" : entry.state === "OCCUPIED" ? " 통과 중" : " 진입 허가")).join(" · ") || "통행 없음")}</strong>
-        ${heading ? "<span>사용 방향　" + h(heading) + "</span>" : ""}<span>${waiting.length ? "대기　" + h(waiting.map(r => robotName(r) + " · " + locationText(S.robots[r])).join(", ")) : "대기 없음"}</span></div>
+    return `<div class="road-line"><h2>복도</h2><strong>${h(passing.map(entry => robotName(entry.robot) + (stateColor(S.robots[entry.robot].state) === "red" ? " 정지" : entry.state === "OCCUPIED" ? " 통과 중" : " 진입 허가")).join(", ") || "통행 없음")}</strong>
+        ${heading ? "<span>사용 방향　" + h(heading) + "</span>" : ""}<span>${waiting.length ? "대기　" + h(waiting.map(r => robotName(r) + ", " + locationText(S.robots[r])).join(", ")) : "대기 없음"}</span></div>
         ${waiting.length && track ? '<div class="checks"><b>출발 조건</b>' + labels.map((l,i) => `<span>${S.resume_checks[i] ? "☑" : "□"} ${l}</span>`).join("") + '</div>' : ""}
         ${c.state === "UNKNOWN" ? btn("현장 확인 후 복도 비움", "clear", "", "danger") : ""}`;
 }
@@ -76,11 +86,21 @@ function basis(e) {
     if (!e)
         return;
     const d = e.detail;
+    if (["ZONE_OCCUPIED_HOLD","PROXIMITY_STOP"].includes(e.type)) {
+        const zone = e.type === "ZONE_OCCUPIED_HOLD";
+        openModal("basis", dialogHead(zone ? "목적지 점유 판단" : "로봇 근접 판단") +
+            factList([["대기 로봇",robotName(e.robot)], ["상대 로봇",robotName(d.peer)],
+                ...(zone ? [["목적지",zn(d.destination)]] : []), ["판단 시각",tm(e.ts)]]) +
+            '<p class="notice blue-surface">' + h(d.reason) + '</p>' + btn("판단 기록 보기","decision-log"));
+        return;
+    }
     openModal("basis", `<span class="eyebrow">복도</span>${dialogHead("통행 판단 상세")}<label>판단 당시 자원 상태</label><p class="tile">${h(resNames[d.state_before] || "상태 미수신")} · ${tm(e.ts)}</p><div>${(d.contenders || []).map(c => `<p><b class="${color(c.robot)}-text">${h(robotName(c.robot))}</b> · ${h(cfg.kinds[c.type] || "직접 이동")} · Level ${c.level} · ${tm(c.requested_at)}</p>`).join("")}</div>
  <p class="notice blue-surface"><b>${h(cfg.rules[d.rule] || e.title || "현장 상태 확인")}</b><br>${h(d.reason)}</p><p class="muted">동급이면 먼저 요청한 쪽, 허가된 통행은 회수하지 않음</p>${btn("판단 기록 보기", "decision-log")}`);
 }
 function basisEvent() {
     if (!S) return null;
+    const top = situation(true)[0];
+    if (top?.basis?.detail) return top.basis;
     const follow = S.resources.CORRIDOR.follow_stop;
     if (follow) return E.findLast(e => e.type === "CORRIDOR_FOLLOW_STOP" && e.robot === follow.rear) || S.last_decision;
     if ([...cards.values()].some(c => c.kind === "DEADLOCK")) return E.findLast(e => e.type === "DEADLOCK_DETECTED") || S.last_decision;

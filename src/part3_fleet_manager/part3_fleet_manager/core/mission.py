@@ -180,7 +180,7 @@ class MissionManager:
         for robot, r in self.robots.items():
             if not r.queue or not self._interruptible_return(robot) or self.safety.causes[robot]:
                 continue
-            if robot in self.resources.pending:
+            if robot in self.resources.pending or (self.links[robot].move and not self.links[robot].move.attempts):
                 # No MOVE was sent: release the pending home request immediately.
                 self.complete(robot, now, canceled=True)
             elif r.state == "MOVING":
@@ -211,7 +211,7 @@ class MissionManager:
         job = r.job
         job.sends += 1
         self.links[leg.robot].go(f"L-{job.id.removeprefix('M-')}-{job.sends}", leg.destination, leg.level)
-        r.state = "SENDING"
+        r.state, r.resume_due = "SENDING", False
 
     def fault(self, robot, kind, reason, now, diagnostic=None):
         r = self.robots[robot]
@@ -378,7 +378,7 @@ class MissionManager:
             stop.update(status="CONFIRMED", confirmed_at=now, confirmed_by=by)
             self.advance(robot, now)
 
-    def wire_step(self, robot, now, corridor_command=None):
+    def wire_step(self, robot, now, corridor_command=None, *, traffic_stop=False, stalled=False, hold_restart=None):
         """Combine motion intents once, after safety, arbitration and operator decisions."""
         r, link = self.robots[robot], self.links[robot]
         if r.returning and r.canceling and link.cancel_sent_at is not None:
@@ -388,13 +388,17 @@ class MissionManager:
             return None
         giving_way = self.resources.robot_state(robot, r.state) == "GIVE_WAY"
         local_stop = bool(self.safety.causes[robot]) or r.fault_stop or giving_way
-        stop = local_stop or self.resources.following(robot) or corridor_command == "PAUSE"
-        if local_stop or corridor_command == "RESUME":
+        stop = local_stop or traffic_stop or self.resources.following(robot) or corridor_command == "PAUSE"
+        if (local_stop and r.job) or corridor_command == "RESUME":
             r.resume_due = True
-        resume = r.resume_due and r.state == "MOVING" and not stop
+        resume = r.resume_due and (r.state == "MOVING" or (not r.job and link.state == "PAUSED")) and not stop and not stalled
+        if resume and link.state == "PAUSED" and hold_restart and hold_restart(robot, now):
+            stop, resume = True, False
         if r.state == "FAULT" and not link.cancel_wait and not stop:
             return None
         command, error = link.step(now, stop=stop, resume=resume)
+        if command == "PAUSE":
+            r.resume_due = True
         if command == "RESUME" or (not stop and link.state == "MOVING" and link.control_sent != "PAUSE"):
             r.resume_due = False
         if error:

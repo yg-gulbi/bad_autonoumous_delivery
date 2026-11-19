@@ -16,6 +16,7 @@ class RobotReport:
     can_yield: bool = True
     stalled: bool = False
     nav_paused: bool = False
+    departed: bool = False
 
     @property
     def stopped(self):
@@ -101,8 +102,10 @@ class FollowStop:
     front: str
     rear: Leg
     direction: int
-    position: float
+    stopped_position: float | None
     since: float
+    gap: bool
+    rule: str
 
 
 class ResourceManager:
@@ -388,7 +391,7 @@ class ResourceManager:
             rule = "SUBMIT_ORDER"
         return {"rule": rule, "state_before": resource.state, "contenders": self._contenders(rivals or [leg])}
 
-    def arbitrate(self, now: float) -> TickResult:
+    def arbitrate(self, now: float, destination_held=None) -> TickResult:
         # Python's stable sort preserves submission order even for equal timestamps.
         queue = sorted(self.pending.values(), key=lambda leg: (-self.effective_level(leg, now), leg.since))
         candidates = [leg.robot for leg in queue if self.eligible(leg.robot)]
@@ -404,6 +407,7 @@ class ResourceManager:
         for leg in queue:
             robot = leg.robot
             needed = requirements[robot]
+            zone_wait = destination_held and destination_held(leg, now)
             conflicts = self._direction_conflicts(leg, needed)
             basis = self._basis(leg, needed, queue, requirements, prior_holders, now, conflicts)
             reason = self._hold_reason(leg, needed, now, conflicts)
@@ -412,6 +416,8 @@ class ResourceManager:
                     self.record("RESOURCE_HOLD", now, reason, robot=robot, mission_id=leg.mission_id,
                                 candidates=candidates, resources=list(needed), **basis)
                 self.wait_reasons[robot] = reason
+                continue
+            if zone_wait:
                 continue
             for name in needed:
                 resource = self.resources[name]
@@ -461,6 +467,21 @@ class ResourceManager:
     def following(self, robot):
         return self.follow is not None and self.follow.rear.robot == robot
 
+    def _gap(self, front, rear, direction):
+        """Measure from the follower, or its entry mouth if it has not departed."""
+        front_pose, rear_pose = self.reports[front].pose, self.reports[rear].pose
+        if front_pose is None or rear_pose is None:
+            return None
+        if self.regions.get(rear) != g.CORRIDOR and not self.reports[rear].departed:
+            mouth = self.config.corridor.mouths.get(self.regions.get(rear))
+            if mouth is None:
+                return None
+            if self.regions.get(front) != g.CORRIDOR:
+                # Two robots approaching from a hall have no shared axial ordering yet.
+                return dist(front_pose, mouth)
+            return abs(self._projection(front_pose) - self._projection(mouth))
+        return direction * (self._projection(front_pose) - self._projection(rear_pose))
+
     def _follow_commands(self, now):
         if self.config.corridor.mode != "DIRECTIONAL":
             return []
@@ -483,18 +504,26 @@ class ResourceManager:
         if any(r not in self.reports or self.reports[r].pose is None for r in holders):
             return []
         front, rear = sorted(holders, key=lambda r: direction * self._projection(self.reports[r].pose), reverse=True)
+        if self.regions.get(rear) == g.CORRIDOR and holders[front].entered_at is None:
+            front, rear = rear, front
         holding = holders[front]
         if (self.regions.get(front) not in (None, g.CORRIDOR) and holding.entered_at is not None
-                or rear not in self.active or not self.reports[front].stopped):
+                or rear not in self.active):
             return []
+        gap = self._gap(front, rear, direction)
+        close = gap is not None and gap <= self.config.corridor.follow_gap_m
+        if not close and not self.reports[front].stopped:
+            return []
+        rule = "FOLLOW" if self.reports[front].stopped else "GAP"
         leg = self.active[rear]
+        position = direction * self._projection(self.reports[front].pose) if rule == "FOLLOW" else None
         self.follow = FollowStop(resume_allowed=not self.reports[rear].stopped, front=front, rear=leg,
-                                 direction=direction, position=direction * self._projection(self.reports[front].pose),
-                                 since=now)
-        reason = f"앞 로봇 정지 → {self.robot_label(rear)} 대기"
+                                 direction=direction, stopped_position=position, since=now, gap=close, rule=rule)
+        cause = "앞 로봇과 간격 유지" if rule == "GAP" else "앞 로봇 정지"
+        reason = f"{cause} → {self.robot_label(rear)} 대기"
         self.wait_reasons[rear] = reason
         self.record("CORRIDOR_FOLLOW_STOP", now, reason, robot=rear, mission_id=leg.mission_id,
-                    front=front, resources=[g.CORRIDOR], rule="FOLLOW", state_before=corridor.state,
+                    front=front, resources=[g.CORRIDOR], rule=rule, gap_m=gap, state_before=corridor.state,
                     contenders=self._contenders([self.active[r] for r in (front, rear) if r in self.active]))
         return [MotionRequest(rear, "PAUSE")]
 
@@ -506,12 +535,22 @@ class ResourceManager:
                                          and report.pose and self.planner.is_clear(
                                              g.CORRIDOR, report.pose, self.config.resources.clear_margin_m))
         if same_leg and not clear:
-            if report is None or report.pose is None or report.stopped:
-                if report and report.pose:
-                    action.position = action.direction * self._projection(report.pose)
+            if report is None or report.pose is None or not self.reports.get(rear):
                 return []
-            progress = action.direction * self._projection(report.pose) - action.position
-            if progress < self.config.stall.move_m:
+            gap = self._gap(front, rear, action.direction)
+            if gap is None:
+                return []
+            if gap <= self.config.corridor.follow_gap_m:
+                action.gap = True
+            elif gap >= self.config.corridor.follow_resume_m:
+                action.gap = False
+            if report.stopped:
+                action.stopped_position = action.direction * self._projection(report.pose)
+                return []
+            position = action.direction * self._projection(report.pose)
+            if action.stopped_position is not None and position - action.stopped_position >= self.config.stall.move_m:
+                action.stopped_position = None
+            if action.gap or action.stopped_position is not None:
                 return []
         self.follow = None
         if same_leg:
@@ -520,7 +559,7 @@ class ResourceManager:
                   "앞 로봇이 복도를 비워 뒤 로봇 대기를 해제했습니다." if clear else
                   "앞 로봇의 전진을 확인해 뒤 로봇 대기를 해제했습니다.")
         self.record("CORRIDOR_FOLLOW_CLEAR", now, reason, robot=rear, mission_id=action.rear.mission_id,
-                    front=front, resources=[g.CORRIDOR])
+                    front=front, resources=[g.CORRIDOR], rule=action.rule)
         follower = self.reports.get(rear)
         if same_leg and action.resume_allowed and self.eligible(rear) and follower.can_yield and not follower.stalled:
             return [MotionRequest(rear, "RESUME")]
@@ -653,7 +692,7 @@ class ResourceManager:
                    "holder": resource.holder, "give_way": self._give_way_snapshot() if name == g.CORRIDOR else None,
                    "holder_detail": [{"robot": r, "state": h.state, "direction": h.direction}
                                      for r, h in resource.holders.items()],
-                   "follow_stop": ({"front": self.follow.front, "rear": self.follow.rear.robot, "since": self.follow.since}
+                   "follow_stop": ({"front": self.follow.front, "rear": self.follow.rear.robot, "since": self.follow.since, "rule": self.follow.rule}
                                    if name == g.CORRIDOR and self.follow else None),
                    "blocked": bool(resource.stall_blockers),
                    "blocked_since": resource.blocked_since,

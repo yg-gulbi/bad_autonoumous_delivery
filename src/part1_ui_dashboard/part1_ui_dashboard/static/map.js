@@ -335,7 +335,8 @@ function paint() {
     for (const {x,y,z,bg,border} of labels) {
         ctx.font = tagFont;
         const half = ctx.measureText(zn(z)).width/2 + 8;
-        const slot = place(directions(x,y,"DEF".includes(z) ? -26 : 26,half+8),half,12);
+        // A robot can cover the zone point. Leave room for its 14 px marker and outline.
+        const slot = place(directions(x,y,"DEF".includes(z) ? -26 : 26,half+20),half,12);
         tag(slot.x,slot.y,zn(z),slot.fallback ? palette["label-bg"] : bg,palette["ink"],border);
         hits.push({x:slot.x,y:slot.y,w:half,h:12,z});
     }

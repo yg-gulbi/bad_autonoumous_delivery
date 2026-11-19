@@ -8,6 +8,7 @@ from threading import Lock
 
 from . import geometry as g
 from . import obstacle, schemas
+from .collision import CollisionControl
 from .deadlock import DeadlockManager
 from .decisions import Decisions
 from .mission import MissionManager
@@ -43,6 +44,7 @@ class FleetCore:
         self.links = {r: RobotProtocol(c.ns, config.robot_link) for r, c in config.robots.items()}
         self.mission = MissionManager(config, self.resources, self.deadlock, self.decisions,
                                       self.safety, self.links, self.store.next_id)
+        self.collision = CollisionControl(self.resources, self.links, self.decisions)
         self.stalls = {r: Stall(config.stall) for r in config.robots}
         self.inspect_inflight = {}
         self.blocks = {}
@@ -117,12 +119,14 @@ class FleetCore:
             return
         robot = card["robots"][0]
         r = self.mission.robots[robot]
-        if not r.job or r.canceling:
+        if (not r.job and card.get("context") != "PROXIMITY") or r.canceling:
             raise ValueError("E-409: 현재 임무에서 실행할 수 없습니다.")
         if self.safety.causes[robot] and choice not in ("cancel", "hold"):
             raise ValueError("E-409: 안전 정지 중입니다.")
         kind = card["kind"]
-        if choice == "cancel":
+        if card.get("context"):
+            self.collision.choose(card, choice, now, self.mission, by)
+        elif choice == "cancel":
             # Check the corridor lock before consuming the operator's decision.
             self.mission.cancel(r.job.id, now, selected_card=key, by=by)
         elif kind == "STOP_MISMATCH":
@@ -189,7 +193,9 @@ class FleetCore:
                 res.blocked_since = None
         self.resources.record("UNBLOCKED", now, "막힘이 해제됐습니다.", robot=robot, region=name)
         if close_card:
-            self.decisions.resolve(robot, now, {"BLOCKED"})
+            for card in list(self.decisions.cards.values()):
+                if card["kind"] == "BLOCKED" and not card.get("context") and robot in card["robots"]:
+                    self.decisions.close(card["card_id"], now, "resolved")
 
     def _inspect(self, robot, now, results, out, *, moving):
         stall, policy = self.stalls[robot], self.config.obstacle
@@ -224,7 +230,7 @@ class FleetCore:
     def _stall_tick(self, robot, now, terminal, accepted, results, out):
         r, link = self.mission.robots[robot], self.links[robot]
         if (not r.job or (r.state != "MOVING" and not accepted) or not self.link_ok[robot] or self.safety.causes[robot]
-                or self.resources.following(robot) or self.resources.robot_state(robot, r.state) == "GIVE_WAY" or terminal):
+                or robot in self.collision.contacts or self.resources.following(robot) or self.resources.robot_state(robot, r.state) == "GIVE_WAY" or terminal):
             self._inspect(robot, now, results, out, moving=False)
             if terminal or not r.job:
                 self._unblock(robot, now)
@@ -342,6 +348,7 @@ class FleetCore:
                     pass  # rejected by safety; the event includes the reason
             elif topic == "resume_rejected":
                 self.resources.record("RESUME_REJECTED", now, payload, by="ROS 서비스")
+        self.collision.observe_distance(now)
         terminal = {r for r, msg in messages if msg["event"] in {"MISSION_FAILED", "MISSION_CANCELED", "ARRIVED", "MOVE_REJECTED"}
                     or (msg["event"] == "CANCEL_CONFIRMED" and self.mission.robots[r].canceling)}
         accepted = {r for r, msg in messages if msg["event"] == "MISSION_ACCEPTED"}
@@ -369,21 +376,28 @@ class FleetCore:
             reports[robot] = RobotReport(link.pose, self.link_ok[robot], bool(self.safety.causes[robot]),
                                          can_yield=r.state != "FAULT" and not r.canceling and not r.replacing,
                                          stalled=self.stalls[robot].seconds >= self.config.stall.window_s or robot in self.blocks,
-                                         nav_paused=link.state in {"PAUSED", "STOPPING_PAUSE", "FAILED"})
+                                         nav_paused=link.state in {"PAUSED", "STOPPING_PAUSE", "FAILED"},
+                                         departed=bool(link.move and link.move.attempts))
         self.resources.observe(now, reports)
         for data in clears:
             self._ui("/ui/operator_cmd", data, now, out)
-        arbitration = self.resources.arbitrate(now)
+        self.collision.reconcile_zones(now)
+        arbitration = self.resources.arbitrate(now, self.collision.zone_held)
         for leg in arbitration.grants:
             self.mission.granted(leg)
         self.deadlock.observe(now)
+        self.collision.cards(now, self.mission.robots)
         for data in choices:
             self._ui("/ui/decision", data, now, out)
 
         self.deadlock.expire(now)
+        self.collision.reconcile_zones(now)
         motions = {request.robot: request.command for request in arbitration.commands}
         for robot in self.links:
-            command = self.mission.wire_step(robot, now, motions.get(robot))
+            traffic_stop = robot in self.collision.contacts or robot in self.collision.zone
+            command = self.mission.wire_step(robot, now, motions.get(robot), traffic_stop=traffic_stop,
+                                             stalled=robot in self.blocks or self.stalls[robot].short,
+                                             hold_restart=self.collision.hold_restart)
             if command:
                 out.commands.append(MotionRequest(robot, command))
 
@@ -427,10 +441,16 @@ class FleetCore:
             base = "YIELDING"
         elif base != "FAULT" and r.returning:
             base = "RETURNING"
+        if base != "FAULT" and (robot in self.collision.zone or robot in self.collision.contacts):
+            base = "HOLD"
         return self.resources.robot_state(robot, base) if self.link_ok[robot] else "OFFLINE"
 
+    def wait_reason(self, robot):
+        wait = self.collision.near.get(robot) or self.collision.zone.get(robot)
+        return wait.reason if wait else self.resources.wait_reasons.get(robot)
+
     def mission_row(self, job):
-        reason = self.resources.wait_reasons.get(job.robot) if job.status == "ACTIVE" else None
+        reason = self.wait_reason(job.robot) if job.status == "ACTIVE" else None
         if job.status == "QUEUED":
             reason = "쉬는 로봇 없음" if job.robot is None else "담당 로봇 대기"
         return {"mission_id": job.id, "type": job.kind, "level": job.level, "robot": job.robot,
@@ -447,7 +467,14 @@ class FleetCore:
             region = self.config.corridor.region_of(link.pose) if link.pose is not None else None
             state = self.visible_state(robot, r)
             leg = self.resources.active.get(robot) or self.resources.pending.get(robot)
+            leg_info = {"from": r.zone, "to": leg.destination} if leg else None
+            if leg and robot in self.deadlock.yielding and self.deadlock.yielding[robot].detour is leg:
+                leg_info["purpose"] = "교착 대피"
+            elif leg and r.target_override:
+                leg_info["purpose"] = "이전 구역 복귀"
             causes = self.safety.causes[robot]
+            zone = self.collision.zone.get(robot)
+            near = self.collision.near.get(robot)
             robots[robot] = {
                 "label": self.config.robots[robot].label, "mark": self.config.robots[robot].mark, "ns": link.ns, "link_ok": self.link_ok[robot],
                 "route": [list(p) for p in (link.pose, *waypoints(self.config, link.pose, leg.destination))] if leg and link.pose is not None else [],
@@ -457,8 +484,11 @@ class FleetCore:
                 "region": region, "zone": r.zone if region == g.ZONE_REGIONS[r.zone] else None,
                 "pose": None if link.pose is None else dict(zip(("x", "y"), link.pose)),
                 "battery_pct": link.battery, "docked": link.docked, "mission_id": r.job.journal_id if r.job else None,
-                "leg": {"from": r.zone, "to": leg.destination} if leg else None,
-                "wait_reason": self.resources.wait_reasons.get(robot), "progress_pct": link.percent,
+                "leg": leg_info,
+                "returning": r.returning,
+                "zone_wait": {"peer": zone.peer, "zone": zone.leg.destination, "reason": zone.reason, "since": zone.since} if zone else None,
+                "proximity": {"peer": near.peer, "reason": near.reason, "since": near.since} if near else None,
+                "wait_reason": self.wait_reason(robot), "progress_pct": link.percent,
                 "obstacle": self.stalls[robot].obstacle,
                 "obstacle_pending": self.stalls[robot].requested_at is not None and self.stalls[robot].obstacle is None,
                 "remaining_m": link.remaining_m, "stall_s": self.stalls[robot].seconds,

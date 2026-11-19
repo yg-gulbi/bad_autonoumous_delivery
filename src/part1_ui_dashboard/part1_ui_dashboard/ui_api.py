@@ -96,6 +96,8 @@ EVENTS = {
     "RESOURCE_ENTER": "{robot} {resource} 진입 확인", "RESOURCE_RELEASE": "{robot} {resource} 통과 완료",
     "RESOURCE_UNKNOWN": "{resource} 점유 확인 불가", "RESOURCE_CLEAR_CONFIRM": "{resource} 현장 확인",
     "DEADLOCK_DETECTED": "교착 감지", "YIELD_START": "{robot} 교착 양보 시작", "YIELD_DONE": "{robot} 교착 양보 완료",
+    "ZONE_OCCUPIED_HOLD": "{robot} 목적지 대기", "ZONE_OCCUPIED_CLEAR": "{robot} 목적지 대기 해제",
+    "PROXIMITY_STOP": "{robot} 근접 정지", "PROXIMITY_CLEAR": "{robot} 근접 정지 해제",
     "CORRIDOR_FOLLOW_STOP": "{robot} 뒤따르기 정지", "CORRIDOR_FOLLOW_CLEAR": "{robot} 뒤따르기 대기 해제",
     "CORRIDOR_YIELD_START": "{robot} 복도 양보 시작", "CORRIDOR_YIELD_END": "{robot} 복도 양보 종료",
     "CORRIDOR_YIELD_TIMEOUT": "{robot} 복도 양보 시간 초과", "STALL_SHORT": "{robot} 일시 정체",
@@ -108,7 +110,7 @@ EVENTS = {
     "CARD_OPEN": "운영자 결정 요청", "CARD_CLOSED": "결정 카드 종료", "LINK_LOST": "{robot} 연결 끊김",
     "LINK_BACK": "{robot} 연결 정상", "WARNING": "관제 주의",
 }
-RULES = {"FOLLOW": "앞 로봇 정지", "ONLY": "단독 요청", "LEVEL": "높은 응급도 우선", "REQUEST_TIME": "먼저 요청한 쪽",
+RULES = {"GAP": "앞 로봇과 간격 유지", "FOLLOW": "앞 로봇 정지", "ONLY": "단독 요청", "LEVEL": "높은 응급도 우선", "REQUEST_TIME": "먼저 요청한 쪽",
          "SUBMIT_ORDER": "먼저 접수한 쪽", "ENTRY_ORDER": "복도에 나중에 들어온 쪽이 양보",
          "ROBOT_ID": "동점 로봇 식별자 순", "CAPACITY": "자원 정원 도달", "DIRECTION": "복도 반대 방향 통행 중", "NO_PREEMPT": "이미 허가된 로봇은 회수하지 않음",
          "BLOCKED": "막힘 해제 대기", "UNKNOWN": "점유 확인 대기"}
@@ -205,7 +207,7 @@ def resume_checks(state, track=None):
         robot = state["robots"].get(nxt, {})
         released = not (follow if track["kind"] == "follow" else pair)
         values = [released, robot.get("link_ok", False),
-                  not robot.get("pause_causes") and robot.get("state") not in ("FAULT", "OFFLINE", "SAFE_PAUSE"),
+                  not robot.get("pause_causes") and not robot.get("proximity") and not robot.get("zone_wait") and robot.get("state") not in ("FAULT", "OFFLINE", "SAFE_PAUSE"),
                   released and moving]
     else:
         values = [first is not None and first not in road["holders"], road["state"] == "FREE" or nxt in road["holders"],

@@ -52,6 +52,8 @@ class CorridorCfg:
     yield_trigger_m: float = 1.2
     yield_release_m: float = 0.5
     yield_timeout_s: float = 10.0
+    follow_gap_m: float = 1.0
+    follow_resume_m: float = 1.4
 
     def region_of(self, point: geometry.Point) -> str:
         return geometry.region_of(point, self.polygon, include_boundary=self.include_boundary)
@@ -63,6 +65,7 @@ class ResourcesCfg:
     clear_hold_s: float
     decision_window_s: float
     aging_s: float
+    zone_occupied_m: float = 0.6
 
 
 @dataclass(frozen=True)
@@ -106,6 +109,8 @@ class SafetyCfg:
     bed_exit_pause_targets: tuple[str, ...]
     bed_monitor: BedMonitorCfg = BedMonitorCfg()
     bump_neighbor_m: float = 1.0
+    proximity_stop_m: float = 0.6
+    proximity_resume_m: float = 0.9
 
 
 @dataclass(frozen=True)
@@ -209,6 +214,14 @@ def _point(value, path: str) -> geometry.Point:
     return (_number(data.get("x"), f"{path}.x"), _number(data.get("y"), f"{path}.y"))
 
 
+def _distance_limits(data, section, stop, resume, defaults):
+    values = {key: _number(data.get(key, getattr(defaults, key)), f"{section}.{key}", positive=True)
+              for key in (stop, resume)}
+    if values[resume] <= values[stop]:
+        raise ConfigError(f"{section}.{resume}: {stop}보다 커야 합니다")
+    return values
+
+
 def _load_corridor(data: Mapping) -> CorridorCfg:
     raw = _value(data, "polygon", "corridor", list)
     vertices = []
@@ -234,6 +247,7 @@ def _load_corridor(data: Mapping) -> CorridorCfg:
     keys = ("mode", "yield_enabled", "yield_trigger_m", "yield_release_m", "yield_timeout_s")
     policy = {key: data.get(key, getattr(CorridorCfg, key)) for key in keys}
     return CorridorCfg(
+        **_distance_limits(data, "corridor", "follow_gap_m", "follow_resume_m", CorridorCfg),
         polygon=tuple(vertices),
         mouths=points,
         mode=_text(policy["mode"], "corridor.mode", CORRIDOR_MODES),
@@ -367,17 +381,23 @@ def config_from_dict(data: Mapping) -> FleetConfig:
         zones=zones,
         zone_names={z: zone_data[z].get("name") or f"{z} 구역" for z in zones},
         corridor=corridor,
-        resources=ResourcesCfg(**_numbers(cfg["resources"], "resources", (
-            "clear_margin_m", "clear_hold_s", "decision_window_s", "aging_s",
-        ))),
+        resources=ResourcesCfg(
+            zone_occupied_m=_number(cfg["resources"].get("zone_occupied_m", ResourcesCfg.zone_occupied_m),
+                                   "resources.zone_occupied_m", positive=True),
+            **_numbers(cfg["resources"], "resources", ("clear_margin_m", "clear_hold_s", "decision_window_s", "aging_s")),
+        ),
         deadlock=DeadlockCfg(
             **_numbers(cfg["deadlock"], "deadlock", ("confirm_s", "card_timeout_s"), positive=True),
             yield_zones=yield_zones,
         ),
         stall=stall,
-        safety=SafetyCfg(tuple(_text(r, "safety.bed_exit_pause_targets", robots) for r in targets), monitor,
-                         _number(cfg["safety"].get("bump_neighbor_m", SafetyCfg.bump_neighbor_m),
-                                 "safety.bump_neighbor_m", minimum=0)),
+        safety=SafetyCfg(
+            bed_exit_pause_targets=tuple(_text(r, "safety.bed_exit_pause_targets", robots) for r in targets),
+            bed_monitor=monitor,
+            bump_neighbor_m=_number(cfg["safety"].get("bump_neighbor_m", SafetyCfg.bump_neighbor_m),
+                                    "safety.bump_neighbor_m", minimum=0),
+            **_distance_limits(cfg["safety"], "safety", "proximity_stop_m", "proximity_resume_m", SafetyCfg),
+        ),
         mission=MissionCfg(
             return_home=_value(mission, "return_home", "mission", bool),
             return_interruptible=_value(mission, "return_interruptible", "mission", bool),

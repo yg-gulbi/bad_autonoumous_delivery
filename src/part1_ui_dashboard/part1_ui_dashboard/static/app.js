@@ -19,6 +19,8 @@ const waitStates = new Set(["HOLD", "GIVE_WAY", "YIELDING", "WAIT_CONFIRM"]);
 const stateColor = state => ["SAFE_PAUSE", "FAULT", "OFFLINE"].includes(state) ? "red" : waitStates.has(state) ? "amber" : "";
 function displayState(id, robot) {
     const state = robot.state, road = S?.resources.CORRIDOR;
+    if (state === "HOLD" && robot.proximity) return ["가까움 정지", "amber"];
+    if (state === "HOLD" && robot.zone_wait) return ["목적지 대기", "amber"];
     if (state === "HOLD" && road?.follow_stop?.rear === id) return ["후행 대기", "amber"];
     if (state === "MOVING" && robot.stall_s > 0) {
         const blocked = Object.values(S.resources).some(res => res.blocked_robots?.includes(id));
@@ -156,33 +158,44 @@ function monitorBadge() {
 function situation(fresh) {
     const issues = [];
     const add = (severity, title, detail, basis = false) => issues.push({severity, title, detail, basis});
-    if (!fresh) add(3, "관제 연결 끊김", "관제 상태 수신을 기다립니다.");
+    if (!fresh) add(4, "관제 연결 끊김", "관제 상태 수신을 기다립니다.");
     if (!S) return issues;
     const mon = S.bed_exit.monitor, corridor = S.resources.CORRIDOR;
-    if (S.bed_exit.value) add(3, "침상 이탈 감지", "침상 카메라로 환자 상태를 확인하세요.");
-    if (monitorLocked(mon) || mon?.bypass) add(3, monitorBadge()[0], mon?.bypass ? "담당자가 감시 없이 운행을 선택했습니다." : "웹캠 신호와 대상 로봇을 확인하세요.");
+    if (S.bed_exit.value) add(4, "침상 이탈 감지", "침상 카메라로 환자 상태를 확인하세요.");
+    if (monitorLocked(mon) || mon?.bypass) add(4, monitorBadge()[0], mon?.bypass ? "담당자가 감시 없이 운행을 선택했습니다." : "웹캠 신호와 대상 로봇을 확인하세요.");
     const units = Object.entries(S.robots);
     const bumped = units.filter(([,r]) => (r.pause_causes || [r.paused_by]).includes("BUMP"));
-    if (bumped.length) add(3, "범퍼 충돌", bumped.map(([,r]) => r.label).join(" · ") + " 안전 정지");
+    if (bumped.length) add(4, "범퍼 충돌", bumped.map(([,r]) => r.label).join(" · ") + " 안전 정지");
     for (const [,r] of units) {
-        if (!r.link_ok) add(3, "로봇 연결 끊김", r.label + " 상태 수신을 기다립니다.");
+        if (!r.link_ok) add(4, "로봇 연결 끊김", r.label + " 상태 수신을 기다립니다.");
     }
+    const manual = units.filter(([,r]) => (r.pause_causes || [r.paused_by]).includes("MANUAL"));
+    if (manual.length) add(3, manual.length === units.length ? "운영자 전체 정지" : "운영자 안전 정지",
+        manual.map(([,r]) => r.label).join(", ") + " 재개 대기");
     const follow = corridor.follow_stop;
-    if (follow) add(2, S.robots[follow.rear].wait_reason, robotName(follow.front) + " 주행 재개 또는 복도 이탈 대기", true);
-    if ([...cards.values()].some(c => c.kind === "DEADLOCK")) add(2, "교착 해소 대기", "결정 카드에서 양보할 로봇을 선택하세요.", true);
+    if (follow) add(1, follow.rule === "GAP" ? "앞 로봇과 간격 유지 → " + robotName(follow.rear) + " 대기" : "앞 로봇 정지 → " + robotName(follow.rear) + " 대기",
+        follow.rule === "GAP" ? "재개 간격 확보 또는 선행 로봇 이탈 대기" : robotName(follow.front) + " 주행 재개 또는 복도 이탈 대기", true);
+    if ([...cards.values()].some(c => c.kind === "DEADLOCK")) add(1, "교착 해소 대기", "결정 카드에서 양보할 로봇을 선택하세요.", true);
     for (const [key,res] of Object.entries(S.resources)) {
-        if (res.state === "UNKNOWN") add(2, (key === "CORRIDOR" ? "복도" : zn(key.slice(-1))) + " 점유 불명", "현장에서 점유 상태를 확인하세요.", true);
-        if (res.blocked) add(2, "이동 경로 막힘", res.blocked_robots.map(robotName).join(" · "), true);
+        if (res.state === "UNKNOWN") add(1, (key === "CORRIDOR" ? "복도" : zn(key.slice(-1))) + " 점유 불명", "현장에서 점유 상태를 확인하세요.", true);
+        if (res.blocked) add(1, "이동 경로 막힘", res.blocked_robots.map(robotName).join(" · "), true);
     }
     for (const [id,r] of units) {
-        if (id === follow?.rear) continue;
-        if (["HOLD", "GIVE_WAY", "YIELDING"].includes(r.state))
-            add(2, cfg.states[r.state], r.wait_reason || r.label, true);
+        if (r.proximity) add(2, r.proximity.reason, r.label + " 정지 중",
+            {type:"PROXIMITY_STOP", ts:r.proximity.since, robot:id, detail:r.proximity});
+        if (r.zone_wait) {
+            const peer = S.robots[r.zone_wait.peer];
+            add(1, r.zone_wait.reason, peer?.state === "IDLE"
+                ? peer.label + "을 다른 구역으로 보내면 출발합니다" : "목적지가 비면 자동으로 출발합니다.",
+                {type:"ZONE_OCCUPIED_HOLD", ts:r.zone_wait.since, robot:id, detail:{...r.zone_wait, destination:r.zone_wait.zone}});
+        }
+        if (!r.proximity && !r.zone_wait && id !== follow?.rear && ["HOLD", "GIVE_WAY", "YIELDING"].includes(r.state))
+            add(1, cfg.states[r.state], r.wait_reason || r.label, true);
         if (r.state === "MOVING" && r.stall_s > 0 && !Object.values(S.resources).some(res => res.blocked_robots?.includes(id)))
-            add(2, "일시 정체", r.label + " · " + Math.floor(r.stall_s) + "초 동안 이동 없음", true);
-        if (r.state === "FAULT") add(2, "주행 장애", r.label);
-        if (r.state === "SAFE_PAUSE" && !bumped.some(([key]) => key === id) && !S.bed_exit.value && !monitorLocked(mon))
-            add(1, "안전 정지", r.label + " 재개 대기");
+            add(1, "일시 정체", r.label + " · " + Math.floor(r.stall_s) + "초 동안 이동 없음", true);
+        if (r.state === "FAULT") add(1, "주행 장애", r.label);
+        if (r.state === "SAFE_PAUSE" && !manual.some(([key]) => key === id) && !bumped.some(([key]) => key === id) && !S.bed_exit.value && !monitorLocked(mon))
+            add(3, "안전 정지", r.label + " 재개 대기");
     }
     return issues.sort((a,b) => b.severity - a.severity);
 }
@@ -204,14 +217,15 @@ function renderTop() {
     $("active-count").textContent = "진행 작업 " + (S?.summary?.active ?? 0) + "건";
     $("queued-count").textContent = "배정 대기 " + (S?.missions.filter(m => m.status === "QUEUED").length ?? 0) + "건";
     const issues = situation(fresh), top = issues[0];
-    $("situation").className = top ? top.severity === 2 ? "attention" : "risk" : "";
+    $("situation").className = top ? top.severity < 3 ? "attention" : "risk" : "";
     const noticeButtons = [...cards.values()].map(c => btn("결정 · " + (cardNames[c.kind] || c.title), "card", c.card_id));
     if (alerts.length) noticeButtons.push(btn("경보 " + alerts.length, "alarm"));
     if (top?.basis) noticeButtons.unshift(btn("판단 근거", "basis", "", "", !basisEvent()));
-    if (top?.severity === 3) noticeButtons.push(btn(sound ? "경보음 끄기" : "경보음 켜기", "sound"));
-    put("situation", '<strong>' + h(top?.title || "이상 없음") + '</strong><span>' +
-        h(top?.detail || "로봇 " + (S?.summary?.online ?? 0) + "대가 정상 운행 중입니다.") +
-        '</span>' + (issues.length > 1 ? '<b>외 ' + (issues.length - 1) + '건</b>' : '') +
+    if (top?.severity === 4) noticeButtons.push(btn(sound ? "경보음 끄기" : "경보음 켜기", "sound"));
+    const message = '<strong>' + h(top?.title || "이상 없음") + '</strong><span>' +
+        h(top?.detail || "로봇 " + (S?.summary?.online ?? 0) + "대가 정상 운행 중입니다.") + '</span>';
+    const lane = top?.basis?.type === "ZONE_OCCUPIED_HOLD" ? '<div class="zone-notice">' + message + '</div>' : message;
+    put("situation", lane + (issues.length > 1 ? '<b>외 ' + (issues.length - 1) + '건</b>' : '') +
         '<div class="buttons">' + noticeButtons.join("") + '</div>');
     if (modal === "alarm" && alerts[0]) {
         $("alarm-action").textContent = alarmAction(alerts[0]);
@@ -242,6 +256,8 @@ const cardNames = { BED_MONITOR_LOST: "침상 감시 끊김", BLOCKED: "경로 �
 
 const choiceDescriptions = {
     BLOCKED: {retry:"앞이 비었는지 확인한 뒤 원래 경로로 다시 갑니다.", return:"이전 구역으로 돌아갑니다.", hold:"현재 위치에서 멈춘 채 운영자의 재시도를 기다립니다."},
+    ZONE: {retry:"목적지 점유를 다시 확인하고 비었을 때 출발합니다.", return:"이전 구역을 목적지로 바꾸고 출발 조건을 확인합니다.", hold:"현재 작업을 보류하고 운영자의 재시도를 기다립니다."},
+    PROXIMITY: {retry:"두 로봇의 거리를 다시 확인합니다. 재개 간격이 확보되면 출발합니다.", return:"현재 구간을 취소하고 이전 구역으로 돌아갈 조건을 확인합니다.", hold:"이 로봇의 임무를 보류합니다.", peer_first:"이 로봇은 멈추고 상대가 먼저 비킵니다. 상대가 쉬고 있으면 로봇 블록에서 비킬 구역을 선택하세요."},
     DEADLOCK: {yield_a:"침상형 이송 로봇이 대피 구역으로 이동합니다.", yield_b:"약품 운송 로봇이 대피 구역으로 이동합니다."},
     BED_MONITOR_LOST: {hold:"감시 신호를 확인할 때까지 정지를 유지합니다.", bypass:"운영자 확인으로 침상 감시 없이 운행을 허용합니다."},
     NAV_FAILED: {retry:"같은 목적지로 다시 출발합니다.", return:"이전 구역으로 돌아갑니다.", cancel:"현재 작업을 취소합니다."},
@@ -255,16 +271,16 @@ function showCard(id) {
     if (!c)
         return;
     const r = S?.robots[c.robots[0]], job = mById(c.mission_id), def = c.options.find(o => o.id === c.default);
-    const title = c.kind === "BLOCKED" && r ? r.label + "이 막혔습니다" : c.title;
-    const stalled = c.kind === "BLOCKED" && r?.stall_s > 0;
+    const title = c.context === "ZONE" ? "목적지 대기" : c.context === "PROXIMITY" ? "로봇 근접 정지" : c.kind === "BLOCKED" && r ? r.label + "이 막혔습니다" : c.title;
+    const stalled = !c.context && c.kind === "BLOCKED" && r?.stall_s > 0;
     const facts = [["작업", job ? job.mission_id + " " + cfg.kinds[job.type] + ", Level " + job.level : "직접 이동 또는 임무 없음"],
         ["멈춘 곳", locationText(r)]];
-    if (c.kind === "BLOCKED") facts.push(["앞에 있는 것", obstacleText(r || {}) || "분류 결과 없음"]);
+    if (c.kind === "BLOCKED" && !c.context) facts.push(["앞에 있는 것", obstacleText(r || {}) || "분류 결과 없음"]);
     openModal("card", `<header class="pop-head attention">${r ? robotMark(r) : ""}<h2>${h(title)}</h2>${elapsedSince(stalled ? S.stamp-r.stall_s : c.created_at, stalled)}</header>
         <div class="pop-body"><p class="lead">${h(c.reason)}</p>${factList(facts)}
         <h3>어떻게 할까요?</h3><div class="choices">${c.options.map(o =>
             `<button data-act="choose" data-id="${h(o.id)}"><strong>${h(o.label)}${def && o.id === c.recommended ? " · 추천" : ""}</strong>
-            <small>${h(choiceDescriptions[c.kind]?.[o.id] || "선택한 로봇이 대피 구역으로 이동합니다.")}</small></button>`).join("")}</div>
+            <small>${h(choiceDescriptions[c.context || c.kind]?.[o.id] || "선택한 로봇이 대피 구역으로 이동합니다.")}</small></button>`).join("")}</div>
         ${def ? `<p>시간이 지나면 ‘${h(def.label)}’로 자동 진행합니다. <b id="card-clock"></b></p><progress id="card-bar" max="${c.timeout_s}"></progress>` : ""}
         <footer class="row"><small>운영자의 결정을 기다립니다.</small>${btn("나중에", "defer")}</footer></div>`);
     modalCard = id;

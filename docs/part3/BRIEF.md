@@ -372,6 +372,8 @@ PART 04는 로봇마다 `hospital_nav`(CommandReceiver + MissionManager + Naviga
 - `missions[]`: 위 필드에 `patient`, `items`(정류장별 품목), `requested_by`, `created_at`, `finished_at`, `wait_reason`이 더 있다. 끝난 임무도 최근 `publish.finished_mission_limit`건까지 넣는다 (기본 20, `status`로 구분).
 - `last_decision`: 가장 최근 통행 판단 하나. 4.8절 판단 이벤트의 `type`, `ts`, `robot`, `detail`을 그대로 담는다. 없으면 `null`.
 
+4H부터 로봇별로 `zone_wait`(상대 `peer`, 목적지 `zone`, `since`, `reason`), `proximity`(상대, 시각, 사유), `returning`을 보낸다. 해당 대기가 없으면 대기 필드는 null이다. 대기는 HOLD로 표시하고 안전 정지가 우선한다. 복도 `follow_stop.rule`은 FOLLOW 또는 GAP이다.
+
 ### 4.6 `/fleet/decision_req`
 
 ```json
@@ -399,7 +401,7 @@ PART 04는 로봇마다 `hospital_nav`(CommandReceiver + MissionManager + Naviga
  "detail": {"resources": ["CORRIDOR", "ROOM_E"], "reason": "복도 비어 있음 + Level 3 > Level 2 → 약품 운송 로봇 허가"}}
 ```
 
-이벤트 종류: `MISSION_CREATED`, `MISSION_REJECTED`, `LEG_START`, `ARRIVE`, `CONFIRM_STEP`, `MISSION_DONE`, `MISSION_CANCELED`, `RESOURCE_REQUEST`, `RESOURCE_GRANT`, `RESOURCE_HOLD`, `RESOURCE_ENTER`, `RESOURCE_RELEASE`, `RESOURCE_UNKNOWN`, `RESOURCE_CLEAR_CONFIRM`, `DEADLOCK_DETECTED`, `YIELD_START`, `YIELD_DONE`, `CORRIDOR_YIELD_START`, `CORRIDOR_YIELD_END`, `CORRIDOR_YIELD_TIMEOUT`, `CORRIDOR_FOLLOW_STOP`, `CORRIDOR_FOLLOW_CLEAR`, `STALL_SHORT`, `STALL_LONG`, `BLOCKED`, `UNBLOCKED`, `PAUSE`, `RESUME`, `RESUME_REJECTED`, `BED_EXIT`, `BED_EXIT_CLEAR`, `BUMP`, `MOVE_REJECTED`, `NAV_FAILED`, `FAULT`, `CARD_OPEN`, `CARD_CLOSED`, `LINK_LOST`, `LINK_BACK`, `WARNING`, `BED_MONITOR_WARN`, `BED_MONITOR_LOST`, `BED_MONITOR_BACK`, `BED_MONITOR_BYPASS`, `OBSTACLE_INSPECT`, `OBSTACLE_RESULT`.
+이벤트 종류: `MISSION_CREATED`, `MISSION_REJECTED`, `LEG_START`, `ARRIVE`, `CONFIRM_STEP`, `MISSION_DONE`, `MISSION_CANCELED`, `RESOURCE_REQUEST`, `RESOURCE_GRANT`, `RESOURCE_HOLD`, `RESOURCE_ENTER`, `RESOURCE_RELEASE`, `RESOURCE_UNKNOWN`, `RESOURCE_CLEAR_CONFIRM`, `DEADLOCK_DETECTED`, `YIELD_START`, `YIELD_DONE`, `CORRIDOR_YIELD_START`, `CORRIDOR_YIELD_END`, `CORRIDOR_YIELD_TIMEOUT`, `CORRIDOR_FOLLOW_STOP`, `CORRIDOR_FOLLOW_CLEAR`, `ZONE_OCCUPIED_HOLD`, `ZONE_OCCUPIED_CLEAR`, `PROXIMITY_STOP`, `PROXIMITY_CLEAR`, `STALL_SHORT`, `STALL_LONG`, `BLOCKED`, `UNBLOCKED`, `PAUSE`, `RESUME`, `RESUME_REJECTED`, `BED_EXIT`, `BED_EXIT_CLEAR`, `BUMP`, `MOVE_REJECTED`, `NAV_FAILED`, `FAULT`, `CARD_OPEN`, `CARD_CLOSED`, `LINK_LOST`, `LINK_BACK`, `WARNING`, `BED_MONITOR_WARN`, `BED_MONITOR_LOST`, `BED_MONITOR_BACK`, `BED_MONITOR_BYPASS`, `OBSTACLE_INSPECT`, `OBSTACLE_RESULT`.
 
 `detail.reason` 규칙:
 
@@ -419,6 +421,9 @@ PART 04는 로봇마다 `hospital_nav`(CommandReceiver + MissionManager + Naviga
 
 - `rule`: 순서를 정한 기준. `ONLY`(경쟁 없음), `LEVEL`, `REQUEST_TIME`, `SUBMIT_ORDER`, `ENTRY_ORDER`(복도 양보: 나중에 들어온 쪽), `ROBOT_ID`(마지막 동점 처리), `CAPACITY`(자리 없음), `DIRECTION`(복도 반대 방향 통행 중), `NO_PREEMPT`(이미 허가된 로봇 보호), `BLOCKED`, `UNKNOWN`.
 - `FOLLOW`는 같은 방향 선행 로봇 정지다. `CORRIDOR_FOLLOW_STOP`과 `CORRIDOR_FOLLOW_CLEAR`의 `robot`은 뒤 로봇, `detail.front`는 앞 로봇이다. 해제 이벤트는 뒤 로봇의 별도 정지 해제를 뜻하지 않는다.
+- 같은 방향 간격 때문에 정지하면 `CORRIDOR_FOLLOW_STOP`의 `detail.rule`은 `GAP`, `gap_m`은 판단 당시 간격(m)이다. 정지 보고가 먼저면 `FOLLOW`다.
+- `ZONE_OCCUPIED_HOLD` / `ZONE_OCCUPIED_CLEAR`에는 기다린 로봇, `detail.peer`(점유·예약한 로봇), `detail.destination`을 남긴다. 구간 취소로 대기가 끝나도 CLEAR를 남긴다.
+- `PROXIMITY_STOP` / `PROXIMITY_CLEAR`는 로봇별로 기록한다. `detail.peer`는 상대 로봇, 정지 시 `distance_m`은 중심 간 거리다. 먼저 보내기로 해제한 경우에도 사유를 기록한다.
 - `state_before`: 판단 직전 그 자원의 상태.
 - 문장(`reason`)은 `resource_manager`가 만든다. 화면은 문장을 고치지 않는다.
 
@@ -429,14 +434,14 @@ PART 04는 로봇마다 `hospital_nav`(CommandReceiver + MissionManager + Naviga
 ### 5.0 tick 순서 (10 Hz)
 
 1. 입력 큐 비우기: 화면 요청, 서비스 요청, 로봇 상태, bed_exit, 장애물 분류 결과를 반영한다
-2. `safety`: 침상 이탈·침상 감시 끊김·수동 정지·범퍼 → 대상 로봇 정지
+2. 침상 이탈·침상 감시 끊김·수동 정지·범퍼를 먼저 반영하고, 위치와 STATE로 근접 정지를 판정한다.
 3. `stall`: 진행 없음 시간 갱신 → 장애물 촬영 요청 → 잠깐 막힘 기록 / 오래 막힘이면 막힘 표시 + 카드
 4. `mission`: 로봇별 상태머신 진행 (배정, 도착, 확인, 다음 구간, 복귀)
 5. `route_planner`: 다음 구간에 필요한 자원 계산
-6. `resource_manager`: 자원 진입·해제 판정 → 대기 요청 중 허가 → 복도 양보 판정 (5.3절 11번)
+6. 자원 진입·해제와 목적지 점유 확인 → 대기 요청 중 허가 → 같은 방향 간격·선행 정지 및 복도 양보 판정 (5.3절)
 7. `deadlock`: 대기 그래프에 순환이 있으면 비킬 로봇을 정함
 8. `decisions`: 카드 시간 초과 처리
-9. `robot_link`: 이번 tick에 정한 명령 보내기
+9. 각 로봇의 정지 사유를 합치고 미출발 구간의 목적지를 재확인한 뒤 `robot_link`로 한 가지 명령을 보낸다.
 10. `store`: 이벤트·지표 기록, `/fleet/state`는 5 Hz로 발행
 
 모든 모듈은 `now`를 인자로 받는다 (테스트에서 가짜 시계를 쓰기 위해서). 모듈 안에서 `time.time()`을 직접 부르지 않는다.
@@ -548,7 +553,10 @@ PART 04는 로봇마다 `hospital_nav`(CommandReceiver + MissionManager + Naviga
    - 반대 방향이면 `HOLD`. 사유는 "약품 운송 로봇 복도 반대 방향 통행 중 → 침상형 이송 로봇 복도 밖 대기", `rule: DIRECTION`. 방 안에 있던 로봇은 방을 쥔 채 방 안에서 기다린다 (방이 대피 공간이 된다).
    - 순서(3번), 선점 금지(4번), 한꺼번에 허가(2번)는 그대로다. 막 들어간 같은 방향 로봇을 뒤따라 들어가는 것은 허가한다.
    - 같은 방향으로 허가된 두 대는 복도 축의 진행 방향 위치로 앞뒤를 정한다. 앞 로봇의 안전·운영자 정지, 막힘(`stall.window_s` 동안 진전 없음), 장애 또는 연결 끊김 때 뒤 로봇도 멈춘다. 허가만 받은 뒤 로봇의 첫 MOVE도 보류한다. 선행 로봇의 복도 이탈 또는 진행 재확인(복도 축으로 `stall.move_m` 이상 전진) 뒤, 별도 정지 사유가 없는 뒤 로봇만 재개한다.
+   - 두 대가 같은 방향으로 복도를 쓰면 매 tick 복도 축에 투영한 간격을 잰다. `follow_gap_m`(1.0 m) 이하면 앞 로봇의 STATE가 MOVING이어도 뒤 로봇을 즉시 세운다. 뒤 로봇이 복도 밖이면 그쪽 입구에서 앞 로봇까지 재고 첫 MOVE를 보류한다. `follow_resume_m`(1.4 m) 이상 벌어지거나 앞 로봇이 복도를 비워야 해제한다. 중간 거리에서는 이전 판정을 유지한다. 두 정지 조건이 겹치면 모두 풀려야 재개한다.
    - 그래도 반대 방향 두 대가 복도 안에 함께 있게 되면 (시작할 때 이미 안에 있음, 점유 불명을 사람이 푼 뒤 등) 11번 복도 양보 규칙을 그대로 쓴다.
+2b. **목적지 점유**. 모든 모드와 A~F 전체 구역에 적용한다. 구간 허가 전과 미출발 MOVE 직전에 목적지 중심 `resources.zone_occupied_m`(0.6 m) 안에 다른 로봇이 있거나 이미 그곳을 향하는 구간이 있는지 확인한다. 대기 구간은 새 자원을 선점하지 않는다. 출발 보류 중에도 앞서 받은 허가와 현재 위치 점유는 유지한다. 목적지가 비면 자동으로 출발한다. 홈 복귀·직접 이동·대피에도 같은 규칙을 적용한다.
+   - 대기 30초에 `BLOCKED` 카드가 열린다. [다시 확인]은 조건을 다시 확인하고, [되돌아가기]는 이전 구역에 대해 출발 조건을 다시 검사한다. [보류]는 운영자가 재시도할 때까지 임무를 멈춘다.
 3. **순서**: 대기 요청 중 level이 높은 로봇이 먼저, 같으면 먼저 요청한 로봇이 먼저, 요청 시각까지 같으면 접수한 순서. `aging_s`(기본 0 = 끔)를 켜면 그 시간마다 대기 로봇의 실효 level을 1씩 올린다.
    - 복도가 빈 직후나 첫 요청 뒤에는 `decision_window_s`(1초) 동안 경쟁 요청을 모은 뒤 정한다.
 4. **선점 금지**: 이미 준 허가는 level이 더 높은 요청이 와도 회수하지 않는다.
@@ -629,9 +637,11 @@ PART 04는 로봇마다 `hospital_nav`(CommandReceiver + MissionManager + Naviga
 |---|---|---|---|
 | 침상 이탈 | `/patient/bed_exit` false → true (상승 에지) | `bed_exit_pause_targets` 로봇 중 임무 중인 로봇을 `SAFE_PAUSE`. 주행 중이면 `PAUSE` 전송. 경고 `BED_EXIT` | 재개 (bed_exit가 false일 때만) |
 | 수동 정지 | `PAUSE_ALL`, `/robot/pause`, `PAUSE_ROBOT` | 대상 로봇 `SAFE_PAUSE`, 주행 중이면 `PAUSE` | `RESUME_ALL`, `/robot/resume`, `RESUME_ROBOT` |
+| 근접 정지 | 중심 간 거리가 `safety.proximity_stop_m`(0.6 m) 미만이고 하나라도 주행 중 | 주행 중인 쪽만 PAUSE. 둘 다 주행 중이면 둘 다 멈춘다. 범퍼와 별도로 기록한다 | 두 로봇의 연결이 살아 있고 거리가 `safety.proximity_resume_m`(0.9 m) 이상이면 이 규칙의 정지만 해제 |
 | 범퍼 충돌 | `hazard_detection`에 `BUMP`가 새로 나타남 | 그 로봇과, 그 로봇에서 `safety.bump_neighbor_m`(1.0 m) 안에 있는 다른 로봇을 함께 `SAFE_PAUSE`. 주행 중이면 `PAUSE`. 경고 `BUMP` (`detail.targets`에 충돌 로봇과 함께 세운 이웃 로봇 ID 목록) | 사람이 확인 후 `RESUME_ROBOT` (로봇마다) |
 | 침상 감시 끊김 | `/patient/bed_exit`가 `bed_monitor.warn_s`(1초) 넘게 안 옴 → 경고만. `lost_s`(3초) 넘게 안 옴 → 끊김 | 경고: `BED_MONITOR_WARN`. 끊김: `bed_exit_pause_targets` 로봇 중 임무 중인 로봇을 `SAFE_PAUSE`, 주행 중이면 `PAUSE`. `BED_MONITOR_LOST` + 카드 `BED_MONITOR_LOST` | 신호가 `recover_s`(2초) 이어서 들어오면 `BED_MONITOR_BACK`. 그 뒤 사람이 재개. 또는 카드에서 [감시 없이 운행] |
 
+- 근접 정지 10초에 열리는 `BLOCKED` 카드에는 [상대 로봇 먼저 보내기]가 있다. 양보하는 로봇의 정지를 확인하고 상대의 근접 정지만 해제한다. 상대가 쉬고 있으면 운영자가 이동할 곳을 정한다. 먼저 보내기는 해당 구간의 분리에만 적용한다. 근접 범위에서 거리가 다시 줄거나 양보 로봇의 정지를 확인할 수 없으면 다시 세운다. 간격·목적지·범퍼·운영자 정지 등 다른 조건도 모두 충족해야 MOVE 또는 RESUME를 보낸다. 근접 대기로 인한 멈춤은 장애물 막힘 시간에서 뺀다.
 - 범퍼에 근처 로봇까지 세우는 이유: 로봇끼리 닿으면 눌린 쪽이 아니라 미는 쪽을 세워야 한다. 11/18 시험에서 이미 멈춰 있던 로봇이 밀렸다 (`DECISIONS.md` D-23).
 - 재개는 `SAFE_PAUSE` 직전 상태로 되돌린다. 로봇 쪽이 `PAUSED`면 `RESUME`을 보낸다 (PART 04가 같은 목적지로 다시 출발). `HOLD`·`WAIT_CONFIRM`이었으면 관제 상태만 되돌린다.
 - 멈춰 있는 동안에도 쥔 자원은 그대로 유지한다.
@@ -760,6 +770,8 @@ zones:                          # PART 04 goal_manager.py와 같은 값. name: �
 
 corridor:
   mode: DIRECTIONAL             # DIRECTIONAL(같은 방향만 같이, 반대 방향은 밖에서 대기) | SHARED_YIELD(두 대 같이, 마주 오면 낮은 쪽이 정지) | EXCLUSIVE(한 대씩)
+  follow_gap_m: 1.0              # 후행 정지 간격 (m, 이하)
+  follow_resume_m: 1.4           # 후행 재개 간격 (m, 이상)
   yield_enabled: true
   yield_trigger_m: 1.2          # 리허설에서 조정
   yield_release_m: 0.5
@@ -773,6 +785,7 @@ corridor:
     ROOM_E: {x: -1.08, y: -2.25}
 
 resources:
+  zone_occupied_m: 0.6           # 목적지 중심 점유 반경 (m, 이하)
   clear_margin_m: 0.20
   clear_hold_s: 1.0
   decision_window_s: 1.0
@@ -800,6 +813,8 @@ obstacle:                       # PART 06 장애물 분류 (3.2a·5.5절)
   label_ko: {person: 사람, chair: 의자, suitcase: 가방, backpack: 가방, bottle: 병, bed: 침대, couch: 소파, dining table: 탁자, potted plant: 화분, dog: 개, cat: 고양이}
 
 safety:
+  proximity_stop_m: 0.6
+  proximity_resume_m: 0.9
   bed_monitor:                  # 침상 감시 끊김 (5.6절)
     warn_s: 1.0
     lost_s: 3.0                 # 이때 정지. 리허설에서 조정
@@ -893,7 +908,9 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH=src/part1_ui_dashboard:s
     같은 순간 반대 방향 요청도 한 대만 복도를 받는다(레벨 높은 쪽).
 45. **범퍼 이웃 정지**: Robot A에 `BUMP` → Robot A와, A에서 1.0 m 안에 있는 Robot B가 둘 다 `SAFE_PAUSE` + `PAUSE` 전송, `BUMP` 이벤트 `detail`에 둘 다. 1.0 m 밖이면 A만. 재개는 로봇마다 `RESUME_ROBOT`
 46. **테스트가 모드를 직접 정함**: 복도 양보·교착·장애물 등 기존 테스트는 필요한 `corridor.mode`를 테스트 안에서 직접 정한다. 저장소 기본값(`DIRECTIONAL`)을 바꿔도 다른 테스트가 깨지지 않는다
-47. **같은 방향 후행 정지**: 앞 로봇이 멈추면 뒤도 멈춘다. 복도 밖에서는 첫 MOVE를 보류한다. 진행 또는 이탈을 확인하면 재개하고, 뒤 로봇의 별도 정지는 유지한다. 반대 방향 요청은 기존 DIRECTION 규칙으로 기다린다.
+47. **같은 방향 후행 정지**: 앞 로봇이 멈추면 뒤도 멈춘다. 복도 밖에서는 첫 MOVE를 보류한다. 진행 또는 이탈을 확인하면 재개하고, 뒤 로봇의 별도 정지는 유지한다. 반대 방향 요청은 기존 DIRECTION 규칙으로 기다린다. MOVING인 선행 로봇과 0.8 m이면 바로 멈추고, 1.0~1.4 m 사이에서 흔들려도 정지를 유지하며 1.5 m에서 재개한다.
+48. **목적지 점유**. 정차한 로봇의 구역, 다른 로봇이 이동 중인 목적지, 점유된 홈으로 가는 MOVE를 보류한다. 비키면 자동 출발하며, 미출발 허가도 다시 확인한다. 30초 카드와 각 선택지를 확인한다.
+49. **근접 정지**. 0.5 m에서 주행 중인 한 대 또는 두 대만 정지하고 0.9 m 이상일 때 재개한다. 10초 카드와 한 대 먼저 보내기, 범퍼·운영자·후행 정지 중첩, 한 규칙만 풀렸을 때 RESUME가 나가지 않는지 확인한다.
 
 - 화면 라우트 테스트 (Flask test client): 버튼마다 가짜 publisher에 올바른 토픽과 JSON이 넘어간다. `dev_tools: false`면 시험 도구 라우트가 403이다. `/map/meta`·`/map/image`가 맵이 있을 때와 없을 때 맞게 답한다.
 - 화면 확인은 mock 2대로 시나리오 1~5(`stage3-scenarios.md`)를 **화면 클릭만으로** 끝까지 진행하고, 캡처를 `docs/part3/ui/screens/`에 남긴다. 녹화는 사람이 한다.

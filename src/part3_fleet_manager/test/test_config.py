@@ -26,6 +26,9 @@ def test_default_yaml_loads(cfg):
     assert cfg.safety.bump_neighbor_m == 1.0 and cfg.publish.finished_mission_limit == 20
     assert (cfg.corridor.yield_trigger_m, cfg.corridor.yield_release_m, cfg.corridor.yield_timeout_s) == (1.2, 0.5, 10)
     assert cfg.resources.clear_margin_m == 0.20
+    assert (cfg.corridor.follow_gap_m, cfg.corridor.follow_resume_m) == (1.0, 1.4)
+    assert (cfg.safety.proximity_stop_m, cfg.safety.proximity_resume_m) == (0.6, 0.9)
+    assert cfg.resources.zone_occupied_m == 0.6
     assert cfg.resources.aging_s == 0
     assert cfg.deadlock.yield_zones == {"ROOM_B": "D", "ROOM_E": "F"}
     assert cfg.safety.bed_exit_pause_targets == ("robot_a",)
@@ -65,6 +68,11 @@ def test_default_yaml_loads(cfg):
     ("deadlock.yield_zones.ROOM_E", "E"),
     ("stall.long_s", 5),
     ("safety.bump_neighbor_m", -1),
+    ("corridor.follow_gap_m", 0),
+    ("corridor.follow_resume_m", 1.0),
+    ("safety.proximity_stop_m", -0.1),
+    ("safety.proximity_resume_m", 0.5),
+    ("resources.zone_occupied_m", float("nan")),
     ("publish.finished_mission_limit", -1),
     ("publish.finished_mission_limit", True),
     ("safety.bed_exit_pause_targets", ["robot2"]),
