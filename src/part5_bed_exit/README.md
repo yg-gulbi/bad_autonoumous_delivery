@@ -12,6 +12,18 @@
 `package.module:ClassOrObject` 형식의 외부 모듈을 지정할 수 있다. 내장 방식은
 `method_config` JSON에서 ROI, 모델 경로와 실행 장치를 읽는다.
 
+### 판단 방법 선택
+
+운영에서 선택하는 방식은 다음 두 범주다.
+
+1. 내장 모델: `method=segmentation`처럼 이름을 명시하고 `method_config`에 JSON 경로를
+   전달한다. `method`를 비우고 JSON 안의 `method`를 읽는 방식은 기존 설정 호환용이다.
+2. 외부 플러그인: `method=package.module:ClassName`을 사용한다. 이미 생성된 객체를
+   모듈 변수로 공개한 `package.module:object_name`도 지원하지만 클래스 방식이 기본이다.
+
+`BedExitNode(detector=FakeDetector())`는 ROS 운영 설정이 아니라 모델 없이 노드 경계를
+검증하기 위한 테스트 전용 주입 방식이다.
+
 카메라 읽기, 판단, ROS 발행과 선택적 프리뷰가 실패하면 예외를 타이머 콜백 밖으로
 전파하지 않는다. 실패 프레임은 발행하지 않으며, 판단 연속성이 깨진 경우 투표 이력을
 초기화하고 다음 유효 프레임부터 5프레임을 다시 누적한다.

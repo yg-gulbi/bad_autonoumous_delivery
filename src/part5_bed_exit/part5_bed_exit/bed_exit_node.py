@@ -73,7 +73,6 @@ class BedExitNode(Node):
         self.detector = None
         self.show = False
         self.is_video_file = False
-        self.loop_video = True
 
         # method(str, 기본값=''): 빈 값이면 method_config JSON의 method를 사용한다.
         # 내장 이름 또는 package.module:ClassOrObject 형식으로 실행 구현을 선택할 수 있다.
@@ -87,8 +86,6 @@ class BedExitNode(Node):
         self.declare_parameter('camera_index', 0)
         # video_path(str, 기본값=''): 값이 있으면 웹캠 대신 해당 MP4를 입력으로 사용한다.
         self.declare_parameter('video_path', '' if video_path is None else str(video_path))
-        # loop_video(bool, 기본값=True): MP4 EOF에서 프레임과 판단 객체 상태를 초기화한다.
-        self.declare_parameter('loop_video', True)
         # capture_fps(float, 기본값=30.0): process_frame() 호출을 시도하는 초당 타이머 횟수.
         # 실제 처리 FPS는 카메라 읽기와 모델 추론 시간보다 빨라질 수 없다.
         self.declare_parameter('capture_fps', 30.0)
@@ -104,9 +101,8 @@ class BedExitNode(Node):
         topic = self.get_parameter('output_topic').value
         # camera_index 값을 읽어 cv2.VideoCapture()에 전달한다.
         camera_index = self.get_parameter('camera_index').value
-        # video_path와 loop_video 값을 읽어 웹캠/영상 입력 및 EOF 정책을 선택한다.
+        # video_path 값을 읽어 웹캠 또는 1회 재생할 영상 입력을 선택한다.
         resolved_video = str(self.get_parameter('video_path').value).strip()
-        self.loop_video = bool(self.get_parameter('loop_video').value)
         # capture_fps 값을 읽어 타이머 주기 1.0 / fps를 계산한다.
         fps = self.get_parameter('capture_fps').value
         # show 값을 명시적으로 bool로 변환해 프리뷰 분기 조건으로 사용한다.
@@ -231,20 +227,6 @@ class BedExitNode(Node):
             return
 
         is_video_file = bool(getattr(self, 'is_video_file', False))
-        loop_video = bool(getattr(self, 'loop_video', False))
-        if (not ok or frame is None) and is_video_file and loop_video:
-            self.state = BedExitState()
-            try:
-                self.capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                reset = getattr(self.detector, 'reset', None)
-                if callable(reset):
-                    reset()
-                ok, frame = self.capture.read()
-            except Exception as exc:
-                BedExitNode._log_callback_error(
-                    self, f'Video loop restart failed; no frame decision published: {exc}')
-                return
-
         if not ok or frame is None:
             self.state = BedExitState()
             if is_video_file:

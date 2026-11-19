@@ -76,13 +76,14 @@ ros2 topic echo /patient/bed_exit
 ```
 
 ### 영상 파일(`.mp4`)로 ROS 2 노드 실행하기
-웹캠 대신 녹화한 영상 파일을 넣어도 동일하게 화면 표시 + `/patient/bed_exit` 토픽 발행이 동작합니다(기본값으로 영상 끝에서 자동 반복 재생).
+웹캠 대신 녹화한 영상 파일을 넣어도 동일하게 화면 표시와 `/patient/bed_exit` 토픽
+발행이 동작한다. 영상 끝에 도달하면 타이머를 중단하며 자동 반복하지 않는다.
 
 ```bash
 # 방법 1: 뒤에 영상 파일 경로 바로 전달
 ros2 run part5_bed_exit bed_exit test_bed.mp4
 
-# 방법 2: ROS 파라미터로 전달 (1회 재생 후 멈추려면 -p loop_video:=false 추가)
+# 방법 2: ROS 파라미터로 전달
 ros2 run part5_bed_exit bed_exit --ros-args -p video_path:=test_bed.mp4
 ```
 
