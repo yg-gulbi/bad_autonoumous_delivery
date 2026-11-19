@@ -10,6 +10,7 @@ Each robot runs `command_receiver`. This console publishes to
 The robots are called A, B, ... in the order given (robot2 = A, robot3 = B).
 
     A F | A F 2 | A MOVE F 2                  -> robot A goes to room F (priority 1~3)
+    A UNDOCK | A DOCK                         -> leave the dock / return to the dock
     B PAUSE | RESUME | CANCEL                 -> control robot B
     S                                         -> status table
     Q                                         -> quit console only (robots keep going)
@@ -70,7 +71,12 @@ class ControlConsole(Node):
                 pct = f"{d['percent']:.1f}%" if d.get("percent") is not None else "-"
                 rem = f"{d['remaining_m']:.2f} m" if d.get("remaining_m") is not None else "-"
                 silent = " [응답없음]" if time.monotonic() - d["_rx"] > 3.0 else ""
-                print(f"  {name:12} {d['state']:10} dest={d['destination'] or '-'} "
+                dock = {True: "도크위", False: "도크밖"}.get(d.get("docked"), "도크?")
+                ready = "READY" if d.get("ready") else "준비안됨"
+                b = d.get("battery") or {}
+                batt = (f"배터리={b['percent']:.0f}%" if b.get("percent") is not None else "배터리=?") \
+                    + (" 충전중" if b.get("status") == "CHARGING" else "")
+                print(f"  {name:12} {d['state']:10} {dock} {ready} {batt} dest={d['destination'] or '-'} "
                       f"남은거리={rem} 진행률={pct}{silent} {d.get('reason') or ''}")
 
 
@@ -86,7 +92,7 @@ def main():
     spinner.start()
     print(format_goals())
     print("로봇: " + ", ".join(f"{a}={r}" for a, r in console.alias.items()))
-    print("A F [1~3] | B PAUSE/RESUME/CANCEL | S 상태 | Q 종료")
+    print("A F [1~3] (도크 위면 자동 언독) | A DOCK | A UNDOCK | B PAUSE/RESUME/CANCEL | S 상태 | Q 종료")
     try:
         while rclpy.ok():
             try:

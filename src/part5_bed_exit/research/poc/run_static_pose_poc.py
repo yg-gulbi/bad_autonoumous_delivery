@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Run YOLO Pose and MediaPipe Pose on a fixed 20-image Roboflow sample."""
+"""고정된 Roboflow 이미지 20장에서 YOLO Pose와 MediaPipe Pose를 비교하는 POC.
+
+라벨을 해석해 조건별 샘플을 고르고 두 모델의 관절·ROI 판정을 실행해 개별 이미지와
+요약 표를 저장한다. 정적 자료에서 Pose 적용 가능성을 확인하기 위한 연구 경로다.
+"""
 from __future__ import annotations
 
 import argparse
@@ -19,7 +23,7 @@ from part5_bed_exit.methods.bed_exit_core import (
     PolygonROI,
     YoloPoseROI,
 )
-from research.datasets.downloads import save_json, sha256
+from research.dataset_download_label.downloads import save_json, sha256
 from research.poc.pose_visualization import (
     build_pose_record,
     render_comparison_sheet,
@@ -43,6 +47,7 @@ CSV_FIELDS = (
 
 
 def parse_yolo_labels(path: Path) -> list[dict]:
+    """YOLO 라벨 파일을 클래스·BBox·면적 사전 목록으로 해석한다."""
     labels = []
     for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         fields = line.split()
@@ -65,11 +70,13 @@ def parse_yolo_labels(path: Path) -> list[dict]:
 
 
 def _largest(labels: list[dict], class_id: int) -> dict | None:
+    """지정 클래스 라벨 중 면적이 가장 큰 항목을 반환한다."""
     matches = [label for label in labels if label["class_id"] == class_id]
     return max(matches, key=lambda label: label["area"], default=None)
 
 
 def classify_sample(labels: list[dict]) -> str | None:
+    """라벨 조합을 POC의 이탈·침대 안·모호 조건으로 분류한다."""
     classes = {label["class_id"] for label in labels}
     if 1 not in classes:
         return None
@@ -83,6 +90,7 @@ def classify_sample(labels: list[dict]) -> str | None:
 
 
 def discover_samples(dataset_root: Path) -> list[dict]:
+    """test 우선순위와 조건별 할당량에 따라 고정 평가 샘플을 고른다."""
     buckets = {category: [] for category in QUOTAS}
     for split in ("test", "valid", "train"):
         for image_path in sorted((dataset_root / split / "images").glob("*.jpg")):
@@ -105,7 +113,7 @@ def discover_samples(dataset_root: Path) -> list[dict]:
                 "label_path": label_path,
                 "roi": [[roi_box[0], roi_box[1]], [roi_box[2], roi_box[1]],
                         [roi_box[2], roi_box[3]], [roi_box[0], roi_box[3]]],
-                "initial_patient_bbox": None if patient_label is None else patient_label["box"],
+                "patient_bbox": None if patient_label is None else patient_label["box"],
                 "raw_classes": sorted({CLASS_NAMES[label["class_id"]] for label in labels}),
             }
             buckets[category].append(sample)
@@ -117,18 +125,20 @@ def discover_samples(dataset_root: Path) -> list[dict]:
 
 
 def _configure(method, sample: dict) -> None:
+    """독립 이미지 샘플의 ROI를 메서드에 적용한다."""
     roi = PolygonROI(sample["roi"])
     method.roi = roi
     method.selector.roi = roi
-    method.selector.initial_bbox = sample["initial_patient_bbox"]
     method.reset()
 
 
 def _text_bool(value: bool | None) -> str:
+    """선택적 불리언을 CSV에 쓸 소문자 문자열로 변환한다."""
     return "" if value is None else str(value).lower()
 
 
 def _environment() -> dict:
+    """POC 재현을 위한 플랫폼·Python·패키지 버전을 수집한다."""
     packages = {}
     for name in ("numpy", "opencv-python", "torch", "ultralytics", "mediapipe"):
         try:
@@ -141,6 +151,7 @@ def _environment() -> dict:
 
 
 def run(dataset_root: Path, model_dir: Path, output_dir: Path) -> dict:
+    """고정 정적 샘플에서 두 Pose 모델을 실행하고 표·이미지를 저장한다."""
     dataset_root, model_dir, output_dir = map(Path, (dataset_root, model_dir, output_dir))
     if output_dir.exists():
         raise FileExistsError(f"Refusing to overwrite POC output: {output_dir}")
@@ -287,6 +298,7 @@ def run(dataset_root: Path, model_dir: Path, output_dir: Path) -> dict:
 
 
 def main() -> int:
+    """기본 경로와 명령행 인자를 조합해 정적 Pose POC를 실행한다."""
     package_root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset-root", type=Path, default=package_root / "research/data/datasets/roboflow_bed_exit_v4/raw")

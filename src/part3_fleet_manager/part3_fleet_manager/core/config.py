@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
-from math import isfinite
+from math import cos, isfinite, radians, sin
 from os import PathLike
 from os.path import expanduser
 
@@ -20,12 +20,25 @@ class ConfigError(ValueError):
 
 
 @dataclass(frozen=True)
+class DockPose:
+    x: float
+    y: float
+    yaw_deg: float
+
+    def path_end(self):
+        yaw = radians(self.yaw_deg)
+        return ((self.x - 0.6 * cos(yaw), self.y - 0.6 * sin(yaw)), (self.x, self.y))
+
+
+@dataclass(frozen=True)
 class RobotCfg:
     label: str
     mark: str
     ns: str
     role: str
     start_zone: str
+    return_to: str = "ZONE"
+    dock: DockPose | None = None
 
 
 @dataclass(frozen=True)
@@ -40,6 +53,7 @@ class RobotLinkCfg:
     request_id: str
     accept_timeout_s: float
     link_timeout_s: float
+    start_timeout_s: float = 120.0
 
 
 @dataclass(frozen=True)
@@ -108,6 +122,7 @@ class BedMonitorCfg:
 class SafetyCfg:
     bed_exit_pause_targets: tuple[str, ...]
     bed_monitor: BedMonitorCfg = BedMonitorCfg()
+    use_hazard_topic: bool = False
     bump_neighbor_m: float = 1.0
     proximity_stop_m: float = 0.6
     proximity_resume_m: float = 0.9
@@ -141,7 +156,9 @@ class PublishCfg:
 class MockCfg:
     speed_mps: float = 0.2
     stall_radius_m: float = 0.05
-    supports_request_id: bool = True
+    supports_request_id: bool = False
+    localizing_s: float = 3.0
+    report_rejections: bool = False
 
 
 @dataclass(frozen=True)
@@ -275,6 +292,7 @@ def _load_robot_link(data: Mapping) -> RobotLinkCfg:
     return RobotLinkCfg(
         mode=_text(data.get("mode"), "robot_link.mode", ("HOSPITAL_NAV",)),
         request_id=_text(data.get("request_id"), "robot_link.request_id", ("auto", "always", "never")),
+        start_timeout_s=_number(data.get("start_timeout_s", 120.0), "robot_link.start_timeout_s", positive=True),
         **topics,
         **_numbers(data, "robot_link", ("accept_timeout_s", "link_timeout_s"), positive=True),
     )
@@ -310,11 +328,18 @@ def config_from_dict(data: Mapping) -> FleetConfig:
         mark = _text(robot.get("mark", chr(ord("A") + len(robots))), f"{path}.mark")
         if len(mark) != 1 or any(value.mark == mark for value in robots.values()):
             raise ConfigError(f"{path}.mark: 서로 다른 표시 글자 한 자가 필요합니다")
+        raw_dock = robot.get("dock")
+        dock = None
+        if raw_dock is not None:
+            xy = _point(raw_dock, f"{path}.dock")
+            dock = DockPose(*xy, _number(raw_dock.get("yaw_deg"), f"{path}.dock.yaw_deg"))
         robots[robot_id] = RobotCfg(
+            dock=dock,
             mark=mark,
             label=_text(robot.get("label"), f"{path}.label"),
             ns=ns,
             role=_text(robot.get("role"), f"{path}.role", MISSION_TYPES),
+            return_to=_text(robot.get("return_to", "ZONE"), f"{path}.return_to", ("ZONE", "DOCK")),
             start_zone=_text(robot.get("start_zone"), f"{path}.start_zone", zones),
         )
 
@@ -354,7 +379,7 @@ def config_from_dict(data: Mapping) -> FleetConfig:
     minimum = _number(assignment["min_battery_pct"], "assignment.min_battery_pct", minimum=0)
     if minimum > 100:
         raise ConfigError("assignment.min_battery_pct: 0~100 범위가 필요합니다")
-    mission = {"return_home": True, "return_interruptible": True, "return_level": 1, **cfg["mission"]}
+    mission = {"return_to_dock": False, "return_home": True, "return_interruptible": True, "return_level": 1, **cfg["mission"]}
     return_level = _value(mission, "return_level", "mission", int)
     if not 1 <= return_level <= 3:
         raise ConfigError("mission.return_level: 1~3 정수가 필요합니다")
@@ -374,6 +399,8 @@ def config_from_dict(data: Mapping) -> FleetConfig:
     return FleetConfig(obstacle=obstacle,
         assignment=AssignmentCfg(_text(assignment["mode"], "assignment.mode", ("IDLE_BEST_BATTERY", "ROLE")), minimum),
         mock=MockCfg(**_numbers(mock, "mock", ("speed_mps", "stall_radius_m"), positive=True),
+                     localizing_s=_number(mock["localizing_s"], "mock.localizing_s", minimum=0),
+                     report_rejections=_value(mock, "report_rejections", "mock", bool),
                      supports_request_id=_value(mock, "supports_request_id", "mock", bool)),
         robots=robots,
         type_to_robot=type_to_robot,
@@ -394,6 +421,7 @@ def config_from_dict(data: Mapping) -> FleetConfig:
         safety=SafetyCfg(
             bed_exit_pause_targets=tuple(_text(r, "safety.bed_exit_pause_targets", robots) for r in targets),
             bed_monitor=monitor,
+            use_hazard_topic=_value({"use_hazard_topic": False, **cfg["safety"]}, "use_hazard_topic", "safety", bool),
             bump_neighbor_m=_number(cfg["safety"].get("bump_neighbor_m", SafetyCfg.bump_neighbor_m),
                                     "safety.bump_neighbor_m", minimum=0),
             **_distance_limits(cfg["safety"], "safety", "proximity_stop_m", "proximity_resume_m", SafetyCfg),
@@ -405,7 +433,7 @@ def config_from_dict(data: Mapping) -> FleetConfig:
             manual_level=manual_level,
             retry_after_return=retry_after_return,
             confirm_at_stops=_value(cfg["mission"], "confirm_at_stops", "mission", bool),
-            return_to_dock=_value(cfg["mission"], "return_to_dock", "mission", bool),
+            return_to_dock=_value(mission, "return_to_dock", "mission", bool),
         ),
         publish=PublishCfg(finished_mission_limit=limit, **_numbers(cfg["publish"], "publish", ("fleet_state_hz", "tick_hz"),
                                       positive=True)),

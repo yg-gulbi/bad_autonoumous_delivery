@@ -196,6 +196,9 @@ def parse_fleet_state(text: str) -> dict:
             "wait_reason": (str, NULL), "progress_pct": (*NUMBER, NULL), "remaining_m": (*NUMBER, NULL),
             "stall_s": NUMBER, "paused_by": (str, NULL),
         }, path=path)
+        for key, types in (("battery_status", (str, NULL)), ("docked", (bool, NULL))):
+            if key in robot:
+                _fields(robot, {key: types}, path=path)
         if "mark" in robot and (not isinstance(robot["mark"], str) or len(robot["mark"]) != 1):
             raise SchemaError(f"{path}mark: 표시 글자 한 자가 필요합니다")
         if "obstacle" in robot and robot["obstacle"] is not None:

@@ -32,6 +32,7 @@ class Leg:
     mission_id: str | None
     carrying_patient: bool
     mission_type: str | None = None
+    dock_path: tuple[g.Point, ...] = ()  # Dock approach and contact points in map coordinates.
 
 
 @dataclass
@@ -165,7 +166,8 @@ class ResourceManager:
             for name in names:
                 self.resources[name].reason, self.resources[name].decided_at = reason, now
 
-    def request(self, robot, destination, level, now, *, mission_id=None, carrying_patient=False, mission_type=None) -> Leg:
+    def request(self, robot, destination, level, now, *, mission_id=None, carrying_patient=False,
+                mission_type=None, dock_path=()) -> Leg:
         if robot not in self.config.robots or destination not in self.config.zones:
             raise ValueError("unknown robot or destination")
         if type(level) is not int or not 1 <= level <= 3:
@@ -174,7 +176,7 @@ class ResourceManager:
             raise ValueError(f"{robot} already has a leg")
         if not self.pending:
             self._decide_after = max(self._decide_after, now + self.config.resources.decision_window_s)
-        leg = Leg(robot, destination, level, now, mission_id, carrying_patient, mission_type)
+        leg = Leg(robot, destination, level, now, mission_id, carrying_patient, mission_type, dock_path)
         self.pending[robot] = leg
         self.record("RESOURCE_REQUEST", now, f"{self.robot_label(robot)} — {self.zone_label(destination)}으로 가는 구간 요청",
                     robot=robot, mission_id=mission_id, destination=destination, level=level)

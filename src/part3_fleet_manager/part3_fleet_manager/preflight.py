@@ -20,8 +20,7 @@ from sensor_msgs.msg import BatteryState
 from std_msgs.msg import Bool, String
 
 from .core.config import ConfigError, load_config
-from .core.robot_protocol import STATES
-from .preflight_checks import compare_zones, discovery_ports, find_goal_file, goal_coordinates
+from .preflight_checks import compare_zones, discovery_ports, find_goal_file, goal_coordinates, state_rows
 from .robot_link import AMCL_QOS, DockStatus, HazardDetectionVector
 
 ENVIRONMENT = ("ROS_DOMAIN_ID", "ROS_DISCOVERY_SERVER", "ROS_SUPER_CLIENT", "ROS_AUTOMATIC_DISCOVERY_RANGE",
@@ -71,7 +70,8 @@ class Observations(Node):
             listen(BatteryState, topics.battery_topic, qos_profile_sensor_data, self.battery)
             if DockStatus is not None:
                 listen(DockStatus, topics.dock_status_topic, qos_profile_sensor_data, self.dock)
-                listen(HazardDetectionVector, topics.hazard_topic, qos_profile_sensor_data, self.hazard)
+                if config.safety.use_hazard_topic:
+                    listen(HazardDetectionVector, topics.hazard_topic, qos_profile_sensor_data, self.hazard)
 
     def bed(self, msg):
         self.bed_samples += 1
@@ -84,7 +84,7 @@ class Observations(Node):
             return
         if (isinstance(report, dict) and report.get("type") == "STATE" and report.get("robot_id") == ns
                 and isinstance(report.get("state"), str)):
-            self.states[ns] = (report["state"], monotonic())
+            self.states[ns] = (report, monotonic())
 
     def pose(self, ns, msg):
         pos = msg.pose.pose.position
@@ -117,16 +117,20 @@ class Observations(Node):
         for unit in self.config.robots.values():
             ns = unit.ns
             data = self.seen[ns]
-            state, last = self.states.get(ns, (None, float("-inf")))
-            if state not in STATES or monotonic() - last > self.config.robot_link.link_timeout_s:
-                state = None
-            rows = {"hospital_nav/status (STATE)": state, **{key: data.get(key) for key in
-                    ("amcl_pose", "battery_state", "dock_status", "hazard_detection")},
-                    "navigate_to_pose": "액션 서버" if f"/{ns}/navigate_to_pose" in actions else None}
+            report, last = self.states.get(ns, ({}, float("-inf")))
+            fresh = monotonic() - last <= self.config.robot_link.link_timeout_s
+            rows = state_rows(report if fresh else {})
             missing = [key for key, value in rows.items() if value is None]
             print(f"\n{unit.label} (/{ns}) · {'미충족' if missing else 'OK'}")
             for key, value in rows.items():
                 print(f"  {key:26} {'OK · ' + value if value is not None else '없음'}")
+            for key in ("amcl_pose", "battery_state", "dock_status", "hazard_detection", "navigate_to_pose"):
+                value = data.get(key, "미수신")
+                if key == "hazard_detection" and not self.config.safety.use_hazard_topic:
+                    value = "사용 안 함"
+                elif key == "navigate_to_pose":
+                    value = "액션 서버 있음" if f"/{ns}/navigate_to_pose" in actions else "미발견"
+                print(f"  참고 {key:23} {value}")
             failures.extend(f"/{ns} {key} 없음" for key in missing)
             command = self.config.robot_link.command_topic.format(ns=ns)
             publishers = [f"{p.node_namespace.rstrip('/')}/{p.node_name}" for p in
@@ -144,7 +148,8 @@ class Observations(Node):
         text = "없음" if self.bed_value is None else "이탈" if self.bed_value else "정상"
         print(f"\n/patient/bed_exit · {self.bed_samples/duration:.1f} Hz ({self.bed_samples}건, 마지막 값 {text})")
         if DockStatus is None:
-            print("경고 · 도크·위험 센서 메시지 패키지 ros-jazzy-irobot-create-msgs 확인 필요")
+            topics = "dock_status·hazard_detection" if self.config.safety.use_hazard_topic else "dock_status"
+            print(f"참고 · irobot_create_msgs 미설치로 {topics} 원본 구독 생략")
         return failures
 
 

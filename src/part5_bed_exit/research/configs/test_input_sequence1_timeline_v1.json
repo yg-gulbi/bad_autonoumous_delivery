@@ -1,0 +1,27 @@
+{
+  "video": "test_input_sequence1.mp4",
+  "fps": 30.0,
+  "total_frames": 1024,
+  "roi_config": "test_input_sequence1_roi_v1.json",
+  "verification_note": "Visually verified at 15-frame (0.5s) resolution against test_input_sequence1_roi_v1.json bed_polygon.",
+  "events": [
+    {"start_sec": 0.0, "end_sec": 0.75, "start_frame": 0, "end_frame": 23, "exit_hint": false, "phase": "supine_baseline", "description": "정자세 (ROI 내부)"},
+    {"start_sec": 0.75, "end_sec": 3.25, "start_frame": 23, "end_frame": 98, "exit_hint": true, "phase": "left_side_arm_exit", "description": "화면 왼쪽으로 오른팔 뻗어 ROI 밖 이탈"},
+    {"start_sec": 3.25, "end_sec": 4.75, "start_frame": 98, "end_frame": 143, "exit_hint": false, "phase": "supine_return_1", "description": "정자세 복귀 (ROI 내부)"},
+    {"start_sec": 4.75, "end_sec": 6.25, "start_frame": 143, "end_frame": 188, "exit_hint": true, "phase": "right_side_arm_exit", "description": "화면 오른쪽으로 왼팔 뻗어 ROI 밖 이탈"},
+    {"start_sec": 6.25, "end_sec": 7.25, "start_frame": 188, "end_frame": 218, "exit_hint": false, "phase": "supine_return_2", "description": "정자세 복귀 (ROI 내부)"},
+    {"start_sec": 7.25, "end_sec": 8.75, "start_frame": 218, "end_frame": 263, "exit_hint": true, "phase": "all_limbs_exit", "description": "양팔·양다리 대자로 ROI 밖 이탈"},
+    {"start_sec": 8.75, "end_sec": 10.25, "start_frame": 263, "end_frame": 308, "exit_hint": false, "phase": "supine_return_3", "description": "정자세 복귀 (ROI 내부)"},
+    {"start_sec": 10.25, "end_sec": 13.25, "start_frame": 308, "end_frame": 398, "exit_hint": true, "phase": "left_roll_shift_exit", "description": "화면 왼쪽으로 몸통·다리 쏠리며 ROI 왼쪽 경계 이탈"},
+    {"start_sec": 13.25, "end_sec": 14.75, "start_frame": 398, "end_frame": 443, "exit_hint": false, "phase": "supine_safe", "description": "정자세 (ROI 내부)"},
+    {"start_sec": 14.75, "end_sec": 17.25, "start_frame": 443, "end_frame": 518, "exit_hint": true, "phase": "right_side_leg_arm_exit", "description": "화면 오른쪽으로 다리·팔 ROI 밖 이탈"},
+    {"start_sec": 17.25, "end_sec": 18.75, "start_frame": 518, "end_frame": 563, "exit_hint": false, "phase": "sit_up_inside", "description": "일어나 앉는 자세 (상체 ROI 내부)"},
+    {"start_sec": 18.75, "end_sec": 21.75, "start_frame": 563, "end_frame": 653, "exit_hint": true, "phase": "sit_up_top_exit", "description": "앉은 상태에서 머리·상체가 상단 ROI 경계 밖 이탈"},
+    {"start_sec": 21.75, "end_sec": 22.75, "start_frame": 653, "end_frame": 683, "exit_hint": false, "phase": "lie_back_inside", "description": "다시 누우며 ROI 내부 복귀"},
+    {"start_sec": 22.75, "end_sec": 24.25, "start_frame": 683, "end_frame": 728, "exit_hint": true, "phase": "turn_left_edge_exit", "description": "돌아눕는 과정에서 팔/어깨가 왼쪽 ROI 경계 밖 이탈"},
+    {"start_sec": 24.25, "end_sec": 25.75, "start_frame": 728, "end_frame": 773, "exit_hint": false, "phase": "prone_inside", "description": "엎드린 상태 (팔꿈치 포함 ROI 내부)"},
+    {"start_sec": 25.75, "end_sec": 28.25, "start_frame": 773, "end_frame": 848, "exit_hint": true, "phase": "prone_arms_exit", "description": "엎드린 채 양팔·한팔 좌우 ROI 밖 이탈"},
+    {"start_sec": 28.25, "end_sec": 29.75, "start_frame": 848, "end_frame": 893, "exit_hint": false, "phase": "pushup_inside", "description": "양팔 모으고 상체 일으키기 직전 (ROI 내부)"},
+    {"start_sec": 29.75, "end_sec": 34.13, "start_frame": 893, "end_frame": 1024, "exit_hint": true, "phase": "stand_up_exit", "description": "상체 상단 ROI 이탈 후 기립 및 보행 이탈"}
+  ]
+}

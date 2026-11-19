@@ -19,7 +19,9 @@ def test_default_yaml_loads(cfg):
     assert cfg.robot_link.command_topic.format(ns=cfg.robots["robot_a"].ns) == (
         "/robot2/hospital_nav/command"
     )
-    assert cfg.robot_link.request_id == "auto"
+    assert cfg.robot_link.request_id == "auto" and cfg.robot_link.start_timeout_s == 120
+    assert not cfg.safety.use_hazard_topic and all(r.return_to == "ZONE" for r in cfg.robots.values())
+    assert not cfg.mock.report_rejections and cfg.mock.localizing_s == 3
     assert set(cfg.zones) == set("ABCDEF")
     assert cfg.corridor.mouths["ROOM_E"] == (-1.08, -2.25)
     assert cfg.corridor.yield_enabled
@@ -33,7 +35,7 @@ def test_default_yaml_loads(cfg):
     assert cfg.deadlock.yield_zones == {"ROOM_B": "D", "ROOM_E": "F"}
     assert cfg.safety.bed_exit_pause_targets == ("robot_a",)
     assert cfg.mission.confirm_at_stops and not cfg.mission.return_to_dock
-    assert (cfg.mock.speed_mps, cfg.mock.stall_radius_m, cfg.mock.supports_request_id) == (0.2, 0.05, True)
+    assert (cfg.mock.speed_mps, cfg.mock.stall_radius_m, cfg.mock.supports_request_id) == (0.2, 0.05, False)
     assert (cfg.publish.fleet_state_hz, cfg.publish.tick_hz) == (5, 10)
     assert cfg.db_path == str(Path("~/.bad/bad.db").expanduser())
 
@@ -43,6 +45,12 @@ def test_default_yaml_loads(cfg):
     ("robots.robot_b.mark", "A"),
     ("robots.robot_a.mark", "AB"),
     ("robots.robot_a.start_zone", "Z"),
+    ("robots.robot_a.return_to", "HOME"),
+    ("robots.robot_a.dock.yaw_deg", float("nan")),
+    ("robot_link.start_timeout_s", 0),
+    ("safety.use_hazard_topic", "false"),
+    ("mock.localizing_s", -1),
+    ("mock.report_rejections", "false"),
     ("type_to_robot.MED_ROUND", "missing"),
     ("assignment.mode", "ROUND_ROBIN"),
     ("assignment.min_battery_pct", 101),

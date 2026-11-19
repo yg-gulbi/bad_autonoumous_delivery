@@ -117,6 +117,7 @@ class Safety:
         self.targets = config.safety.bed_exit_pause_targets
         self.monitor = BedMonitor(config.safety.bed_monitor, self.targets, record, decisions)
         self.causes = {r: set() for r in config.robots}
+        self.use_hazard_topic = config.safety.use_hazard_topic
         self.bump_neighbor_m = config.safety.bump_neighbor_m
         self.bump = dict.fromkeys(config.robots, False)
         self.bed_exit = self.since = None
@@ -146,6 +147,8 @@ class Safety:
 
     def hazards(self, robot, detections, now, poses):
         """Consume normalized hazard names or mappings from the transport adapter."""
+        if not self.use_hazard_topic:
+            return
         if isinstance(detections, (str, dict)):
             detections = [detections]
         bumped = any((d.get("type") if isinstance(d, dict) else d) == "BUMP" for d in detections)

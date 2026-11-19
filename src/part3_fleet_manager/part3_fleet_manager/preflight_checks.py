@@ -7,6 +7,8 @@ import socket
 
 import psutil
 
+from .core.robot_protocol import STATES, number
+
 
 def discovery_ports(setting):
     """Check the control PC's UDP listeners without sending probe packets to robots."""
@@ -92,3 +94,23 @@ def compare_zones(zones, goals):
             suffix = "" if delta is None else f" (거리 {delta:.3f} m)"
             warnings.append(f"{zone} 구역 · 관제 {left} / PART 04 {right}{suffix}".replace("None", "없음"))
     return warnings
+
+
+def state_rows(report):
+    """Required field readiness from a single fresh STATE, independent of the local ROS graph."""
+    state = report.get("state")
+    battery = report.get("battery")
+    pose = report.get("pose")
+    docked = report.get("docked")
+    percent = number(battery.get("percent")) if isinstance(battery, dict) else None
+    xy = None
+    if isinstance(pose, dict) and all(number(pose.get(k)) is not None for k in ("x", "y")):
+        xy = f"({pose['x']:.3f}, {pose['y']:.3f})"
+    battery_text = None
+    if (percent is not None and 0 <= percent <= 100 and isinstance(battery.get("status"), str)
+            and "voltage" in battery and (battery["voltage"] is None or number(battery["voltage"]) is not None)):
+        voltage = "" if battery["voltage"] is None else f", {battery['voltage']:.2f} V"
+        battery_text = f"{percent:g}%{voltage}, {battery['status']}"
+    return {"hospital_nav/status (STATE)": state if isinstance(state, str) and state in STATES else None,
+            "STATE.battery": battery_text, "STATE.pose": xy,
+            "STATE.docked": ("도크 위" if docked else "도크 밖") if type(docked) is bool else None}

@@ -12,7 +12,8 @@ A, B = "robot_a", "robot_b"
 
 
 @pytest.fixture
-def sim(cfg, tmp_path):
+def sim(cfg, tmp_path, request):
+    cfg = replace(cfg, safety=replace(cfg.safety, use_hazard_topic=getattr(request, "param", False)))
     # These stage 2 scenarios, including 26, use fixed patient and medication roles.
     s = Simulation(replace(cfg, corridor=replace(cfg.corridor, mode="SHARED_YIELD"),
                            assignment=replace(cfg.assignment, mode="ROLE"), db_path=str(tmp_path / "bad.db")))
@@ -208,6 +209,7 @@ def test_return_resources_remain_occupied_during_preemption(shared):
     assert commands(shared.tick(2.7))[A].startswith("MOVE E 1")
 
 
+@pytest.mark.parametrize("sim", [True], indirect=True)
 def test_10_bed_exit_and_20_bump_require_operator_resume(sim):
     sim.patient()
     assert commands(sim.tick(0))[A].startswith("MOVE A 2")

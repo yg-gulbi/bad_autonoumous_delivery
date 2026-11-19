@@ -51,12 +51,14 @@ class CollisionControl:
 
     def zone_held(self, leg, now):
         robot, goal = leg.robot, leg.destination
+        targets = (self.rm.config.zones[goal], *leg.dock_path)
+        radius = self.rm.config.resources.zone_occupied_m
         peer = None
         for other, link in self.links.items():
             if other == robot:
                 continue
             active = self.rm.active.get(other)
-            if ((link.pose is not None and dist(link.pose, self.rm.config.zones[goal]) <= self.rm.config.resources.zone_occupied_m)
+            if ((link.pose is not None and any(dist(link.pose, p) <= radius for p in targets))
                     or (active and active.destination == goal)):
                 peer = other
                 break
@@ -135,7 +137,7 @@ class CollisionControl:
                     self._clear_near(robot, peer, now, "로봇 사이에 재개 간격이 확보됐습니다.")
             elif distance < policy.proximity_stop_m:
                 for robot, peer in ((a,b), (b,a)):
-                    if self.links[robot].state == "MOVING" or robot in self.contacts:
+                    if self.links[robot].state in {"MOVING", "DOCKING"} or robot in self.contacts:
                         self._hold_near(robot, peer, distance, now)
 
     def hold_restart(self, robot, now):

@@ -1,9 +1,4 @@
-"""Detection and segmentation strategies for the Part 5 bed-exit runtime.
+"""Part 5 판단 메서드 하위 패키지.
 
-The core contains inference/geometry only; BedExitState owns the ROS vote.
+운영과 연구는 모두 ``bed_exit_core.py``의 Detection·Segmentation·Pose 구현을 사용한다.
 """
-
-from part5_bed_exit.methods.detection_method import DetectionBedExitMethod
-from part5_bed_exit.methods.segmentation_method import SegmentationBedExitMethod
-
-__all__ = ['DetectionBedExitMethod', 'SegmentationBedExitMethod']

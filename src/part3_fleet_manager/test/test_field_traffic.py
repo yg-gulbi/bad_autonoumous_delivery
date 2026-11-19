@@ -75,6 +75,7 @@ def test_44_two_already_inside_use_yield_fallback(cfg):
 
 @pytest.mark.parametrize("distance,targets", [(0.8, [A, B]), (1.0, [A, B]), (1.01, [A])])
 def test_45_bumper_stops_neighbors_until_individually_resumed(cfg, distance, targets):
+    cfg = replace(cfg, safety=replace(cfg.safety, use_hazard_topic=True))
     sim = Simulation(replace(cfg, corridor=replace(cfg.corridor, mode="DIRECTIONAL"), db_path=":memory:"))
     try:
         sim.frames[B]["pose"] = sim.pose("A")
@@ -196,6 +197,7 @@ def test_ack_cache_keeps_last_500_and_replays_cached_duplicate(cfg):
 
 
 def test_45_stationary_robot_bumper_stops_the_moving_neighbor(cfg):
+    cfg = replace(cfg, safety=replace(cfg.safety, use_hazard_topic=True))
     cfg = replace(cfg, corridor=replace(cfg.corridor, mode="DIRECTIONAL"), db_path=":memory:")
     sim = Simulation(cfg)
     try:
@@ -357,7 +359,8 @@ def test_44_same_tick_opposite_requests_grant_only_one(cfg, a_from, a_to, b_from
 
 
 @pytest.fixture
-def field(cfg):
+def field(cfg, request):
+    cfg = replace(cfg, safety=replace(cfg.safety, use_hazard_topic=getattr(request, "param", False)))
     sim = Simulation(replace(cfg, db_path=":memory:", corridor=replace(cfg.corridor, mode="DIRECTIONAL")))
     yield sim
     sim.core.store.close()
@@ -555,6 +558,7 @@ def test_49_cards_authorize_only_one_robot(field):
 
 
 @pytest.mark.parametrize("inhibit", ["MANUAL", "BUMP", "APPROACH"])
+@pytest.mark.parametrize("field", [True], indirect=True)
 def test_49_peer_first_respects_other_stops_and_separation(field, inhibit):
     sim = field
     sim.frames[A]["pose"] = sim.pose((-2.0, -.3))

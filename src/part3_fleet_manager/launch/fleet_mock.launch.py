@@ -26,6 +26,7 @@ def launch_nodes(context):
             params["battery_pct"] = ParameterValue(battery, value_type=float)
         if r1.perform(context):
             params["supports_request_id"] = ParameterValue(r1, value_type=bool)
+            params["report_rejections"] = ParameterValue(r1, value_type=bool)
         if speed.perform(context):
             params["speed_mps"] = ParameterValue(speed, value_type=float)
         mocks.append(Node(package=package, executable="mock_hospital_nav", namespace=unit.ns, output="screen",

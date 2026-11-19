@@ -60,9 +60,9 @@ function robotCard(id, r) {
         controls = (st === "FAULT" ? btn("다시 시도", "retry", id) : btn("정지", "pause", id)) + btn("임무 취소", "cancel", r.mission_id || "", "", !r.mission_id);
     const mark = r.mark;
     const fields = [["가는 곳", destinationText(r, job)], ["지금", locationText(r)],
-        ["배터리", r.battery_pct == null ? "미수신" : Math.round(r.battery_pct) + "%"], ["연결", "/" + r.ns]];
+        ["배터리", (r.battery_pct == null ? "미수신" : Math.round(r.battery_pct) + "%") + (r.battery_status === "CHARGING" ? " 충전 중" : "")], ["연결", "/" + r.ns]];
     return `<div class="unit-title">${robotMark(r)}<div><h2>${h(r.label)}</h2><small>Robot ${h(mark)}</small></div>${pill(...displayState(id, r))}</div>
-        <p>${h(job ? job.mission_id + "　" + cfg.kinds[job.type] + "　Level " + job.level : home ? "홈 구역 복귀" : r.leg ? "직접 이동" : "배정된 작업 없음")}</p>
+        <p>${h(job ? job.mission_id + "　" + cfg.kinds[job.type] + "　Level " + job.level : home ? (r.leg?.purpose === "도크 복귀" ? "도크 복귀" : "홈 구역 복귀") : r.leg ? "직접 이동" : "배정된 작업 없음")}</p>
         <div class="unit-facts">${fields.map(([key,value]) => `<span><small>${key}</small> ${h(value)}</span>`).join("")}</div>
         ${obstacleText(r) ? `<p>${h(obstacleText(r))}</p>` : ""}
         <div class="buttons">${controls}${job ? btn("작업 상세", "inspect", job.mission_id, "linkbtn") : ""}</div>`;

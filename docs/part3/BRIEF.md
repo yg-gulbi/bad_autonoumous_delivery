@@ -119,7 +119,7 @@
                                       │  bad.db (SQLite WAL. 관제만 쓴다. 화면은 읽기 전용)
                                       ▼  /<ns>/hospital_nav/command (String)
  [hospital_nav · PART 04, 로봇마다] ─ /<ns>/hospital_nav/status (String JSON) ─▶ 관제
-                                     (+ 관제가 직접 구독: /<ns>/amcl_pose, battery_state, hazard_detection, dock_status)
+                                     (+ 관제가 직접 구독: /<ns>/amcl_pose, battery_state, dock_status. hazard_detection은 선택)
  [obstacle_classifier · PART 06, 로봇마다] ◀─ /<ns>/obstacle/inspect_image ─ 관제
                                            ─ /<ns>/obstacle_classifier/result ─▶ 관제
 ```
@@ -181,20 +181,23 @@
 
 ### 3.3 관제 ↔ PART 04 — 실제 코드 기준
 
-PART 04는 로봇마다 `hospital_nav`(CommandReceiver + MissionManager + NavigationManager)를 띄운다. 관제는 아래 두 토픽으로만 로봇을 움직이고 상태를 받는다.
+PART 04의 ROS 패키지 이름은 `hospital_nav`, 소스 폴더는 `src/part4_amr_nav`다. 각 로봇 PC에서 `ros2 run hospital_nav command_receiver --robot robotN`을 실행한다. 11/19 도킹 추가분은 main의 `3a7401b`를 기준으로 한다. 관제는 아래 두 토픽으로만 로봇을 움직이고 상태를 받는다.
 
 **명령: 관제 → `/<ns>/hospital_nav/command` (`std_msgs/String`, 텍스트)**
 
 | 명령 | 뜻 | PART 04가 받는 조건 |
 |---|---|---|
 | `MOVE <구역> <응급도>` 예: `MOVE F 3` | 구역 A~F로 이동 시작. 응급도 1~3 | 로봇 상태가 `IDLE`·`COMPLETE`·`FAILED`·`CANCELED`이고 주행 중이 아닐 때만. **`PAUSED`에서는 거절된다** |
+| `DOCK` | 도크 앞 0.6 m까지 이동한 뒤 접안 | 도크 좌표가 설정돼 있고 도크 밖이며 MOVE를 시작할 수 있을 때. 명령은 인자 없이 보낸다 |
+| `UNDOCK` | 도크를 벗어나 그 자리에 정지 | 도크 위이고 진행 중인 임무가 없을 때. 관제의 일반 출발에는 MOVE 하나를 사용한다 |
 | `PAUSE` | 주행 취소 후 정지 → `PAUSED` | 상태가 `MOVING`일 때만 |
 | `RESUME` | 같은 목적지로 다시 출발 | 상태가 `PAUSED`일 때만 |
 | `CANCEL` | 임무 취소 → `CANCELED` | 끝난 상태가 아닐 때. 끝난 상태에서 받은 `CANCEL`은 이벤트 없이 버린다 |
 
-- 목적지는 **구역 이름(A~F)만** 된다. 좌표나 복도 중간 지점은 보낼 수 없다.
+- `MOVE`의 목적지는 **구역 이름(A~F)만** 된다. 좌표나 복도 중간 지점은 보낼 수 없다.
 - `PAUSED`인 로봇을 다른 곳으로 보내려면 `CANCEL` → `CANCELED` 확인 → `MOVE` 순서로 보낸다.
-- 도킹 상태는 보지 않는다. 도크에 붙은 채 `MOVE`를 받으면 언도킹 없이 바로 Nav2 주행을 시작한다 (R3 요청 중). 시험 전에는 로봇을 도크에서 떼어 둔다.
+- 도크에서 MOVE를 수락하면 `MISSION_ACCEPTED → UNDOCKING → UNDOCKED → LOCALIZING → NAVIGATING`으로 진행한다. 언독 후 Nav2 활성화와 AMCL 위치 갱신을 기다린다. 관제는 이 시간을 ‘도크에서 출발 준비’로 표시한다.
+- DOCK은 `MISSION_ACCEPTED → NAVIGATING → DOCKING → DOCKED`로 진행한다. 완료 STATE는 `COMPLETE`다. 목적지까지 남은 거리와 명령 응답은 해당 로봇의 `mission_id`로 구분한다.
 - PART 04에 요구한 R1(11장)이 들어오기 전과 후가 다르다. `robot_link`는 **두 경우를 모두** 처리한다.
 
 | | R1 반영 전 (지금 main) | R1 반영 후 |
@@ -216,7 +219,8 @@ PART 04는 로봇마다 `hospital_nav`(CommandReceiver + MissionManager + Naviga
 ```json
 {"type": "STATE", "robot_id": "robot2", "mission_id": "9f2c1a0b3d4e", "state": "MOVING",
  "destination": "F", "priority": 3, "reason": "", "pose": {"x": -1.52, "y": -2.31},
- "remaining_m": 2.84, "percent": 41.3}
+ "remaining_m": 2.84, "percent": 41.3, "docked": false, "ready": true,
+ "battery": {"percent": 82.0, "voltage": 15.42, "status": "DISCHARGING"}}
 ```
 
 ```json
@@ -227,10 +231,12 @@ PART 04는 로봇마다 `hospital_nav`(CommandReceiver + MissionManager + Naviga
 | `state` 값 | 뜻 |
 |---|---|
 | `IDLE` | 시작 후 임무 없음 |
-| `MOVING` | 주행 중 |
+| `UNDOCKING` · `LOCALIZING` | 도크에서 이탈 중, 언독 후 출발 준비 중 |
+| `MOVING` | 구역 또는 도크 앞까지 주행 중 |
+| `DOCKING` | 도크 앞 도착 후 접안 중 |
 | `STOPPING_PAUSE` → `PAUSED` | 일시정지 중 → 정지 완료 |
 | `STOPPING_CANCELED` → `CANCELED` | 취소 중 → 취소 완료 |
-| `COMPLETE` | 도착 (이벤트는 `ARRIVED`) |
+| `COMPLETE` | 구역 도착, 도킹 또는 단독 언독 완료 |
 | `FAILED` | 실패 (`reason`에 `"Nav2: ABORTED"` 등) |
 
 | `event` 값 | 함께 오는 값 |
@@ -243,9 +249,12 @@ PART 04는 로봇마다 `hospital_nav`(CommandReceiver + MissionManager + Naviga
 | `ARRIVED` | `destination`, `percent`, `pose`, `goal_error_m` |
 | `MISSION_FAILED` · `MISSION_CANCELED` | `reason`, `remaining_m`, `percent` |
 | `COMMAND_REJECTED` (R1 반영 후) | `command`, `reason`, `request_id`, `state` |
-| `UNDOCKING` · `UNDOCKED` (R3 반영 후) | — (R3 반영 후 STATE에 `docked`가 더해지고 상태 `UNDOCKING`이 생긴다) |
+| `UNDOCKING` · `UNDOCKED` · `LOCALIZING` | 언독 시작·완료, 위치 준비 시작 |
+| `READY` | `pose`. 도크 밖에서 위치와 Nav2 준비 확인 |
+| `DOCKING` · `DOCKED` | 접안 시작·완료. DOCKED에서 도킹 상태를 참으로 기록 |
 
-- 모르는 `state`·`event` 값이 와도 죽지 않는다. 로그를 남기고 화면에 그대로 보여 준다.
+- STATE의 `battery.percent`는 0~100의 잔량이고, 최상위 `percent`는 구간 진행률이다. `battery.status=CHARGING`은 ‘충전 중’으로 표시한다. 값이 아직 없으면 PART 04가 null을 보낼 수 있다.
+- 새 `state` 값은 로봇별로 기록해 같은 값이 1 Hz로 올 때 경고가 반복되지 않게 한다. 모르는 이벤트는 경고로 기록한다.
 - `pose`에는 방향(yaw)이 없다. 위치 판정에는 x, y만 쓴다.
 - 팀 Figma 플로우차트 v0.4에는 PART 04 상태가 `RUNNING`·`PAUSE`로 그려져 있다. 코드는 아직 `MOVING`·`PAUSED`다. 이름이 바뀌면 `core/robot_protocol.py`만 고친다.
 
@@ -254,19 +263,19 @@ PART 04는 로봇마다 `hospital_nav`(CommandReceiver + MissionManager + Naviga
 | 토픽 | 타입 | QoS | 용도 | 없으면 |
 |---|---|---|---|---|
 | `/<ns>/amcl_pose` | `geometry_msgs/PoseWithCovarianceStamped` | RELIABLE, TRANSIENT_LOCAL, depth 1 (PART 04와 같게) | 자원 진입·해제 판정. STATE의 pose(1 Hz)보다 촘촘하다 | STATE의 `pose`만 쓴다 |
-| `/<ns>/battery_state` | `sensor_msgs/BatteryState` | sensor data(best effort) | 배정 순서, 화면 표시 | 배터리 "모름" |
-| `/<ns>/hazard_detection` | `irobot_create_msgs/HazardDetectionVector` | sensor data(best effort) | 범퍼 충돌 경고 (5.6절) | 범퍼 경고 없음 |
-| `/<ns>/dock_status` | `irobot_create_msgs/DockStatus` | sensor data(best effort) | 도킹 여부 표시 | R3 반영 후 STATE의 `docked`를 쓴다 |
+| `/<ns>/battery_state` | `sensor_msgs/BatteryState` | sensor data(best effort) | STATE 배터리와 비교해 최근 유효 잔량 사용 | STATE의 `battery.percent` 사용 |
+| `/<ns>/hazard_detection` | `irobot_create_msgs/HazardDetectionVector` | sensor data(best effort) | `safety.use_hazard_topic: true`에서만 D-23 활성 | 기본 false, 미구독 |
+| `/<ns>/dock_status` | `irobot_create_msgs/DockStatus` | sensor data(best effort) | STATE의 도킹 값이 없거나 오래됐을 때 보조 | STATE의 `docked` 사용 |
 
 - **amcl_pose는 로봇이 움직일 때만 새로 온다.** 그래서 "로봇과 연결되어 있나"는 pose 나이가 아니라 **STATE 수신 나이**로 판단한다 (`link_timeout_s`). 위치값은 amcl_pose와 STATE pose 중 더 최근 것을 쓴다.
 - `hazard_detection`에는 범퍼 말고도 `BACKUP_LIMIT` 같은 항목이 주기적으로 섞여 온다. 관제는 `type == BUMP`만 범퍼 충돌로 본다.
-- `irobot_create_msgs`가 없는 환경에서도 노드가 뜬다. import에 실패하면 범퍼·도킹 두 토픽만 끄고 경고 로그를 남긴다.
+- `irobot_create_msgs`가 없는 환경에서도 노드가 뜬다. import에 실패하면 선택 원본 토픽을 사용할 수 있던 경우 경고를 남기며 STATE는 계속 처리한다.
 
 ### 3.4 로봇 연결은 어댑터 하나에 모은다
 
 - 로봇과 통신하는 부분은 `robot_link.py` 하나에만 둔다. `robot_link.mode: HOSPITAL_NAV`(3.3절)만 동작한다.
 - 판단 모듈은 `robot_link`가 넘겨주는 공통 형식(`RobotReport`: link_ok, part4_state, pose, battery, last_event)만 본다. 명령도 공통 형식(`go(robot, zone, level)`, `pause`, `resume`, `cancel`)으로만 낸다.
-- PART 04와 주고받는 **규칙**은 `core/robot_protocol.py`(순수 파이썬)에 둔다: 수락 대기와 재전송, `PAUSED`면 `CANCEL` → `CANCELED` 확인 → `MOVE` 순서, `id=` 지원 여부 자동 판단, 이벤트와 구간 짝짓기. `robot_link.py`는 토픽을 구독·발행하고 문자열을 이 모듈에 넘기기만 한다. 그래서 테스트 11·12·19를 ROS 없이 돌린다.
+- PART 04와 주고받는 **규칙**은 `core/robot_protocol.py`(순수 파이썬)에 둔다: 수락 대기와 재전송, `PAUSED`면 `CANCEL` → `CANCELED` 확인 → `MOVE` 순서, `id=` 지원 여부 자동 판단, 이벤트와 구간 짝짓기, 언독·도킹 단계와 STATE 센서값 처리. `robot_link.py`는 토픽을 구독·발행하고 문자열을 이 모듈에 넘기기만 한다. 그래서 테스트 11·12·19를 ROS 없이 돌린다.
 
 ---
 
@@ -338,7 +347,7 @@ PART 04는 로봇마다 `hospital_nav`(CommandReceiver + MissionManager + Naviga
  "robots": {
    "robot_a": {"label": "침상형 이송 로봇", "mark": "A", "ns": "robot2", "link_ok": true, "state": "GIVE_WAY", "state_since": 1794963601.5,
                "part4_state": "PAUSED", "region": "CORRIDOR", "zone": null, "pose": {"x": -1.62, "y": -2.90},
-               "battery_pct": 82, "mission_id": "M-0007", "leg": {"from": "C", "to": "A"},
+               "battery_pct": 82, "battery_status": "DISCHARGING", "docked": false, "mission_id": "M-0007", "leg": {"from": "C", "to": "A"},
                "route": [[-1.62, -2.90], [-1.37, -0.55], [-2.20, 0.50]],
                "wait_reason": "침상형 이송 로봇 복도 양보 중 (약품 운송 로봇 Level 3)", "progress_pct": 38.0,
                "remaining_m": 3.1, "stall_s": 0, "paused_by": "CORRIDOR_YIELD", "obstacle": null},
@@ -476,14 +485,15 @@ PART 04는 로봇마다 `hospital_nav`(CommandReceiver + MissionManager + Naviga
   - 로봇 쪽 상태가 `PAUSED`면 먼저 `CANCEL`을 보내고 `CANCELED`를 확인한 뒤 `MOVE`를 보낸다.
 - **도착**: `ARRIVED` 이벤트(목적지 일치) → `WAIT_CONFIRM`. 화면이 `CONFIRM_STEP OK`를 보내면 다음 구간. 마지막이면 `MISSION_DONE` → 복귀.
   - `MISMATCH`면 그 자리에 둔 채 카드 `STOP_MISMATCH`: [다시 확인] [이 정류장 건너뛰기] [임무 취소], `default: null`.
-- **복귀** (`mission.return_home: true`): 마지막 확인이 끝나면 로봇을 홈 구역(`robots.<id>.start_zone`)으로 `MOVE` → `RETURNING` → 도착하면 `IDLE`.
+- **복귀** (`mission.return_home: true`): `robots.<id>.return_to: ZONE`이면 마지막 확인이 끝나면 로봇을 홈 구역(`robots.<id>.start_zone`)으로 `MOVE` → `RETURNING` → 도착하면 `IDLE`.
   - 복귀 이동도 자원 규칙(B·E 방, 복도 양보)을 똑같이 따른다. 복귀의 자원 요청 응급도는 `mission.return_level`(1)이다. 끝낸 임무의 응급도를 물려받지 않는다.
   - 복귀 중인 로봇에 새 임무가 배정되면 `CANCEL`을 보내고 (`mission.return_interruptible: true`), 아래 셋 중 먼저 오는 것을 보고 바로 새 임무 `MOVE`를 보낸다.
     - `MISSION_CANCELED`
     - 복귀 구간의 `ARRIVED`, 또는 STATE의 `state`가 `IDLE`·`COMPLETE`·`FAILED`·`CANCELED` 중 하나. 로봇이 `CANCEL`을 받기 전에 홈에 도착하면 PART 04는 그 `CANCEL`을 조용히 버리므로, 취소 확인을 기다리면 안 된다.
     - R1 반영 후의 `COMMAND_REJECTED`(CANCEL 거절)
     - 3초(`accept_timeout_s`) 안에 셋 다 없을 때만 `NAV_FAILED` 카드.
-  - 도킹(충전대에 붙기)은 하지 않는다 (`return_to_dock: false`). PART 04 도킹 명령이 생기면 켠다.
+  - 로봇별 `return_to: DOCK`이면 도크 접근 경로와 목적지 점유를 확인한 뒤 `DOCK`을 보낸다. 복귀 구간의 DOCKED 또는 동일 임무 STATE의 `COMPLETE`와 `docked: true`가 함께 와야 도크 복귀 완료다. 두 로봇의 기본값은 ZONE이다. robot2 도크는 F 구역 쪽이다. robot3는 PART 04에 도크 좌표가 등록된 뒤 DOCK을 사용한다.
+- 출발 준비 중인 로봇의 정지는 무진전 시간에 포함하지 않는다. 이 로봇의 위치는 주행 중인 상대의 근접 판단에 계속 사용한다. 출발 준비가 `robot_link.start_timeout_s`(120초)를 넘으면 `CANCEL`과 기존 `NAV_FAILED` 카드로 처리한다. 준비·접안 중 안전 정지가 필요할 때도 PART 04가 이 단계에서 받는 CANCEL로 중단한다.
 - **운영자 이동(`GO_ZONE`)**: 응급도가 없으므로 `mission.manual_level`(1)로 보낸다. 도착하면 그 구역에서 기다린다 (홈으로 복귀하지 않는다). 임무가 아니라서 `missions`에 쓰지 않는다.
 - **실패**: `MISSION_FAILED`(예: `Nav2: ABORTED`) → `FAULT` + 카드 `NAV_FAILED`: [다시 시도] [이전 구역으로 되돌아가기] [임무 취소], `default: null`.
   - [되돌아가기]로 이전 구역에 도착하면 `FAULT`로 기다린다. 원래 구간은 운영자의 `RETRY`로 다시 시작한다 (`mission.retry_after_return: false`).
@@ -638,11 +648,11 @@ PART 04는 로봇마다 `hospital_nav`(CommandReceiver + MissionManager + Naviga
 | 침상 이탈 | `/patient/bed_exit` false → true (상승 에지) | `bed_exit_pause_targets` 로봇 중 임무 중인 로봇을 `SAFE_PAUSE`. 주행 중이면 `PAUSE` 전송. 경고 `BED_EXIT` | 재개 (bed_exit가 false일 때만) |
 | 수동 정지 | `PAUSE_ALL`, `/robot/pause`, `PAUSE_ROBOT` | 대상 로봇 `SAFE_PAUSE`, 주행 중이면 `PAUSE` | `RESUME_ALL`, `/robot/resume`, `RESUME_ROBOT` |
 | 근접 정지 | 중심 간 거리가 `safety.proximity_stop_m`(0.6 m) 미만이고 하나라도 주행 중 | 주행 중인 쪽만 PAUSE. 둘 다 주행 중이면 둘 다 멈춘다. 범퍼와 별도로 기록한다 | 두 로봇의 연결이 살아 있고 거리가 `safety.proximity_resume_m`(0.9 m) 이상이면 이 규칙의 정지만 해제 |
-| 범퍼 충돌 | `hazard_detection`에 `BUMP`가 새로 나타남 | 그 로봇과, 그 로봇에서 `safety.bump_neighbor_m`(1.0 m) 안에 있는 다른 로봇을 함께 `SAFE_PAUSE`. 주행 중이면 `PAUSE`. 경고 `BUMP` (`detail.targets`에 충돌 로봇과 함께 세운 이웃 로봇 ID 목록) | 사람이 확인 후 `RESUME_ROBOT` (로봇마다) |
+| 선택 범퍼 충돌 (D-23) | `safety.use_hazard_topic: true`이고 `hazard_detection`에 `BUMP`가 새로 나타남 | 그 로봇과, 그 로봇에서 `safety.bump_neighbor_m`(1.0 m) 안에 있는 다른 로봇을 함께 `SAFE_PAUSE`. 주행 중이면 `PAUSE`. 경고 `BUMP` (`detail.targets`에 충돌 로봇과 함께 세운 이웃 로봇 ID 목록) | 사람이 확인 후 `RESUME_ROBOT` (로봇마다) |
 | 침상 감시 끊김 | `/patient/bed_exit`가 `bed_monitor.warn_s`(1초) 넘게 안 옴 → 경고만. `lost_s`(3초) 넘게 안 옴 → 끊김 | 경고: `BED_MONITOR_WARN`. 끊김: `bed_exit_pause_targets` 로봇 중 임무 중인 로봇을 `SAFE_PAUSE`, 주행 중이면 `PAUSE`. `BED_MONITOR_LOST` + 카드 `BED_MONITOR_LOST` | 신호가 `recover_s`(2초) 이어서 들어오면 `BED_MONITOR_BACK`. 그 뒤 사람이 재개. 또는 카드에서 [감시 없이 운행] |
 
 - 근접 정지 10초에 열리는 `BLOCKED` 카드에는 [상대 로봇 먼저 보내기]가 있다. 양보하는 로봇의 정지를 확인하고 상대의 근접 정지만 해제한다. 상대가 쉬고 있으면 운영자가 이동할 곳을 정한다. 먼저 보내기는 해당 구간의 분리에만 적용한다. 근접 범위에서 거리가 다시 줄거나 양보 로봇의 정지를 확인할 수 없으면 다시 세운다. 간격·목적지·범퍼·운영자 정지 등 다른 조건도 모두 충족해야 MOVE 또는 RESUME를 보낸다. 근접 대기로 인한 멈춤은 장애물 막힘 시간에서 뺀다.
-- 범퍼에 근처 로봇까지 세우는 이유: 로봇끼리 닿으면 눌린 쪽이 아니라 미는 쪽을 세워야 한다. 11/18 시험에서 이미 멈춰 있던 로봇이 밀렸다 (`DECISIONS.md` D-23).
+- 기본 운행에서는 복도 방향·간격, 목적지 점유와 근접 정지를 위치로 판단한다(D-28). 범퍼 수신을 선택했을 때 근처 로봇까지 세우는 이유: 로봇끼리 닿으면 눌린 쪽이 아니라 미는 쪽을 세워야 한다. 11/18 시험에서 이미 멈춰 있던 로봇이 밀렸다 (`DECISIONS.md` D-23).
 - 재개는 `SAFE_PAUSE` 직전 상태로 되돌린다. 로봇 쪽이 `PAUSED`면 `RESUME`을 보낸다 (PART 04가 같은 목적지로 다시 출발). `HOLD`·`WAIT_CONFIRM`이었으면 관제 상태만 되돌린다.
 - 멈춰 있는 동안에도 쥔 자원은 그대로 유지한다.
 - 침상 이탈 중에 들어온 임무는 `SAFE_PAUSE`로 시작한다.
@@ -730,7 +740,9 @@ src/part1_ui_dashboard/                   # 관제 화면 (WEB_DB_DESIGN.md)
 
 - `/<ns>/hospital_nav/command`를 받아 3.3절 규칙대로 받거나 거절한다 (거절은 로그만, PART 04와 같게). `IDLE`·`COMPLETE`·`FAILED`·`CANCELED`에서 받은 `CANCEL`도 로그만 남기고 버린다.
 - 구역 사이를 정해진 속도(`mock.speed_mps`, 0.2 m/s)로 직선 보간해 움직이고, 복도를 지날 때는 입구 중심점(`mouths`)을 거친다.
-- 1초마다 `STATE`, 이벤트마다 `STATUS`를 보낸다. `amcl_pose`도 움직일 때 발행한다. 도크·위험 센서 토픽은 1 Hz로 "도크 밖·감지 0건"을 내고, Nav2 `navigate_to_pose` 액션 서버도 이름만 띄운다 (preflight 확인용).
+- 두 mock은 도크 위에서 시작한다. 첫 MOVE는 언독과 `mock.localizing_s`(기본 3초)의 위치 준비를 거친다. 도크 밖에서 다음 MOVE는 바로 출발한다. 도크 좌표가 있는 로봇은 DOCK을 받으면 도크 앞을 거쳐 DOCKING·DOCKED를 발행한다. 미등록이면 실제 수신기처럼 명령을 거절한다.
+- 1 Hz STATE에 `battery`, `pose`, `docked`, `ready`를 담고, STATUS는 사건마다 발행한다. 움직일 때 amcl_pose를, 1 Hz로 보조 배터리·도크·빈 위험 감지 목록을 발행한다. Nav2 액션 이름은 점검용이다.
+- `supports_request_id`와 `report_rejections`는 독립 파라미터다. 둘 다 false가 실물 기본 동작이다. 기존 `robot_a_r1`·`robot_b_r1` launch 인자는 해당 로봇의 두 값을 함께 바꾼다.
 - `/mock/control`(`std_msgs/String` JSON)으로 실행 중에 시험 상황을 만든다. 예 `{"robot": "robot_a", "action": "stall", "seconds": 40}`.
   - `action`: `stall`(지금 위치에서 N초 멈춤), `fail_next`, `reject_next`, `drop_link`(N초), `battery`(`value` %), `obstacle`(`kind`: `person`|`object`|`none`|`error`|`silent`)
 - `mock_obstacle_classifier.py`: 로봇마다 `/<ns>/obstacle/inspect_image`를 받으면 1초 뒤 3.2a절 형식의 결과를 낸다. 결과는 `/mock/control`의 `obstacle`로 정한다 (기본 `none`). `person`·`object`의 `pose`는 로봇 앞 1 m.
@@ -740,8 +752,8 @@ src/part1_ui_dashboard/                   # 관제 화면 (WEB_DB_DESIGN.md)
 
 ```yaml
 robots:
-  robot_a: {label: "침상형 이송 로봇", mark: A, ns: robot2, role: PATIENT_TRANSPORT, start_zone: D}
-  robot_b: {label: "약품 운송 로봇", mark: B, ns: robot3, role: MED_ROUND,         start_zone: F}
+  robot_a: {label: "침상형 이송 로봇", mark: A, ns: robot2, role: PATIENT_TRANSPORT, start_zone: D, return_to: ZONE, dock: {x: -0.330, y: -5.110, yaw_deg: -3.0}}
+  robot_b: {label: "약품 운송 로봇", mark: B, ns: robot3, role: MED_ROUND,         start_zone: F, return_to: ZONE}
 type_to_robot: {PATIENT_TRANSPORT: robot_a, MED_ROUND: robot_b, CALL: robot_b}   # assignment.mode: ROLE일 때만 씀
 
 assignment:
@@ -758,6 +770,7 @@ robot_link:
   dock_status_topic: "/{ns}/dock_status"
   request_id: auto              # auto | always | never (3.3절 R1 표)
   accept_timeout_s: 3.0
+  start_timeout_s: 120.0        # MOVE 수락 후 도크 출발 준비 제한
   link_timeout_s: 3.0           # STATE가 1 Hz라서 3초
 
 zones:                          # PART 04 goal_manager.py와 같은 값. name: 화면 이름 (비면 "A 구역")
@@ -813,6 +826,7 @@ obstacle:                       # PART 06 장애물 분류 (3.2a·5.5절)
   label_ko: {person: 사람, chair: 의자, suitcase: 가방, backpack: 가방, bottle: 병, bed: 침대, couch: 소파, dining table: 탁자, potted plant: 화분, dog: 개, cat: 고양이}
 
 safety:
+  use_hazard_topic: false       # true일 때만 원본 범퍼 구독 및 D-23 적용
   proximity_stop_m: 0.6
   proximity_resume_m: 0.9
   bed_monitor:                  # 침상 감시 끊김 (5.6절)
@@ -831,7 +845,6 @@ mission:
   manual_level: 1               # GO_ZONE 응급도
   retry_after_return: false     # 되돌아간 뒤 원래 구간은 운영자가 다시 시도
   confirm_at_stops: true
-  return_to_dock: false
 
 publish:
   fleet_state_hz: 5.0
@@ -844,7 +857,9 @@ db:
 mock:
   speed_mps: 0.2
   stall_radius_m: 0.05          # 시험 장애물 좌표와 mock 이동 선분 사이의 허용 거리
-  supports_request_id: true     # 로봇별 launch 인자로 R1 반영 전후를 섞어 시험
+  supports_request_id: false
+  report_rejections: false
+  localizing_s: 3.0
 ```
 
 ## 9. 테스트 (pytest, ROS 없이, 가짜 시계)
@@ -875,7 +890,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH=src/part1_ui_dashboard:s
 17. JSON 형식: 4장 예시가 그대로 파싱·검증되고, 잘못된 요청은 `E-400`
 18. `core/`에 `rclpy` import 없음
 19. `request_id: auto`: `id=`를 버리는 옛 로봇 → 3초 뒤 `id=` 없이 재전송 → 이후 그 로봇에는 `id=` 안 붙임. `id=`를 받는 로봇 → 계속 붙임
-20. 범퍼(`BUMP`) 새로 감지 → 그 로봇 `SAFE_PAUSE` + `PAUSE` 전송 + 경고, `RESUME_ROBOT`으로 재개
+20. 범퍼 구독을 켠 상태에서 범퍼(`BUMP`) 새로 감지 → 그 로봇 `SAFE_PAUSE` + `PAUSE` 전송 + 경고, `RESUME_ROBOT`으로 재개
 21. 복도 양보: 마주 오며 1.2 m 안 → level 낮은 쪽만 `PAUSE` + `GIVE_WAY` → 우선 로봇이 지나가 0.5 m 벌어지면 `RESUME`
 22. 복도 양보: level이 같으면 복도에 나중에 들어온 쪽이 섬
 23. 복도 양보: 같은 방향 두 로봇, B방↔E방 가로지르기, 거리 1.2 m 초과는 아무것도 안 함
@@ -906,11 +921,17 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH=src/part1_ui_dashboard:s
 43. **연결 점검** (`preflight`): PART 04 `goal_manager.py`의 좌표를 실행하지 않고 읽는다. 구역 좌표 차이 0.05 m 경계에서 경고가 맞게 나뉜다. 발견 서버 주소·포트·소유 프로세스가 틀리면 "실제 실행 안 됨"이다. 점검 중 로봇 명령은 0건이다
 44. **복도 방향별 공유** (`DIRECTIONAL`): 같은 방향 두 대(D → C, A → F)는 둘 다 허가되어 같이 지난다. 반대 방향(D → C 진행 중에 F → A 요청)은 `HOLD`, `rule: DIRECTION`, 사유 문장에 "반대 방향". 11/18 상황 재현: Robot A가 E방에서 나와 D로, Robot B가 복도를 지나 C로 → A는 E방 안에서 기다리고(`ROOM_E` 유지, `CORRIDOR` 허가 없음) B가 복도를 나간 뒤 허가된다. `GIVE_WAY`가 한 번도 생기지 않는다. B방↔E방 가로지르기는 복도에 아무도 없을 때만 허가. Level이 높아도 이미 들어간 반대 방향 로봇은 회수하지 않는다(선점 금지)
     같은 순간 반대 방향 요청도 한 대만 복도를 받는다(레벨 높은 쪽).
-45. **범퍼 이웃 정지**: Robot A에 `BUMP` → Robot A와, A에서 1.0 m 안에 있는 Robot B가 둘 다 `SAFE_PAUSE` + `PAUSE` 전송, `BUMP` 이벤트 `detail`에 둘 다. 1.0 m 밖이면 A만. 재개는 로봇마다 `RESUME_ROBOT`
+45. **범퍼 이웃 정지** (`use_hazard_topic: true`): Robot A에 `BUMP` → Robot A와, A에서 1.0 m 안에 있는 Robot B가 둘 다 `SAFE_PAUSE` + `PAUSE` 전송, `BUMP` 이벤트 `detail`에 둘 다. 1.0 m 밖이면 A만. 재개는 로봇마다 `RESUME_ROBOT`
 46. **테스트가 모드를 직접 정함**: 복도 양보·교착·장애물 등 기존 테스트는 필요한 `corridor.mode`를 테스트 안에서 직접 정한다. 저장소 기본값(`DIRECTIONAL`)을 바꿔도 다른 테스트가 깨지지 않는다
 47. **같은 방향 후행 정지**: 앞 로봇이 멈추면 뒤도 멈춘다. 복도 밖에서는 첫 MOVE를 보류한다. 진행 또는 이탈을 확인하면 재개하고, 뒤 로봇의 별도 정지는 유지한다. 반대 방향 요청은 기존 DIRECTION 규칙으로 기다린다. MOVING인 선행 로봇과 0.8 m이면 바로 멈추고, 1.0~1.4 m 사이에서 흔들려도 정지를 유지하며 1.5 m에서 재개한다.
 48. **목적지 점유**. 정차한 로봇의 구역, 다른 로봇이 이동 중인 목적지, 점유된 홈으로 가는 MOVE를 보류한다. 비키면 자동 출발하며, 미출발 허가도 다시 확인한다. 30초 카드와 각 선택지를 확인한다.
 49. **근접 정지**. 0.5 m에서 주행 중인 한 대 또는 두 대만 정지하고 0.9 m 이상일 때 재개한다. 10초 카드와 한 대 먼저 보내기, 범퍼·운영자·후행 정지 중첩, 한 규칙만 풀렸을 때 RESUME가 나가지 않는지 확인한다.
+
+50. **도크 출발**. 언독과 LOCALIZING 동안 막힘 시간·촬영·카드가 생기지 않는다. NAVIGATING 뒤에 도착하며, 준비 시간 초과는 CANCEL과 NAV_FAILED 한 건이다. 위치 준비 중인 로봇에 접근하는 주행 로봇은 근접 정지한다.
+51. **STATE 센서와 상태 확장**. 배터리 두 출처의 수신 시각, 충전 상태, 도킹 주·보조 출처, 처음 보는 STATE의 경고 중복을 확인한다.
+52. **도크 복귀**. 도크 쪽 점유가 풀리면 DOCK을 보낸다. 구역 ARRIVED·이전 임무·접안 미확정 COMPLETE는 복귀를 끝내지 않는다. DOCKED와 동일 임무 COMPLETE+docked 두 경로를 확인한다.
+53. **범퍼 기본 미사용**. BUMP 입력을 무시하고 같은 운행에서 위치 기반 근접 정지는 동작한다. 범퍼를 켠 경우는 20·45번을 적용한다.
+54. **STATE 기반 점검**. 최신 STATE의 상태·배터리·위치·도킹 값을 각각 검사한다. 격리 mock으로 도크 출발 → 임무 확인 → 홈 구역 복귀까지 확인한다.
 
 - 화면 라우트 테스트 (Flask test client): 버튼마다 가짜 publisher에 올바른 토픽과 JSON이 넘어간다. `dev_tools: false`면 시험 도구 라우트가 403이다. `/map/meta`·`/map/image`가 맵이 있을 때와 없을 때 맞게 답한다.
 - 화면 확인은 mock 2대로 시나리오 1~5(`stage3-scenarios.md`)를 **화면 클릭만으로** 끝까지 진행하고, 캡처를 `docs/part3/ui/screens/`에 남긴다. 녹화는 사람이 한다.
@@ -929,7 +950,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH=src/part1_ui_dashboard:s
 - **연결 점검 도구** `ros2 run part3_fleet_manager preflight`: 읽기만 하고 명령·주행 목표·서비스 호출·촬영 요청을 하나도 보내지 않는다.
   - 셸 환경 출력: `ROS_DOMAIN_ID`, `ROS_DISCOVERY_SERVER`, `ROS_SUPER_CLIENT`, `ROS_AUTOMATIC_DISCOVERY_RANGE`, `RMW_IMPLEMENTATION`. LOCALHOST 범위거나 `ROS_DISCOVERY_SERVER`가 비어 있으면 경고.
   - 발견 서버: 지정한 주소·포트가 이 PC의 Fast DDS 서버 프로세스 것인지 확인한다. 서버를 다른 PC에서 띄우면 이 줄은 "확인 불가"로 나온다. 그때 로봇 줄이 모두 OK면 실행해도 된다.
-  - 로봇마다 10초 동안: `hospital_nav/status`의 STATE 수신과 그 `state`, `amcl_pose`, `battery_state`(%), `dock_status`(도킹 여부), `hazard_detection`, Nav2 `navigate_to_pose` 액션 서버. 항목별 OK·없음 표.
+  - 두 로봇을 10초간 동시에 관측한다. 최신 STATE의 알려진 상태명, 유효한 battery·pose·docked가 로봇별 필수 항목이다. 원본 배터리·도크·AMCL·Nav2 그래프는 참고로 표시한다. 범퍼 구독이 꺼져 있으면 ‘사용 안 함’이다.
   - 명령 토픽 발행자: 관제 시작 전에는 없어야 하고, 관제 말고 다른 발행자(예: `keyboard_control`)가 있으면 이름을 보이고 "실제 실행 안 됨".
   - 침상 감시 `/patient/bed_exit` 수신 속도와 마지막 값, 장애물 분류 결과 발행자 유무 (없어도 실패 아님, "없음 — 30초 규칙으로 동작").
   - `fleet.yaml zones`와 PART 04 `goal_manager.py`의 `GOALS` 비교 (PART 04 파일은 글자로만 읽는다). 0.05 m 넘게 다르면 두 값을 보인다. `--goals-file`, `--config-file`로 다른 파일을 지정할 수 있다.
@@ -937,18 +958,18 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH=src/part1_ui_dashboard:s
 
 ## 11. 다른 파트에 요구한 변경
 
-### 11.1 PART 04 (`PART04_REQUESTS.md`, 11/19 기준 모두 미반영)
+### 11.1 PART 04 (`PART04_REQUESTS.md`, 11/19 main 3a7401b 대조)
 
 관제 코드는 반영 전후 모두 동작한다.
 
 | # | 변경 | 관제 영향 | 반영 전 관제 동작 |
 |---|---|---|---|
 | R1 | 명령 거절 시 `COMMAND_REJECTED` 이벤트, 명령 끝 `id=<관제 ID>` | 거절을 바로 알고, 이벤트를 관제 ID로 짝짓는다 | 3초 타임아웃, 첫 `MISSION_ACCEPTED`로 짝짓기 (3.3절 표) |
-| R2 | `dock_manager.py` 소스 커밋, `__pycache__` 삭제 | — | — |
-| R3 | `MOVE` 때 도킹 중이면 언도킹 후 출발, STATE에 `docked` | 언도킹 상태를 화면에 보여 준다 | `dock_status` 직접 구독으로 도킹 여부만 안다. 시험 전 로봇을 도크에서 뗀다 |
-| R4 | `setup.py` `entry_points`, `package.xml` 의존성 | 누구나 `ros2 run`으로 PART 04를 띄울 수 있다 | PART 04가 자기 방식으로 띄운다 |
+| R2 | 도킹 어댑터 소스 | main의 `dock_manager.py`에서 확인 | — |
+| R3 | `MOVE` 때 도킹 중이면 언도킹 후 출발, STATE에 `docked` | 반영됨. 도크에서 출발 준비를 표시한다 | `dock_status` 직접 구독으로 도킹 여부만 안다. 시험 전 로봇을 도크에서 뗀다 |
+| R4 | `setup.py` `entry_points`, `package.xml` 의존성 | `ros2 run hospital_nav command_receiver` 진입점 확인 | PART 04가 자기 방식으로 띄운다 |
 
-관제가 코드를 보고 직접 정한 것 (PART 04 작업 없음): namespace `robot2`·`robot3`, 범퍼·도킹 상태·위치는 표준 토픽 직접 구독, `PAUSED`에서 새 목적지는 `CANCEL` → `MOVE`.
+관제가 코드를 보고 직접 정한 것 (PART 04 작업 없음): namespace `robot2`·`robot3`, STATE로 배터리·도킹·위치를 수신. 위치·배터리·도크 원본은 보조이며 범퍼는 기본 미구독, `PAUSED`에서 새 목적지는 `CANCEL` → `MOVE`.
 
 ### 11.2 PART 05 (`PART05_REQUESTS.md`, 미반영)
 
@@ -984,7 +1005,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH=src/part1_ui_dashboard:s
 | shapely (`python3-shapely`) | `geometry` 영역 판정(`Polygon.contains`), 해제 여유 거리(`buffer`) | 직접 짠 점-다각형 판정 |
 | Flask (`python3-flask`) | 관제 화면 서버 | — |
 | psutil (`python3-psutil`) | preflight의 발견 서버 포트 소유 프로세스 확인 | — |
-| irobot_create_msgs (`ros-jazzy-irobot-create-msgs`) | 범퍼(`hazard_detection`), 도킹 상태(`dock_status`) 구독 | PART 04에 중계 요청 |
+| irobot_create_msgs (`ros-jazzy-irobot-create-msgs`) | 선택 원본 범퍼·도크 토픽 구독 | 기본 운행의 필수 센서 정보는 PART 04 STATE로 수신 |
 
 ### 13.2 검토했지만 쓰지 않는 것
 

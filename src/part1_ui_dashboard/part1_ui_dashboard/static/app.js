@@ -22,6 +22,10 @@ function displayState(id, robot) {
     if (state === "HOLD" && robot.proximity) return ["가까움 정지", "amber"];
     if (state === "HOLD" && robot.zone_wait) return ["목적지 대기", "amber"];
     if (state === "HOLD" && road?.follow_stop?.rear === id) return ["후행 대기", "amber"];
+    if (["MOVING","SENDING","RETURNING"].includes(state)) {
+        if (["UNDOCKING","LOCALIZING"].includes(robot.part4_state)) return ["도크에서 출발 준비", ""];
+        if (robot.part4_state === "DOCKING") return ["도킹 중", ""];
+    }
     if (state === "MOVING" && robot.stall_s > 0) {
         const blocked = Object.values(S.resources).some(res => res.blocked_robots?.includes(id));
         return [blocked ? "경로 막힘" : "일시 정체", "amber"];
