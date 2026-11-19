@@ -196,6 +196,8 @@ def parse_fleet_state(text: str) -> dict:
             "wait_reason": (str, NULL), "progress_pct": (*NUMBER, NULL), "remaining_m": (*NUMBER, NULL),
             "stall_s": NUMBER, "paused_by": (str, NULL),
         }, path=path)
+        if "mark" in robot and (not isinstance(robot["mark"], str) or len(robot["mark"]) != 1):
+            raise SchemaError(f"{path}mark: 표시 글자 한 자가 필요합니다")
         if "obstacle" in robot and robot["obstacle"] is not None:
             observation = robot["obstacle"]
             _fields(robot, {"obstacle": dict}, path=path)
@@ -244,6 +246,24 @@ def parse_fleet_state(text: str) -> dict:
         if (any(not isinstance(r, str) or not r.strip() for r in holders)
                 or len(set(holders)) != len(holders) or len(holders) > resource["capacity"]):
             raise SchemaError(f"{path}holders: 정원 이내의 고유 로봇 ID 목록이 필요합니다")
+        if "holder_detail" in resource:
+            _fields(resource, {"holder_detail": list}, path=path)
+            claims = resource["holder_detail"]
+            for claim in claims:
+                if not isinstance(claim, dict):
+                    raise SchemaError(f"{path}holder_detail: 보유 로봇 정보가 필요합니다")
+                _fields(claim, {"robot": str, "direction": int, "state": str}, path=path)
+                _choice(claim["state"], ("OCCUPIED", "GRANTED"), path+"holder_detail.state")
+                if claim["direction"] not in (-1, 0, 1):
+                    raise SchemaError(f"{path}holder_detail.direction: 복도 방향값을 확인하세요")
+            if [claim["robot"] for claim in claims] != holders:
+                raise SchemaError(f"{path}holder_detail: 보유 목록과 일치해야 합니다")
+        if resource.get("follow_stop") is not None:
+            _fields(resource, {"follow_stop": dict}, path=path)
+            pair = resource["follow_stop"]
+            _fields(pair, {"front": str, "rear": str, "since": NUMBER}, path=path+"follow_stop.")
+            if name != "CORRIDOR" or pair["front"] == pair["rear"]:
+                raise SchemaError(f"{path}follow_stop: 복도를 공유하는 앞뒤 로봇이 필요합니다")
         if resource["holder"] != next(iter(holders), None):
             raise SchemaError(f"{path}holder: 첫 번째 보유 로봇과 일치해야 합니다")
         if resource["state"] != "UNKNOWN" and (resource["state"] == "FREE") != (not holders):
@@ -340,6 +360,6 @@ def parse_event(text: str) -> dict:
     data, _ = _read(text)
     _texts(data, ("type",), None)
     _fields(data, {"ts": NUMBER, "robot": (str, NULL), "mission_id": (str, NULL), "detail": dict})
-    if data["type"] in ("RESOURCE_GRANT", "RESOURCE_HOLD", "CORRIDOR_YIELD_START") and "rule" in data["detail"]:
+    if data["type"] in ("RESOURCE_GRANT", "RESOURCE_HOLD", "CORRIDOR_YIELD_START", "CORRIDOR_FOLLOW_STOP") and "rule" in data["detail"]:
         _decision_detail(data["detail"])
     return data

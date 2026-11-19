@@ -86,7 +86,7 @@ def decision(form):
 STATES = {"IDLE": "대기", "RETURNING": "복귀 중", "SENDING": "출발 준비", "MOVING": "이동 중",
           "HOLD": "진입 전 대기", "GIVE_WAY": "복도 양보 중", "YIELDING": "교착 양보 중",
           "WAIT_CONFIRM": "확인 대기", "SAFE_PAUSE": "안전 정지", "FAULT": "장애", "OFFLINE": "연결 끊김"}
-KINDS = {"PATIENT_TRANSPORT": "환자 이송", "MED_ROUND": "물품 전달", "CALL": "로봇 호출"}
+KINDS = {"PATIENT_TRANSPORT": "환자 이송", "MED_ROUND": "약품 운송", "CALL": "로봇 호출"}
 EVENTS = {
     "OBSTACLE_INSPECT": "{robot} 장애물 확인 요청", "OBSTACLE_RESULT": "{robot} 장애물 확인 결과",
     "MISSION_CREATED": "{kind} 요청 등록", "MISSION_ASSIGNED": "{robot} 임무 배정", "MISSION_REJECTED": "임무 등록 거절",
@@ -96,6 +96,7 @@ EVENTS = {
     "RESOURCE_ENTER": "{robot} {resource} 진입 확인", "RESOURCE_RELEASE": "{robot} {resource} 통과 완료",
     "RESOURCE_UNKNOWN": "{resource} 점유 확인 불가", "RESOURCE_CLEAR_CONFIRM": "{resource} 현장 확인",
     "DEADLOCK_DETECTED": "교착 감지", "YIELD_START": "{robot} 교착 양보 시작", "YIELD_DONE": "{robot} 교착 양보 완료",
+    "CORRIDOR_FOLLOW_STOP": "{robot} 뒤따르기 정지", "CORRIDOR_FOLLOW_CLEAR": "{robot} 뒤따르기 대기 해제",
     "CORRIDOR_YIELD_START": "{robot} 복도 양보 시작", "CORRIDOR_YIELD_END": "{robot} 복도 양보 종료",
     "CORRIDOR_YIELD_TIMEOUT": "{robot} 복도 양보 시간 초과", "STALL_SHORT": "{robot} 일시 정체",
     "STALL_LONG": "{robot} 장기 정체", "BLOCKED": "이동 경로 막힘", "UNBLOCKED": "이동 경로 막힘 해제",
@@ -107,17 +108,20 @@ EVENTS = {
     "CARD_OPEN": "운영자 결정 요청", "CARD_CLOSED": "결정 카드 종료", "LINK_LOST": "{robot} 연결 끊김",
     "LINK_BACK": "{robot} 연결 정상", "WARNING": "관제 주의",
 }
-RULES = {"ONLY": "단독 요청", "LEVEL": "높은 응급도 우선", "REQUEST_TIME": "먼저 요청한 쪽",
+RULES = {"FOLLOW": "앞 로봇 정지", "ONLY": "단독 요청", "LEVEL": "높은 응급도 우선", "REQUEST_TIME": "먼저 요청한 쪽",
          "SUBMIT_ORDER": "먼저 접수한 쪽", "ENTRY_ORDER": "복도에 나중에 들어온 쪽이 양보",
          "ROBOT_ID": "동점 로봇 식별자 순", "CAPACITY": "자원 정원 도달", "DIRECTION": "복도 반대 방향 통행 중", "NO_PREEMPT": "이미 허가된 로봇은 회수하지 않음",
          "BLOCKED": "막힘 해제 대기", "UNKNOWN": "점유 확인 대기"}
 
 
-DEFAULT_ROBOT_NAMES = {"robot_a": "Robot A", "robot_b": "Robot B"}
+DEFAULT_ROBOT_NAMES = {"robot_a": "침상형 이송 로봇", "robot_b": "약품 운송 로봇"}
 
 
 def legacy_names(text, robots):
     for key, label in robots.items():
+        old_label = {"robot_a": "Robot A", "robot_b": "Robot B"}.get(key)
+        if old_label:
+            text = text.replace(old_label, label)
         text = re.sub(re.escape(key) + r"(?:이|가|은|는|의|에(?= 허가))?", lambda _: label, text)
     return text.replace("공용도로", "복도").replace("통로", "복도")
 
@@ -183,7 +187,10 @@ def summary(state):
 def resume_checks(state, track=None):
     road = state["resources"]["CORRIDOR"]
     pair = road["give_way"]
-    if pair:
+    follow = road.get("follow_stop")
+    if follow:
+        track = {"kind": "follow", "first": follow["front"], "next": follow["rear"]}
+    elif pair:
         track = {"kind": "yield", "first": pair["to"], "next": pair["yielding"]}
     elif road.get("queue_detail", road.get("queue")):
         nxt = road.get("queue_detail", road.get("queue"))[0]["robot"]
@@ -194,8 +201,12 @@ def resume_checks(state, track=None):
         return None, []
     first, nxt = track["first"], track["next"]
     moving = state["robots"].get(nxt, {}).get("state") == "MOVING"
-    if track["kind"] == "yield":
-        values = [not pair, not pair and moving]
+    if track["kind"] in ("follow", "yield"):
+        robot = state["robots"].get(nxt, {})
+        released = not (follow if track["kind"] == "follow" else pair)
+        values = [released, robot.get("link_ok", False),
+                  not robot.get("pause_causes") and robot.get("state") not in ("FAULT", "OFFLINE", "SAFE_PAUSE"),
+                  released and moving]
     else:
         values = [first is not None and first not in road["holders"], road["state"] == "FREE" or nxt in road["holders"],
                   nxt in road["holders"], moving and nxt in road["holders"]]

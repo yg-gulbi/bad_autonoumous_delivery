@@ -5,7 +5,7 @@ setup(
     name='part1_ui_dashboard',
     version='0.1.0',
     packages=find_packages(exclude=['test']),
-    package_data={'part1_ui_dashboard': ['static/*', 'static/pages/*.js']},
+    package_data={'part1_ui_dashboard': ['static/*', 'static/pages/*.js', 'static/fonts/*']},
     data_files=[
         ('share/part1_ui_dashboard/config', ['config/ui.yaml', 'config/floor_plan.yaml']),
         ('share/part1_ui_dashboard/launch', glob('launch/*.launch.py')),

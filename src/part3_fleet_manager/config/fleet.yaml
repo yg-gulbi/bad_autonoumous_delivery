@@ -1,10 +1,10 @@
 robots:
-  robot_a: {label: "Robot A", ns: robot2, role: PATIENT_TRANSPORT, start_zone: D}   # ns 확정 필요
-  robot_b: {label: "Robot B", ns: robot3, role: MED_ROUND,         start_zone: F}
+  robot_a: {label: "침상형 이송 로봇", mark: A, ns: robot2, role: PATIENT_TRANSPORT, start_zone: D}   # ns 확정 필요
+  robot_b: {label: "약품 운송 로봇", mark: B, ns: robot3, role: MED_ROUND,         start_zone: F}
 type_to_robot: {PATIENT_TRANSPORT: robot_a, MED_ROUND: robot_b, CALL: robot_b}
 
 assignment:
-  mode: IDLE_BEST_BATTERY
+  mode: ROLE
   min_battery_pct: 20
 
 robot_link:

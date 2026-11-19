@@ -22,6 +22,7 @@ class ConfigError(ValueError):
 @dataclass(frozen=True)
 class RobotCfg:
     label: str
+    mark: str
     ns: str
     role: str
     start_zone: str
@@ -120,7 +121,7 @@ class MissionCfg:
 
 @dataclass(frozen=True)
 class AssignmentCfg:
-    mode: str = "IDLE_BEST_BATTERY"
+    mode: str = "ROLE"
     min_battery_pct: float = 20.0
 
 
@@ -292,7 +293,11 @@ def config_from_dict(data: Mapping) -> FleetConfig:
         if ns in namespaces:
             raise ConfigError(f"{path}.ns: 중복 namespace {ns}")
         namespaces.add(ns)
+        mark = _text(robot.get("mark", chr(ord("A") + len(robots))), f"{path}.mark")
+        if len(mark) != 1 or any(value.mark == mark for value in robots.values()):
+            raise ConfigError(f"{path}.mark: 서로 다른 표시 글자 한 자가 필요합니다")
         robots[robot_id] = RobotCfg(
+            mark=mark,
             label=_text(robot.get("label"), f"{path}.label"),
             ns=ns,
             role=_text(robot.get("role"), f"{path}.role", MISSION_TYPES),

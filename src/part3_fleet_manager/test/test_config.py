@@ -9,11 +9,12 @@ from part3_fleet_manager.core.config import ConfigError, config_from_dict, load_
 
 
 def test_default_yaml_loads(cfg):
+    assert [(r.label, r.mark) for r in cfg.robots.values()] == [("침상형 이송 로봇", "A"), ("약품 운송 로봇", "B")]
     assert cfg.robots["robot_a"].ns == "robot2"
     assert cfg.robots["robot_b"].ns == "robot3"
     assert {robot.start_zone for robot in cfg.robots.values()} == {"D", "F"}
     assert cfg.type_to_robot == {"PATIENT_TRANSPORT": "robot_a", "MED_ROUND": "robot_b", "CALL": "robot_b"}
-    assert (cfg.assignment.mode, cfg.assignment.min_battery_pct) == ("IDLE_BEST_BATTERY", 20)
+    assert (cfg.assignment.mode, cfg.assignment.min_battery_pct) == ("ROLE", 20)
     assert cfg.mission.return_home and cfg.mission.return_interruptible
     assert cfg.robot_link.command_topic.format(ns=cfg.robots["robot_a"].ns) == (
         "/robot2/hospital_nav/command"
@@ -36,6 +37,8 @@ def test_default_yaml_loads(cfg):
 
 @pytest.mark.parametrize(("path", "value"), [
     ("robots.robot_b.ns", "robot2"),
+    ("robots.robot_b.mark", "A"),
+    ("robots.robot_a.mark", "AB"),
     ("robots.robot_a.start_zone", "Z"),
     ("type_to_robot.MED_ROUND", "missing"),
     ("assignment.mode", "ROUND_ROBIN"),

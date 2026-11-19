@@ -23,6 +23,7 @@
 | 3O | 11/18 | 3L 검토 두 건(기록 문장, 전체 정지·재개의 누른 사람) + PART 06 장애물 분류 연결, mock 분류기, 화면 표시 | 테스트 39~42. 막힘 시나리오를 사람·물건·없음으로 한 번씩. 325 통과 | [`ui/stage3o-report.md`](ui/stage3o-report.md) |
 | 4P | 11/18 | 실제 연결 준비: `real.launch.py`, `preflight`, `REAL_TEST.md`, 막힘 카드 버튼 글 | 격리 도메인에서 preflight가 mock 두 대 OK, mock 끄면 12개 누락, `keyboard_control` 감지. 328 통과 | [`ui/stage4p-report.md`](ui/stage4p-report.md) |
 | 4F | 11/19 | 복도 방향별 공유 기본값, 범퍼 1.0 m 이웃 정지, 실기용 복도 모드 인자, 3.1절 낮은 위험 정리 | mock에서 A가 E방을 유지하고 B 통과 뒤 출발. 상태 144건 중 `GIVE_WAY` 0건. PART 01·03 세 모드 각각 352 통과, 두 패키지 빌드 성공 | [`ui/stage4f-report.md`](ui/stage4f-report.md) |
+| 4G | 11/19 | 관제 화면 v2, 역할 고정 배정, 같은 방향 선행 정지 시 후행 정지 및 미출발 MOVE 보류 | PART 01·03 합계 389 통과, 빌드 2개 성공. 격리 mock에서 앞뒤 정지·재개, 반대 방향 방 안 대기, 침상 경보·막힘 카드와 11장 캡처 확인 | [4G 보고서](ui/stage4g-report.md) |
 
 - 11/18 PR #2·#3으로 main에 합쳤다 (화면·DB·장애물 분류·실제 연결 준비, README 갱신).
 - 11/18 강의실 관제 PC(`mu-03`)에 새로 설치하고, 가짜 로봇 시연을 확인한 뒤 **실제 로봇 2대와 첫 연결 시험**을 했다 (17:23~17:30, 4P 전이라 관제·화면을 따로 띄움, 기록 `~/.bad/bad_real.db`).

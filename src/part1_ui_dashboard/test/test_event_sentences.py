@@ -15,6 +15,18 @@ A, B = "robot_a", "robot_b"
 
 
 def traffic(cfg):
+    convoy = ResourceManager(replace(cfg, corridor=replace(cfg.corridor, mode="DIRECTIONAL")))
+    reports = {A:RobotReport(cfg.zones["D"],True), B:RobotReport(cfg.zones["A"],True)}
+    for r in reports:
+        convoy.request(r,"F",1,0)
+    convoy.tick(1,reports)
+    reports[A] = RobotReport((-1.55,-2.8),True,safe_pause=True)
+    reports[B] = RobotReport((-1.55,-1.5),True)
+    convoy.tick(2,reports)
+    reports[A] = RobotReport((-1.55,-3.0),True)
+    convoy.tick(3,reports)
+    yield from convoy.events
+
     for timeout in (False, True):
         rm = ResourceManager(cfg)
         rm.request(A,"F",1,0)
@@ -48,7 +60,7 @@ def test_41_actual_fleet_event_titles_reasons_and_journal(tmp_path,monkeypatch):
     from fleet_simulation import Simulation
 
     cfg = load_config(package / "config/fleet.yaml")
-    cfg = replace(cfg, corridor=replace(cfg.corridor, mode="SHARED_YIELD"))
+    cfg = replace(cfg, assignment=replace(cfg.assignment, mode="IDLE_BEST_BATTERY"), corridor=replace(cfg.corridor, mode="SHARED_YIELD"))
     events = list(traffic(cfg))
     with ExitStack() as cleanup:
         def simulator():

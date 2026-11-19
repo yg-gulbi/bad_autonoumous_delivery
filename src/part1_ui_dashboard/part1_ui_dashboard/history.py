@@ -151,7 +151,7 @@ def history_api(path, names, robots=None):
     def event_query():
         clauses, args = filters("ts", [("type", "type"), ("robot", "robot"), ("mission_id", "mission")])
         if request.args.get("group") == "decision":
-            clauses.append("type IN ('RESOURCE_GRANT','RESOURCE_HOLD','CORRIDOR_YIELD_START')")
+            clauses.append("type IN ('RESOURCE_GRANT','RESOURCE_HOLD','CORRIDOR_YIELD_START','CORRIDOR_FOLLOW_STOP')")
         q = request.args.get("q", "").strip()
         if q:
             clauses.append("""instr(lower(type || ' ' || coalesce(robot,'') || ' ' || coalesce(mission_id,'')

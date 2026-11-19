@@ -1,7 +1,10 @@
 <!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>병원 다중 AMR 관제</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/static/style.css">
 <script defer src="/static/app.js"></script><script defer src="/static/history.js"></script><script defer src="/static/map.js"></script><script defer src="/static/pages/dashboard.js"></script><script defer src="/static/pages/missions.js"></script><script defer src="/static/pages/forms.js"></script><script defer src="/static/pages/log.js"></script><script defer src="/static/pages/tools.js"></script><script defer src="/static/start.js"></script></head><body>
-<aside id="sidebar"><a class="logo" href="#/dashboard"><i>✚</i><strong>HOSPITAL<br>AMR CONTROL</strong></a><nav id="nav"></nav><div class="sidebar-end"><span class="badge blue mode"></span><p id="connection">관제 연결 대기</p><label>운영 담당자<input id="operator" value="operator" maxlength="80"></label></div></aside>
-<main><header><div><h1 id="title">종합 관제</h1><p id="subtitle"></p></div><div class="top-actions"><span id="bed-monitor" class="badge" aria-live="polite">침상 감시 연결 대기</span><button id="safety" data-act="safety" class="danger">안전 정지 요청</button><span class="badge green mode"></span><time id="clock"></time><button class="primary" data-act="quick">＋ 이송 요청</button></div></header>
-<div id="bed" role="status" hidden></div><div id="inbox"></div><div id="page"></div></main>
+<header class="mast"><a class="brand" href="#/dashboard"><strong>B.A.D</strong> 병원 이송 관제</a>
+<nav id="nav" aria-label="주 메뉴"></nav><div class="identity"><span class="mode"></span><label>담당자 <input id="operator" value="operator" maxlength="80"></label><time id="clock"></time></div></header>
+<section class="command-line" aria-label="관제 명령"><div class="signals"><span id="connection">관제 연결 대기</span><span id="online"></span><span id="bed-monitor"></span><span id="active-count"></span><span id="queued-count"></span></div>
+<div class="buttons"><button class="primary" data-act="quick">＋ 이송 요청</button><button id="safety" data-act="safety" class="danger">안전 정지 요청</button></div></section>
+<section id="situation" role="status" aria-live="polite"><strong>관제 연결 대기</strong></section>
+<main><div class="page-heading" id="heading"><h1 id="title"></h1><p id="subtitle"></p></div><div id="page"></div></main>
 <button id="gear" data-act="tools" aria-label="시험 도구" hidden>⚙</button><div id="toast" aria-live="polite" popover="manual"></div>
 <dialog id="dialog"><div id="dialog-content"></div></dialog></body></html>

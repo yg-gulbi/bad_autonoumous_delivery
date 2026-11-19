@@ -387,8 +387,9 @@ class MissionManager:
                 self.fault(robot, "NAV_FAILED", "복귀 취소 후 정지 또는 홈 도착 확인을 받지 못했습니다.", now)
             return None
         giving_way = self.resources.robot_state(robot, r.state) == "GIVE_WAY"
-        stop = bool(self.safety.causes[robot]) or r.fault_stop or giving_way or corridor_command == "PAUSE"
-        if stop or corridor_command == "RESUME":
+        local_stop = bool(self.safety.causes[robot]) or r.fault_stop or giving_way
+        stop = local_stop or self.resources.following(robot) or corridor_command == "PAUSE"
+        if local_stop or corridor_command == "RESUME":
             r.resume_due = True
         resume = r.resume_due and r.state == "MOVING" and not stop
         if r.state == "FAULT" and not link.cancel_wait and not stop:

@@ -1,8 +1,16 @@
 let meta, raster, mapObserver, hits = [], zoom = 1, pan = [0, 0], overlay = false;
 const transform = (m, x, y) => [m[0]*x + m[2]*y + m[4], m[1]*x + m[3]*y + m[5]];
-const unitColor = id => id === "robot_a" ? "#2563EB" : "#7C4DDB";
+const palette = {};
+function loadPalette() {
+    const style = getComputedStyle(document.documentElement);
+    for (const key of ["wall","white","ink","muted","line","lane","arrow","route","stopped","ring","danger","risk-bg","panel","label-bg","clear",
+                       "map-label-font","map-letter-font","map-caption-font","map-warning-font"]) {
+        palette[key] = style.getPropertyValue("--" + key).trim();
+    }
+}
 
 async function loadMap() {
+    loadPalette();
     meta = await (await fetch("/map/meta")).json();
     if (!meta.available) return;
     // The server emits a canonical P5 header followed by one trinary byte per cell.
@@ -12,9 +20,11 @@ async function loadMap() {
     raster.width = meta.width;
     raster.height = meta.height;
     const ctx = raster.getContext("2d");
+    const rgba = token => [...palette[token].slice(1).match(/../g).map(b => parseInt(b,16)),255];
+    const occupied = rgba("wall"), free = rgba("white");
     const image = ctx.createImageData(meta.width, meta.height);
     for (let i = 0; i < pixels.length; i++) {
-        const rgb = pixels[i] === 0 ? [64, 77, 96, 255] : pixels[i] === 254 ? [247, 249, 252, 255] : [0, 0, 0, 0];
+        const rgb = pixels[i] === 0 ? occupied : pixels[i] === 254 ? free : [0, 0, 0, 0];
         image.data.set(rgb, i * 4);
     }
     ctx.putImageData(image, 0, 0);
@@ -151,8 +161,34 @@ function paint() {
         const [a,b,c,d] = plan.walls[0], [e,f,g,k] = plan.walls[1];
         path([screen(a,b), screen(c,d), screen(g,k), screen(e,f)]);
         ctx.closePath();
-        ctx.fillStyle = "#F7F9FC";
+        ctx.fillStyle = palette["white"];
         ctx.fill();
+    }
+    const corridor = S?.resources.CORRIDOR;
+    const corners = cfg.polygon.map(p => screen(...p));
+    path(corners);
+    ctx.closePath();
+    ctx.fillStyle = palette.lane;
+    ctx.fill();
+    const headings = new Set((corridor?.holder_detail || []).map(claim => claim.direction));
+    if (headings.size === 1 && !headings.has(0)) {
+        const [heading] = headings;
+        const ends = [[0,1],[2,3]].map(([a,b]) => corners[a].map((v,i) => (v + corners[b][i])/2));
+        if (heading < 0) ends.reverse();
+        const dx = ends[1][0]-ends[0][0], dy = ends[1][1]-ends[0][1];
+        ctx.save();
+        ctx.strokeStyle = palette.arrow;
+        ctx.lineWidth = 4;
+        for (const fraction of [.2,.4,.6,.8]) {
+            ctx.save();
+            ctx.translate(ends[0][0]+dx*fraction,ends[0][1]+dy*fraction);
+            ctx.rotate(Math.atan2(dy,dx));
+            ctx.translate(0,heading * Math.hypot(corners[0][0]-corners[1][0], corners[0][1]-corners[1][1])/4);
+            path([[-8,-8],[0,0],[-8,8]]);
+            ctx.stroke();
+            ctx.restore();
+        }
+        ctx.restore();
     }
     if (raster && (overlay || !plan)) {
         ctx.save();
@@ -163,8 +199,8 @@ function paint() {
     }
     ctx.lineCap = "butt";
     if (plan) {
-        for (const segment of plan.walls) wall(segment, "#9EACC1", 6);
-        for (const segment of Object.values(plan.doors)) wall(segment, "#BEC8D6", 1);
+        for (const segment of plan.walls) wall(segment, palette["wall"], 6);
+        for (const segment of Object.values(plan.doors)) wall(segment, palette["line"], 1);
     }
     if (overlay && raster) {
         ctx.save();
@@ -172,7 +208,7 @@ function paint() {
         ctx.closePath();
         ctx.setLineDash([5,4]);
         ctx.lineWidth = 1.5;
-        ctx.strokeStyle = "#675A90";
+        ctx.strokeStyle = palette["wall"];
         ctx.stroke();
         ctx.restore();
     }
@@ -186,16 +222,18 @@ function paint() {
         points.slice(1).forEach((p,i) => routes.push([points[i], p, 1.5]));
         path(points);
         ctx.lineJoin = "round";
-        ctx.lineWidth = 3;
-        ctx.strokeStyle = ctx.fillStyle = unitColor(id);
+        ctx.lineWidth = 2;
+        const stopped = !!displayState(id, r)[1];
+        ctx.setLineDash(stopped ? [2,6] : [6,6]);
+        ctx.strokeStyle = ctx.fillStyle = stopped ? palette.stopped : palette.route;
         ctx.stroke();
-        const angle = Math.atan2(end[1]-prev[1], end[0]-prev[0]);
-        ctx.save();
-        ctx.translate(...end);
-        ctx.rotate(angle);
-        path([[0,0],[-11,-5],[-11,5]]);
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.arc(...end,6,0,2*Math.PI);
+        ctx.fillStyle = palette.white;
         ctx.fill();
-        ctx.restore();
+        ctx.lineWidth = 2;
+        ctx.stroke();
     }
     function dot(x,y,radius,color) {
         ctx.beginPath();
@@ -204,7 +242,7 @@ function paint() {
         ctx.fill();
     }
     function tag(x,y,text,background,ink,border) {
-        ctx.font = '600 12px "Noto Sans CJK KR",sans-serif';
+        ctx.font = palette["map-label-font"];
         const half = ctx.measureText(text).width/2+8;
         ctx.beginPath();
         ctx.roundRect(x-half,y-12,2*half,24,6);
@@ -222,20 +260,24 @@ function paint() {
     const labels = [], robots = [];
     for (const [z, pos] of zones) {
         const [x,y] = screen(pos.x,pos.y);
-        dot(x,y,4,"#9EACC1");
+        dot(x,y,4,palette["wall"]);
         const room = S?.resources["ROOM_"+z];
-        const dest = units.find(([,r]) => r.leg?.to === z);
+
         labels.push({x,y,z,
-            bg:room?.blocked || room?.state === "UNKNOWN" ? "#FDECEE" : "#FFFFFF",
-            border:dest ? unitColor(dest[0]) : "#BFCEE1"});
+            bg:room?.blocked || room?.state === "UNKNOWN" ? palette["risk-bg"] : palette.clear});
         hits.push({x,y,w:6,h:6,z});
     }
     for (const [id,r] of units) {
         if (!r.pose) continue;
         const [x,y] = screen(r.pose.x,r.pose.y);
-        dot(x,y,14,unitColor(id));
-        ctx.strokeStyle = "#FFFFFF";
-        ctx.lineWidth = 2;
+        ctx.beginPath();
+        if (r.mark === "B") ctx.roundRect(x-14,y-14,28,28,6);
+        else ctx.arc(x,y,14,0,2*Math.PI);
+        ctx.fillStyle = palette.ink;
+        ctx.fill();
+        const [,tone] = displayState(id, r);
+        ctx.strokeStyle = tone === "red" ? palette.danger : tone === "amber" ? palette.ring : palette.white;
+        ctx.lineWidth = 3;
         ctx.stroke();
         robots.push({id,r,x,y});
     }
@@ -247,20 +289,18 @@ function paint() {
             if (!d.pose) continue;
             const [x,y] = screen(d.pose.x,d.pose.y);
             markers.push({x,y,label:d.label_ko || d.label});
-            dot(x,y,7,"#C62839");
-            ctx.fillStyle = "#FFFFFF";
-            ctx.font = "bold 12px sans-serif";
+            dot(x,y,7,palette["danger"]);
+            ctx.fillStyle = palette["white"];
+            ctx.font = palette["map-warning-font"];
             ctx.fillText("!",x,y);
         }
     }
     const center = cfg.polygon.reduce(([x,y],[u,v]) => [x+u/cfg.polygon.length,y+v/cfg.polygon.length],[0,0]);
-    const [cx,cy] = screen(...center), corridor = S?.resources.CORRIDOR;
+    const [cx,cy] = screen(...center);
     let caption = plan?.labels?.corridor || "복도";
-    if (corridor?.state === "UNKNOWN") caption += " · 점유 불명";
-    else if (corridor?.blocked) caption += " · 막힘 " + duration(S.stamp-(corridor.blocked_since ?? S.stamp));
     const walls = (plan?.walls || []).map(([x,y,u,v]) => [screen(x,y),screen(u,v),3]);
     const placed = markers.map(({x,y}) => ({l:x-8,r:x+8,t:y-8,b:y+8}));
-    const tagFont = '600 12px "Noto Sans CJK KR",sans-serif';
+    const tagFont = palette["map-label-font"];
     const directions = (x,y,dy,side) => [[x,y+dy],[x,y-dy],[x+side,y],[x-side,y]];
     function place(candidates, half, height, captionOnly=false) {
         for (const [x,y] of candidates) {
@@ -279,38 +319,41 @@ function paint() {
         return {x,y, fallback:true};
     }
     for (const {id,r,x,y} of robots) {
-        ctx.font = "bold 14px sans-serif";
-        ctx.fillStyle = "white";
-        ctx.fillText(id === "robot_a" ? "A" : "B",x,y);
-        const status = r.region === "CORRIDOR" && r.state === "MOVING" ? "통과 중" : (cfg.states[r.state] || r.state);
+        ctx.font = palette["map-letter-font"];
+        ctx.fillStyle = palette.white;
+        ctx.fillText(r.mark,x,y);
+        hits.push({x,y,w:14,h:14,r:id});
+        const [status,tone] = displayState(id, r);
+        if (!tone) continue;
         const upper = r.zone ? "DEF".includes(r.zone) : y <= cy;
         ctx.font = tagFont;
         const half = ctx.measureText(status).width/2 + 8;
         const slot = place(directions(x,y,upper ? 30 : -30,half+18),half,12);
-        tag(slot.x,slot.y,status,slot.fallback ? "#FFFFFFBF" : "#FFFFFF",unitColor(id));
+        tag(slot.x,slot.y,status,slot.fallback ? palette["white"] : palette["white"],palette.ink);
         hits.push({x,y,w:14,h:14,r:id});
     }
     for (const {x,y,z,bg,border} of labels) {
         ctx.font = tagFont;
         const half = ctx.measureText(zn(z)).width/2 + 8;
         const slot = place(directions(x,y,"DEF".includes(z) ? -26 : 26,half+8),half,12);
-        tag(slot.x,slot.y,zn(z),slot.fallback ? "#FFFFFFBF" : bg,"#263651",border);
+        tag(slot.x,slot.y,zn(z),slot.fallback ? palette["label-bg"] : bg,palette["ink"],border);
         hits.push({x:slot.x,y:slot.y,w:half,h:12,z});
     }
     for (const {x,y,label} of markers) {
         ctx.font = tagFont;
         const half = ctx.measureText(label).width/2 + 8;
         const slot = place(directions(x,y,-22,half+10),half,12);
-        tag(slot.x,slot.y,label,slot.fallback ? "#FFF3F3BF" : "#FFF3F3","#A71F30");
+        tag(slot.x,slot.y,label,slot.fallback ? palette["risk-bg"] : palette["risk-bg"],palette["danger"]);
     }
     const ends = [[0,1],[2,3]].map(([a,b]) => screen(
         (cfg.polygon[a][0]+cfg.polygon[b][0])/2, (cfg.polygon[a][1]+cfg.polygon[b][1])/2
     )).sort((a,b) => a[0]-b[0]);
-    const candidates = [[cx,cy], ...ends.map(([x,y]) => [(cx+x)/2,(cy+y)/2])];
-    ctx.font = '600 14px "Noto Sans CJK KR",sans-serif';
+    const candidates = [[cx,cy], ...ends.map(([x,y]) => [(cx+x)/2,(cy+y)/2]),
+        ...ends.map(([x,y]) => [(cx+x)/2,(cy+y)/2 - Math.abs(corners[0][1]-corners[1][1])/4])];
+    ctx.font = palette["map-caption-font"];
     const slot = place(candidates,ctx.measureText(caption).width/2,8,true);
     if (slot) {
-        ctx.fillStyle = corridor?.blocked || corridor?.state === "UNKNOWN" ? "#C62839" : "#6B7689";
+        ctx.fillStyle = corridor?.blocked || corridor?.state === "UNKNOWN" ? palette["danger"] : palette["muted"];
         ctx.fillText(caption,slot.x,slot.y);
     }
 }

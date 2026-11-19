@@ -14,6 +14,12 @@ class RobotReport:
     link_ok: bool
     safe_pause: bool = False
     can_yield: bool = True
+    stalled: bool = False
+    nav_paused: bool = False
+
+    @property
+    def stopped(self):
+        return self.safe_pause or self.stalled or self.nav_paused or not self.can_yield or not self.link_ok
 
 
 @dataclass(frozen=True, eq=False)
@@ -89,6 +95,16 @@ class GiveWay:
     last_progress: float
 
 
+@dataclass
+class FollowStop:
+    resume_allowed: bool
+    front: str
+    rear: Leg
+    direction: int
+    position: float
+    since: float
+
+
 class ResourceManager:
     """Consume complete report sets. A tick returns leg grants and motion requests."""
 
@@ -105,6 +121,7 @@ class ResourceManager:
         self.regions: dict[str, str] = {}
         self._origins: dict[str, str] = {}
         self._finishing: list[Leg] | None = None
+        self.follow: FollowStop | None = None
         self.give_way: GiveWay | None = None
         self._timed_out_pair: frozenset[Leg] = frozenset()
         self.wait_reasons: dict[str, str] = {}
@@ -137,10 +154,11 @@ class ResourceManager:
         names = detail.get("resources", ())
         if event_type.startswith("CORRIDOR_YIELD_"):
             names = [g.CORRIDOR]
-        if event_type in ("RESOURCE_GRANT", "RESOURCE_HOLD", "CORRIDOR_YIELD_START"):
+        if event_type in ("RESOURCE_GRANT", "RESOURCE_HOLD", "CORRIDOR_YIELD_START", "CORRIDOR_FOLLOW_STOP"):
             self.last_decision = {key: event[key] for key in ("type", "ts", "robot", "detail")}
         if event_type in ("RESOURCE_GRANT", "RESOURCE_HOLD", "RESOURCE_UNKNOWN", "RESOURCE_RELEASE",
-                    "RESOURCE_CLEAR_CONFIRM", "CORRIDOR_YIELD_START", "CORRIDOR_YIELD_END", "CORRIDOR_YIELD_TIMEOUT"):
+                    "RESOURCE_CLEAR_CONFIRM", "CORRIDOR_YIELD_START", "CORRIDOR_YIELD_END", "CORRIDOR_YIELD_TIMEOUT",
+                    "CORRIDOR_FOLLOW_STOP", "CORRIDOR_FOLLOW_CLEAR"):
             for name in names:
                 self.resources[name].reason, self.resources[name].decided_at = reason, now
 
@@ -415,7 +433,7 @@ class ResourceManager:
                         f"{area} 사용 가능 · 실효 Level {level}, {rule} → {self.robot_label(robot)} 허가",
                         robot=robot, mission_id=leg.mission_id, candidates=candidates,
                         resources=list(needed), ranking=ranking, **basis)
-        return TickResult(grants, self._corridor_commands(now))
+        return TickResult(grants, self._follow_commands(now) + self._corridor_commands(now))
 
     def tick(self, now: float, reports: dict[str, RobotReport]) -> TickResult:
         self.observe(now, reports)
@@ -439,6 +457,74 @@ class ResourceManager:
         mouth = self.config.corridor.mouths[destination]
         delta = self._projection(mouth) - self._projection(self.reports[leg.robot].pose)
         return (delta > 0) - (delta < 0)
+
+    def following(self, robot):
+        return self.follow is not None and self.follow.rear.robot == robot
+
+    def _follow_commands(self, now):
+        if self.config.corridor.mode != "DIRECTIONAL":
+            return []
+        corridor = self.resources[g.CORRIDOR]
+        holders = corridor.holders
+        action = self.follow
+        if action:
+            same_leg = self.active.get(action.rear.robot) is action.rear
+            commands = self._update_follow(now, action, holders)
+            if same_leg:
+                return commands
+            # A replacement can receive its grant in this tick. Check it before its first MOVE.
+
+        if len(holders) != 2:
+            return []
+        first, second = holders
+        direction = holders[first].direction
+        if not direction or direction != holders[second].direction:
+            return []
+        if any(r not in self.reports or self.reports[r].pose is None for r in holders):
+            return []
+        front, rear = sorted(holders, key=lambda r: direction * self._projection(self.reports[r].pose), reverse=True)
+        holding = holders[front]
+        if (self.regions.get(front) not in (None, g.CORRIDOR) and holding.entered_at is not None
+                or rear not in self.active or not self.reports[front].stopped):
+            return []
+        leg = self.active[rear]
+        self.follow = FollowStop(resume_allowed=not self.reports[rear].stopped, front=front, rear=leg,
+                                 direction=direction, position=direction * self._projection(self.reports[front].pose),
+                                 since=now)
+        reason = f"앞 로봇 정지 → {self.robot_label(rear)} 대기"
+        self.wait_reasons[rear] = reason
+        self.record("CORRIDOR_FOLLOW_STOP", now, reason, robot=rear, mission_id=leg.mission_id,
+                    front=front, resources=[g.CORRIDOR], rule="FOLLOW", state_before=corridor.state,
+                    contenders=self._contenders([self.active[r] for r in (front, rear) if r in self.active]))
+        return [MotionRequest(rear, "PAUSE")]
+
+    def _update_follow(self, now, action, holders):
+        rear, front = action.rear.robot, action.front
+        same_leg = self.active.get(rear) is action.rear
+        report = self.reports.get(front)
+        clear = front not in holders or (holders[front].entered_at is not None and report and report.link_ok
+                                         and report.pose and self.planner.is_clear(
+                                             g.CORRIDOR, report.pose, self.config.resources.clear_margin_m))
+        if same_leg and not clear:
+            if report is None or report.pose is None or report.stopped:
+                if report and report.pose:
+                    action.position = action.direction * self._projection(report.pose)
+                return []
+            progress = action.direction * self._projection(report.pose) - action.position
+            if progress < self.config.stall.move_m:
+                return []
+        self.follow = None
+        if same_leg:
+            self.wait_reasons.pop(rear, None)
+        reason = ("뒤 로봇의 구간 종료로 대기를 해제했습니다." if not same_leg else
+                  "앞 로봇이 복도를 비워 뒤 로봇 대기를 해제했습니다." if clear else
+                  "앞 로봇의 전진을 확인해 뒤 로봇 대기를 해제했습니다.")
+        self.record("CORRIDOR_FOLLOW_CLEAR", now, reason, robot=rear, mission_id=action.rear.mission_id,
+                    front=front, resources=[g.CORRIDOR])
+        follower = self.reports.get(rear)
+        if same_leg and action.resume_allowed and self.eligible(rear) and follower.can_yield and not follower.stalled:
+            return [MotionRequest(rear, "RESUME")]
+        return []
 
     def _start_give_way(self, now, corridor):
         if len(corridor.holders) != 2 or corridor.uncertain:
@@ -545,8 +631,10 @@ class ResourceManager:
         report = self.reports.get(robot)
         if base_state == "SAFE_PAUSE" or (report and report.safe_pause):
             return "SAFE_PAUSE"
-        if base_state == "OFFLINE":
+        if base_state in {"OFFLINE", "FAULT"}:
             return base_state
+        if self.following(robot):
+            return "HOLD"
         if self.give_way and self.give_way.yielding.robot == robot:
             return "GIVE_WAY"
         return base_state
@@ -563,6 +651,10 @@ class ResourceManager:
         return {
             name: {"state": resource.state, "capacity": resource.capacity, "holders": list(resource.holders),
                    "holder": resource.holder, "give_way": self._give_way_snapshot() if name == g.CORRIDOR else None,
+                   "holder_detail": [{"robot": r, "state": h.state, "direction": h.direction}
+                                     for r, h in resource.holders.items()],
+                   "follow_stop": ({"front": self.follow.front, "rear": self.follow.rear.robot, "since": self.follow.since}
+                                   if name == g.CORRIDOR and self.follow else None),
                    "blocked": bool(resource.stall_blockers),
                    "blocked_since": resource.blocked_since,
                    "blocked_robots": sorted(resource.stall_blockers),

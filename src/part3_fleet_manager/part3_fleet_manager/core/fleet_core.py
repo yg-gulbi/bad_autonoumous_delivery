@@ -224,11 +224,11 @@ class FleetCore:
     def _stall_tick(self, robot, now, terminal, accepted, results, out):
         r, link = self.mission.robots[robot], self.links[robot]
         if (not r.job or (r.state != "MOVING" and not accepted) or not self.link_ok[robot] or self.safety.causes[robot]
-                or self.resources.robot_state(robot, r.state) == "GIVE_WAY" or terminal):
+                or self.resources.following(robot) or self.resources.robot_state(robot, r.state) == "GIVE_WAY" or terminal):
             self._inspect(robot, now, results, out, moving=False)
             if terminal or not r.job:
                 self._unblock(robot, now)
-            elif robot not in self.blocks:
+            elif robot not in self.blocks and not (self.resources.following(robot) and self.stalls[robot].short):
                 self.stalls[robot].reset()
             return
         if link.state != "MOVING" and robot not in self.blocks:
@@ -367,7 +367,9 @@ class FleetCore:
         for robot, link in self.links.items():
             r = self.mission.robots[robot]
             reports[robot] = RobotReport(link.pose, self.link_ok[robot], bool(self.safety.causes[robot]),
-                                         can_yield=r.state != "FAULT" and not r.canceling and not r.replacing)
+                                         can_yield=r.state != "FAULT" and not r.canceling and not r.replacing,
+                                         stalled=self.stalls[robot].seconds >= self.config.stall.window_s or robot in self.blocks,
+                                         nav_paused=link.state in {"PAUSED", "STOPPING_PAUSE", "FAILED"})
         self.resources.observe(now, reports)
         for data in clears:
             self._ui("/ui/operator_cmd", data, now, out)
@@ -447,7 +449,7 @@ class FleetCore:
             leg = self.resources.active.get(robot) or self.resources.pending.get(robot)
             causes = self.safety.causes[robot]
             robots[robot] = {
-                "label": self.config.robots[robot].label, "ns": link.ns, "link_ok": self.link_ok[robot],
+                "label": self.config.robots[robot].label, "mark": self.config.robots[robot].mark, "ns": link.ns, "link_ok": self.link_ok[robot],
                 "route": [list(p) for p in (link.pose, *waypoints(self.config, link.pose, leg.destination))] if leg and link.pose is not None else [],
                 "last_state_at": link.state_at if link.state_at != float("-inf") else None,
                 "state_since": self.state_times.get(robot, (None, now))[1],
@@ -460,6 +462,7 @@ class FleetCore:
                 "obstacle": self.stalls[robot].obstacle,
                 "obstacle_pending": self.stalls[robot].requested_at is not None and self.stalls[robot].obstacle is None,
                 "remaining_m": link.remaining_m, "stall_s": self.stalls[robot].seconds,
+                "pause_causes": sorted(causes),
                 "paused_by": sorted(causes)[0] if causes else ("CORRIDOR_YIELD" if state == "GIVE_WAY" else None),
             }
             jobs = ([r.job] if r.job else []) + list(r.queue)

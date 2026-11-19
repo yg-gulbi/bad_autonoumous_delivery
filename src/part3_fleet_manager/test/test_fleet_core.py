@@ -26,7 +26,7 @@ def commands(out):
 
 @pytest.fixture
 def shared(cfg, tmp_path):
-    s = Simulation(replace(cfg, corridor=replace(cfg.corridor, mode="SHARED_YIELD"), db_path=str(tmp_path / "pool.db")))
+    s = Simulation(replace(cfg, corridor=replace(cfg.corridor, mode="SHARED_YIELD"), assignment=replace(cfg.assignment, mode="IDLE_BEST_BATTERY"), db_path=str(tmp_path / "pool.db")))
     yield s
     s.core.store.close()
 
@@ -155,7 +155,7 @@ def test_shared_assignment_excludes_offline_and_safety_paused(shared):
 
 @pytest.mark.parametrize("interruptible", [True, False])
 def test_dispatch_during_home_move_acceptance(cfg, tmp_path, interruptible):
-    cfg = replace(cfg, db_path=str(tmp_path / "test.db"),
+    cfg = replace(cfg, db_path=str(tmp_path / "test.db"), assignment=replace(cfg.assignment, mode="IDLE_BEST_BATTERY"),
                   mission=replace(cfg.mission, return_interruptible=interruptible))
     sim = Simulation(cfg)
     try:

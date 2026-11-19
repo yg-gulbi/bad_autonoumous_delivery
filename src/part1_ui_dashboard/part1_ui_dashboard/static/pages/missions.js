@@ -14,7 +14,7 @@ function selectFilter(key, values, labels = {}) {
 }
 initializers.missions = () => {
     $("page").innerHTML = '<div class="split missions-layout"><section class="panel"><div id="mission-tabs"></div><div id="filters" class="filters"></div><div id="job-list"></div></section><aside id="detail" class="panel"></aside></div>';
-    $("filters").innerHTML = selectFilter("kind", Object.keys(cfg.kinds), cfg.kinds) + selectFilter("robot", ["robot_a", "robot_b"], { robot_a: "Robot A", robot_b: "Robot B" }) + selectFilter("level", [1, 2, 3]);
+    $("filters").innerHTML = selectFilter("kind", Object.keys(cfg.kinds), cfg.kinds) + selectFilter("robot", Object.keys(cfg.robot_names), cfg.robot_names) + selectFilter("level", [1, 2, 3]);
     $("filters").insertAdjacentHTML("beforeend", ["from","to"].map((k,i) =>
         `<label>${i ? "종료일" : "시작일"}<input type="date" data-filter="${k}" value="${h(missionFilter[k] || "")}"></label>`).join(""));
     $("filters").onchange = e => { missionFilter[e.target.dataset.filter] = e.target.value; missionFilter.page = 1; render(); };

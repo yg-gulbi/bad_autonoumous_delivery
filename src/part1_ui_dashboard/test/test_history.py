@@ -83,7 +83,7 @@ def test_38_events_cards_period_kpi_and_csv(journal):
     rows = list(csv.reader(StringIO(export.data.decode("utf-8-sig"))))
     assert export.mimetype == "text/csv" and len(rows) == 56 and rows[1][1:] == ["CONFIRM_STEP","robot_a","M-0001","간호사","확인 완료"]
     card, = client.get("/api/cards?from=56&to=56").get_json()["items"]
-    assert (card["title"],card["by"],card["choice_label"],card["close_reason"]) == ("교착 해소","책임자","Robot A 양보","selected")
+    assert (card["title"],card["by"],card["choice_label"],card["close_reason"]) == ("교착 해소","책임자","침상형 이송 로봇 양보","selected")
     assert client.get("/api/cards?to=55").get_json()["items"] == []
     assert client.get("/api/kpi?from=55&to=64").get_json() == {
         "hold_count":2,"deadlock_count":1,"deadlock_resolve_s_avg":5.0,"pause_count":1}
@@ -131,7 +131,7 @@ def test_41_present_old_and_current_events_in_both_tables(journal):
         ("CARD_CLOSED", {"reason":"timeout","card_id":"K-old"}, "시간 초과 — 기본 선택으로 진행"),
         ("CARD_CLOSED", {"reason":"resolved","card_id":"K-old"}, "상황이 풀려 닫힘"),
         ("RESOURCE_REQUEST", {"reason":"robot_a이 A행 구간을 요청했습니다.","destination":"A"},
-         "Robot A — A 구역으로 가는 구간 요청"),
+         "침상형 이송 로봇 — A 구역으로 가는 구간 요청"),
         ("WARNING", {"reason":"UNKNOWN_CODE"}, ""),
         ("ARRIVE", {"reason":"A 구역 도착","destination":"A"}, "A 구역 도착")]
     events = [event(k, 90+i, "robot_a", "M-0001", **d) for i,(k,d,_) in enumerate(rows)]
@@ -142,4 +142,4 @@ def test_41_present_old_and_current_events_in_both_tables(journal):
         live = present_event(raw,names)
         assert live["detail"]["reason"] == logged["detail"]["reason"] == detailed["detail"]["reason"] == reason
         assert live["title"] == logged["title"] == detailed["title"]
-    assert log[-1]["title"] == "Robot A · A 구역 도착"
+    assert log[-1]["title"] == "침상형 이송 로봇 · A 구역 도착"

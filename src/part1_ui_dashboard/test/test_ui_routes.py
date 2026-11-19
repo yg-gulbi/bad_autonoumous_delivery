@@ -188,3 +188,30 @@ def test_field_commands_and_mock_controls_use_configured_robot_ids():
         response = client.post("/api/test/stall", json={"robot": robot, "seconds": 1})
         assert response.status_code == (400 if expected == 400 else 200)
     assert [json.loads(msg)["robot"] for _, msg in sent] == ["porter", "porter"]
+
+
+
+def test_v2_medication_stops_keep_the_selected_order_and_each_item(monitor):
+    client, messages, _, _ = monitor
+    for zones in ("E", "DBAFEC"):
+        stops = [{"zone": z, "item": f"시험 약품 {i}"} for i, z in enumerate(zones, 1)]
+        response = client.post("/api/mission", json={"type": "MED_ROUND", "level": 3, "stops": stops, "operator": "당직"})
+        assert response.status_code == 202
+        topic, raw = messages[-1]
+        assert topic == "/ui/mission_req"
+        assert json.loads(raw) == {"v": 1, "req_id": response.json["ref"], "requested_by": "당직",
+                                   "type": "MED_ROUND", "level": 3, "stops": stops}
+
+
+def test_v2_fonts_served_offline_and_colors_scoped_to_tokens(monitor):
+    import re
+
+    client, *_ = monitor
+    css = client.get("/static/style.css").get_data(as_text=True)
+    root = re.search(r":root\s*\{[^}]*\}", css)
+    assert root and not re.search(r"#[\da-fA-F]{3,8}\b|rgba?\(", css[root.end():])
+    assert "https://" not in css and "https://" not in client.get("/").get_data(as_text=True)
+    for face in ("Regular", "Medium", "SemiBold", "Bold"):
+        url = f"fonts/IBMPlexSansKR-{face}.woff2"
+        assert url in css and client.get("/static/" + url).data.startswith(b"wOF2")
+    assert b"SIL OPEN FONT LICENSE" in client.get("/static/fonts/OFL.txt").data
