@@ -25,10 +25,12 @@ from std_msgs.msg import Bool, String
 RESULT_VERSION = '80805b4_v1_3'
 PLANNED_TESTS = 7
 BAG_FINAL_STATE_SAMPLES = 3
+ROBOT_A_NS = 'robot3'
+ROBOT_A_COMMAND_TOPIC = f'/{ROBOT_A_NS}/hospital_nav/command'
 BAG_TOPICS = (
     '/ui/mission_req',
     '/ui/ack',
-    '/robot2/hospital_nav/command',
+    ROBOT_A_COMMAND_TOPIC,
     '/fleet/state',
     '/patient/bed_exit',
 )
@@ -64,7 +66,7 @@ class IntegrationProbe(Node):
         self._last_state_key = None
         self.mission_pub = self.create_publisher(String, '/ui/mission_req', 10)
         self.create_subscription(
-            String, '/robot2/hospital_nav/command', self._command, 100)
+            String, ROBOT_A_COMMAND_TOPIC, self._command, 100)
         self.create_subscription(Bool, '/patient/bed_exit', self._bed, 100)
         self.create_subscription(String, '/ui/ack', self._ack, 100)
         self.create_subscription(String, '/fleet/state', self._state, 100)
@@ -78,7 +80,7 @@ class IntegrationProbe(Node):
 
     def _command(self, message):
         self.commands.append(message.data)
-        self._record('robot2_command', message.data)
+        self._record(f'{ROBOT_A_NS}_command', message.data)
 
     def _bed(self, message):
         self.bed_values.append(bool(message.data))
@@ -272,7 +274,7 @@ def evaluate_bag_evidence(events, request_id):
         mission['timestamp_ns'],
     )
     move = find(
-        '/robot2/hospital_nav/command',
+        ROBOT_A_COMMAND_TOPIC,
         lambda value: isinstance(value, str) and value.startswith('MOVE '),
         mission['timestamp_ns'],
     )
@@ -295,7 +297,7 @@ def evaluate_bag_evidence(events, request_id):
         safe['timestamp_ns'],
     )
     pause = find(
-        '/robot2/hospital_nav/command',
+        ROBOT_A_COMMAND_TOPIC,
         lambda value: value == 'PAUSE',
         bed_exit['timestamp_ns'],
     )
@@ -650,7 +652,7 @@ def main(argv=None):
             return (
                 probe.count_subscribers('/ui/mission_req') >= 2
                 and probe.count_subscribers('/ui/ack') >= 2
-                and probe.count_subscribers('/robot2/hospital_nav/command') >= 3
+                and probe.count_subscribers(ROBOT_A_COMMAND_TOPIC) >= 3
                 and probe.count_subscribers('/fleet/state') >= 2
             )
 
@@ -719,12 +721,12 @@ def main(argv=None):
             summary,
             2,
             'move_observed',
-            '/robot2/hospital_nav/command에서 MOVE 명령이 수신된다',
+            f'{ROBOT_A_COMMAND_TOPIC}에서 MOVE 명령이 수신된다',
             lambda: wait_for(
                 probe,
                 lambda: any(command.startswith('MOVE ') for command in probe.commands),
                 args.startup_timeout,
-                'robot2 MOVE command',
+                f'{ROBOT_A_NS} MOVE command',
                 processes,
             ),
             lambda: {
@@ -808,12 +810,12 @@ def main(argv=None):
             summary,
             5,
             'pause_observed',
-            '/robot2/hospital_nav/command에서 PAUSE가 수신된다',
+            f'{ROBOT_A_COMMAND_TOPIC}에서 PAUSE가 수신된다',
             lambda: wait_for(
                 probe,
                 lambda: 'PAUSE' in probe.commands,
                 args.startup_timeout,
-                'robot2 PAUSE command',
+                f'{ROBOT_A_NS} PAUSE command',
                 processes,
             ),
             lambda: {'commands': probe.commands},

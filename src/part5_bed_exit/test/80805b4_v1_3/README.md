@@ -1,7 +1,7 @@
 # Part 5 v1.3 검증
 
 `run_validation.sh`은 Bash 진입점이며 실제 테스트는 Python `pytest`와
-`research.integration_benchmark.benchmark`가 수행한다. v1.3.1·v1.3.2처럼
+`research.integration_benchmark.benchmark`가 수행한다. v1.3.1~v1.3.4처럼
 공개 계약을 바꾸지 않는 patch도 이 테스트 트리를 계속 사용한다.
 
 단위·통합·벤치마크를 한번에 실행하는 명령은 제공하지 않는다.

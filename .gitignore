@@ -29,3 +29,8 @@ src/part5_bed_exit/results/unit_runs/
 
 # Cross-part integration run artifacts
 /part_integration/part3_part5/results/
+
+# Local ROS 2 bag recordings
+rosbag2_*/
+*.mcap
+*.db3

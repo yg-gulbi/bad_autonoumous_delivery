@@ -336,6 +336,7 @@ ROS 파라미터는 노드를 다시 빌드하지 않고 실행 구성을 전달
 | `method` | 문자열 | `""` | 조건부 | 내장 모델 이름 또는 `package.module:ClassOrObject` |
 | `method_config` | 문자열 | `""` | 내장 모델 사용 시 필수 | ROI·모델 경로·장치가 든 JSON 경로 |
 | `camera_index` | 정수 | `0` | 카메라 번호 변경 시 | OpenCV가 열 USB 카메라 번호 |
+| `reconnect_interval` | 실수 | `1.0` | 선택 | 웹캠 미연결·끊김 시 재연결 시도 최소 간격(초) |
 | `video_path` | 문자열 | `""` | MP4 입력 시 필수 | 웹캠 대신 한 번 재생할 MP4 경로 |
 | `loop_video` | 불리언 | `false` | 선택 | MP4 종료 시 프레임 0부터 반복 |
 | `output_topic` | 문자열 | `/patient/bed_exit` | 선택 | 최종 Bool 결과 발행 토픽 |
@@ -549,8 +550,9 @@ ros2 topic echo /patient/bed_exit
 
 | 실패 지점 | 노드 동작 | 발행 | 투표 이력 |
 | --- | --- | --- | --- |
-| `capture.read()` 예외 | 오류 기록 후 다음 프레임 대기 | 해당 프레임 미발행 | 초기화 |
-| 웹캠의 잘못된 반환 | 오류 기록 후 다음 프레임 대기 | 해당 프레임 미발행 | 초기화 |
+| 시작 시 웹캠 미연결 | 노드를 유지하고 `reconnect_interval`(기본 1.0초)마다 재연결 시도 | 미발행 | 초기화 |
+| `capture.read()` 예외 | 오류 기록 후 웹캠 핸들 해제(`release`) 및 쿨다운 재연결 대기 | 해당 프레임 미발행 | 초기화 |
+| 웹캠의 잘못된 반환 | 오류 기록 후 웹캠 핸들 해제(`release`) 및 쿨다운 재연결 대기 | 해당 프레임 미발행 | 초기화 |
 | MP4 종료 (`loop_video=false`) | 타이머 중단 | 추가 발행 없음 | 초기화 |
 | MP4 종료 (`loop_video=true`) | 프레임 0부터 재시작 | 재워밍업 후 계속 발행 | 초기화 |
 | MP4 되감기 실패 | 오류 기록 후 타이머 중단 | 추가 발행 없음 | 초기화 |
@@ -558,8 +560,9 @@ ros2 topic echo /patient/bed_exit
 | publisher 예외 | 다음 프레임부터 재시도 | 실패 결과 미발행 | 초기화 |
 | 프리뷰 예외 | `show`만 비활성화 | 이미 계산한 결과 유지 | 유지 |
 
-설정 JSON 오류, 알 수 없는 모델, import 불가, 카메라 최초 열기 실패처럼 시작 구성이
-잘못된 경우에는 잘못된 상태로 운영하지 않도록 초기화를 실패시킨다.
+설정 JSON 오류, 알 수 없는 모델, import 불가, MP4 최초 열기 실패처럼 시작 구성이
+잘못된 경우에는 잘못된 상태로 운영하지 않도록 초기화를 실패시킨다. 단, 실제 USB 웹캠은
+시작 시 미연결이거나 실행 중 케이블이 뽑혀도 노드를 유지하고 `reconnect_interval`마다 자동 재연결한다.
 
 ## 시작 오류 확인
 
@@ -568,7 +571,7 @@ ros2 topic echo /patient/bed_exit
 | `Set method or method_config` | 판단 방법을 모두 생략함 | 내장 모델 설정 JSON 또는 외부 모듈 경로 지정 |
 | `Built-in methods require method_config` | 내장 이름만 지정함 | ROI가 포함된 `method_config` 추가 |
 | `method_config applies only to built-in method names` | 외부 모듈과 JSON을 함께 지정함 | 외부 모듈 실행에서 `method_config` 제거 |
-| `Cannot open video source` | 카메라 번호 또는 MP4 경로가 잘못됨 | 입력 장치·파일 경로 확인 |
+| `Cannot open video source` | 지정한 MP4 경로가 잘못되었거나 열 수 없음 | `video_path` 파일 경로 확인 |
 
 상세 연구·벤치마크 실행법은 [USAGE.md](USAGE.md)를 참고한다.
 

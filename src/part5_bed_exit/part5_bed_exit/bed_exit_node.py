@@ -22,6 +22,7 @@ Part 5 전체 흐름을 연결한다. 사람 인식과 ROI 판정은 판단 객�
 
 import math
 import os
+import time
 
 import cv2
 import rclpy
@@ -74,6 +75,9 @@ class BedExitNode(Node):
         self.show = False
         self.is_video_file = False
         self.loop_video = False
+        self.camera_index = None
+        self.reconnect_interval = 1.0
+        self._last_reconnect_attempt = None
 
         # method(str, 기본값=''): 빈 값이면 method_config JSON의 method를 사용한다.
         # 내장 이름 또는 package.module:ClassOrObject 형식으로 실행 구현을 선택할 수 있다.
@@ -85,6 +89,8 @@ class BedExitNode(Node):
         self.declare_parameter('output_topic', '/patient/bed_exit')
         # camera_index(int, 기본값=0): OpenCV VideoCapture가 열 USB 카메라 장치 번호.
         self.declare_parameter('camera_index', 0)
+        # reconnect_interval(float, 기본값=1.0): 웹캠 미연결·끊김 시 재연결 시도 최소 간격(초).
+        self.declare_parameter('reconnect_interval', 1.0)
         # video_path(str, 기본값=''): 값이 있으면 웹캠 대신 해당 MP4를 입력으로 사용한다.
         self.declare_parameter('video_path', '' if video_path is None else str(video_path))
         # loop_video(bool, 기본값=False): MP4 EOF에서 첫 프레임으로 되감아 반복할지 선택한다.
@@ -105,6 +111,8 @@ class BedExitNode(Node):
         topic = self.get_parameter('output_topic').value
         # camera_index 값을 읽어 cv2.VideoCapture()에 전달한다.
         camera_index = self.get_parameter('camera_index').value
+        # reconnect_interval 값을 읽어 웹캠 재연결 쿨다운(초)으로 사용한다.
+        reconnect_interval = float(self.get_parameter('reconnect_interval').value)
         # video_path와 loop_video 값을 읽어 웹캠/영상 입력 및 EOF 정책을 선택한다.
         resolved_video = str(self.get_parameter('video_path').value).strip()
         self.loop_video = bool(self.get_parameter('loop_video').value)
@@ -119,6 +127,8 @@ class BedExitNode(Node):
         # 실제 모델을 생성할 때는 검수된 ROI 설정이 반드시 필요하다.
         if not topic or not math.isfinite(fps) or fps <= 0:
             raise ValueError('Set output_topic and capture_fps > 0')
+        if not math.isfinite(reconnect_interval) or reconnect_interval <= 0:
+            raise ValueError('Set reconnect_interval > 0')
         if detector is None and not method_path and not config_path:
             raise ValueError('Set method or method_config')
 
@@ -134,20 +144,23 @@ class BedExitNode(Node):
             self.state = BedExitState()
             self.publisher = self.create_publisher(Bool, topic, 10)
             self.is_video_file = bool(resolved_video)
-            source = resolved_video if self.is_video_file else camera_index
-            source_desc = (
-                f'video_path={resolved_video}'
-                if self.is_video_file
-                else f'camera_index={camera_index}'
-            )
-            self.capture = cv2.VideoCapture(source)
-            if not self.capture.isOpened():
-                raise RuntimeError(f'Cannot open video source ({source_desc})')
+            self.reconnect_interval = reconnect_interval
+            if self.is_video_file:
+                source_desc = f'video_path={resolved_video}'
+                self.capture = cv2.VideoCapture(resolved_video)
+                if not self.capture.isOpened():
+                    raise RuntimeError(f'Cannot open video source ({source_desc})')
+            else:
+                self.camera_index = camera_index
+                source_desc = f'camera_index={camera_index}'
+                # 웹캠 모드에서는 시작 시점에 카메라가 미연결이어도 노드를 종료하지 않고
+                # 타이머 주기에서 reconnect_interval마다 재연결을 시도한다.
+                self._open_camera(initial=True)
             self.timer = self.create_timer(1.0 / fps, self.process_frame)
             self.get_logger().info(
                 f'BedExitNode started: {source_desc}, topic={topic}, '
                 f'method={type(self.detector).__name__}, show={self.show}, '
-                f'loop_video={self.loop_video}'
+                f'loop_video={self.loop_video}, camera_connected={self.capture is not None}'
             )
         except Exception:
             self._release_capture()
@@ -205,6 +218,92 @@ class BedExitNode(Node):
         except Exception:
             pass
 
+    def _log_callback_info(self, message):
+        """정보 로그 출력 실패가 콜백 밖으로 전파되지 않게 한다."""
+        try:
+            self.get_logger().info(message)
+        except Exception:
+            pass
+
+    def _close_capture_handle(self):
+        """OpenCV 프리뷰 창은 유지한 채 VideoCapture 핸들만 안전하게 닫는다."""
+        capture = getattr(self, 'capture', None)
+        if capture is not None:
+            release = getattr(capture, 'release', None)
+            if callable(release):
+                try:
+                    release()
+                except Exception:
+                    pass
+            self.capture = None
+
+    def _disconnect_camera(self):
+        """끊긴 웹캠 핸들을 즉시 해제하고 다음 재연결 쿨다운 기준 시각을 기록한다."""
+        BedExitNode._close_capture_handle(self)
+        self._last_reconnect_attempt = time.monotonic()
+
+    def _open_camera(self, initial: bool = False) -> bool:
+        """지정된 camera_index 웹캠을 연다. 실패 시 예외를 던지지 않고 False를 반환한다."""
+        camera_index = getattr(self, 'camera_index', None)
+        if camera_index is None:
+            return False
+        BedExitNode._close_capture_handle(self)
+        self._last_reconnect_attempt = time.monotonic()
+        try:
+            capture = cv2.VideoCapture(camera_index)
+            is_opened = capture is not None and bool(capture.isOpened())
+        except Exception as exc:
+            BedExitNode._log_callback_error(
+                self,
+                f'Webcam open failed (camera_index={camera_index}); '
+                f'waiting to reconnect: {exc}',
+            )
+            return False
+
+        if not is_opened:
+            release = getattr(capture, 'release', None)
+            if callable(release):
+                try:
+                    release()
+                except Exception:
+                    pass
+            interval = float(getattr(self, 'reconnect_interval', 1.0))
+            BedExitNode._log_callback_error(
+                self,
+                f'Webcam unavailable (camera_index={camera_index}); '
+                f'retrying every {interval:.1f}s without stopping node',
+            )
+            return False
+
+        self.capture = capture
+        if not initial:
+            BedExitNode._log_callback_info(
+                self, f'Webcam reconnected (camera_index={camera_index})')
+        return True
+
+    def _ensure_camera(self) -> bool:
+        """웹캠 핸들이 유효한지 확인하고, 끊긴 상태면 쿨다운 주기로 재연결을 시도한다."""
+        capture = getattr(self, 'capture', None)
+        if capture is not None:
+            is_opened = getattr(capture, 'isOpened', None)
+            if not callable(is_opened):
+                return True
+            try:
+                if is_opened():
+                    return True
+            except Exception:
+                pass
+            BedExitNode._disconnect_camera(self)
+
+        if getattr(self, 'camera_index', None) is None:
+            return False
+
+        interval = float(getattr(self, 'reconnect_interval', 1.0))
+        last_attempt = getattr(self, '_last_reconnect_attempt', None)
+        if last_attempt is not None and (time.monotonic() - last_attempt) < interval:
+            return False
+        return BedExitNode._open_camera(self, initial=False)
+
     def _render_preview_safely(self, frame, voted_unsafe):
         """외부 메서드의 렌더링 실패를 격리하고 프리뷰만 비활성화한다."""
         render_preview = getattr(self, '_render_preview', None)
@@ -224,15 +323,21 @@ class BedExitNode(Node):
         # 다음: bed_exit_core.BedExitMethod.judge(frame)
         # 프레임 수신 실패 시 거짓 정상(False) 발행을 막기 위해 이력을 초기화하고 발행을 건너뛴다.
         # 유효한 카메라·영상 프레임만 판단 단계로 넘긴다.
+        is_video_file = bool(getattr(self, 'is_video_file', False))
+        if not is_video_file and not BedExitNode._ensure_camera(self):
+            self.state = BedExitState()
+            return
+
         try:
             ok, frame = self.capture.read()
         except Exception as exc:
             BedExitNode._log_callback_error(
                 self, f'Video source read failed; no frame decision published: {exc}')
             self.state = BedExitState()
+            if not is_video_file and getattr(self, 'camera_index', None) is not None:
+                BedExitNode._disconnect_camera(self)
             return
 
-        is_video_file = bool(getattr(self, 'is_video_file', False))
         loop_video = bool(getattr(self, 'loop_video', False))
         if (not ok or frame is None) and is_video_file and loop_video:
             # 반복 경계에서 이전 영상 끝의 투표·추적 상태를 다음 반복에 섞지 않는다.
@@ -275,6 +380,8 @@ class BedExitNode(Node):
             else:
                 BedExitNode._log_callback_error(
                     self, 'Webcam read failed; no frame decision published')
+                if getattr(self, 'camera_index', None) is not None:
+                    BedExitNode._disconnect_camera(self)
             return
 
         # [PART05-V5-06~08 사람 인식 → 단일 환자 선정 → 환자 마스크 ROI 판정]

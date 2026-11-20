@@ -7,6 +7,7 @@
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 import rclpy
 
 from part5_bed_exit import bed_exit_node
@@ -318,3 +319,164 @@ def test_release_and_close_helpers_release_injected_resources():
     assert detector.closed is True
     assert node.capture is None
     assert node.detector is None
+
+
+class _ClosedCapture(_Capture):
+    def isOpened(self):
+        return False
+
+
+def test_init_stays_alive_when_webcam_unavailable(monkeypatch):
+    closed_capture = _ClosedCapture()
+    opened_sources = []
+    monkeypatch.setattr(
+        bed_exit_node.cv2,
+        'VideoCapture',
+        lambda source: opened_sources.append(source) or closed_capture,
+    )
+    _start_ros(['--ros-args', '-p', 'camera_index:=2', '-p', 'show:=false'])
+    node = None
+    try:
+        node = bed_exit_node.BedExitNode(detector=_Method())
+        assert opened_sources == [2]
+        assert closed_capture.released is True
+        assert node.capture is None
+        assert node.camera_index == 2
+        assert node.reconnect_interval == 1.0
+        assert node.timer is not None
+    finally:
+        if node is not None:
+            node.destroy_node()
+        _stop_ros()
+
+
+def test_init_still_raises_when_video_file_missing(monkeypatch):
+    detector = _Method()
+    monkeypatch.setattr(bed_exit_node.cv2, 'VideoCapture', lambda source: _ClosedCapture())
+    _start_ros(['--ros-args', '-p', 'show:=false'])
+    try:
+        with pytest.raises(RuntimeError, match='Cannot open video source'):
+            bed_exit_node.BedExitNode(detector=detector, video_path='missing.mp4')
+        assert detector.closed is True
+    finally:
+        _stop_ros()
+
+
+def test_init_rejects_invalid_reconnect_interval(monkeypatch):
+    monkeypatch.setattr(bed_exit_node.cv2, 'VideoCapture', lambda source: _Capture())
+    _start_ros(['--ros-args', '-p', 'reconnect_interval:=0.0', '-p', 'show:=false'])
+    try:
+        with pytest.raises(ValueError, match='reconnect_interval'):
+            bed_exit_node.BedExitNode(detector=_Method())
+    finally:
+        _stop_ros()
+
+
+def test_process_frame_reconnects_after_cooldown(monkeypatch):
+    frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    clock = [10.0]
+    opened_sources = []
+    published = []
+    info_logs = []
+    errors = []
+    reconnected_capture = _Capture(frame)
+
+    monkeypatch.setattr(bed_exit_node.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(
+        bed_exit_node.cv2,
+        'VideoCapture',
+        lambda source: opened_sources.append(source) or reconnected_capture,
+    )
+
+    node = SimpleNamespace(
+        capture=None,
+        camera_index=2,
+        is_video_file=False,
+        reconnect_interval=1.0,
+        _last_reconnect_attempt=10.0,
+        detector=_Method(False),
+        state=BedExitState(),
+        publisher=SimpleNamespace(publish=lambda message: published.append(message.data)),
+        show=False,
+        get_logger=lambda: SimpleNamespace(error=errors.append, info=info_logs.append),
+    )
+
+    # 쿨다운 미만(0.5초 경과): VideoCapture 재호출 없이 대기하고 발행하지 않는다.
+    clock[0] = 10.5
+    bed_exit_node.BedExitNode.process_frame(node)
+    assert opened_sources == []
+    assert published == []
+    assert node.capture is None
+
+    # 쿨다운 경과(1.0초): 재연결 성공 후 즉시 프레임을 처리·발행한다.
+    clock[0] = 11.0
+    bed_exit_node.BedExitNode.process_frame(node)
+    assert opened_sources == [2]
+    assert node.capture is reconnected_capture
+    assert published == [False]
+    assert info_logs == ['Webcam reconnected (camera_index=2)']
+    assert errors == []
+
+
+def test_process_frame_releases_and_reconnects_on_usb_unplug_replug(monkeypatch):
+    frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    clock = [20.0]
+    opened_sources = []
+    published = []
+    info_logs = []
+    errors = []
+
+    cap1 = _Capture(frame)
+    cap2 = _Capture(frame)
+    detector = _Method(True)
+    detector.previous = 'kept_bbox'
+
+    monkeypatch.setattr(bed_exit_node.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(
+        bed_exit_node.cv2,
+        'VideoCapture',
+        lambda source: opened_sources.append(source) or cap2,
+    )
+
+    node = SimpleNamespace(
+        capture=cap1,
+        camera_index=2,
+        is_video_file=False,
+        reconnect_interval=1.0,
+        _last_reconnect_attempt=None,
+        detector=detector,
+        state=BedExitState(),
+        publisher=SimpleNamespace(publish=lambda message: published.append(message.data)),
+        show=False,
+        get_logger=lambda: SimpleNamespace(error=errors.append, info=info_logs.append),
+    )
+
+    # 1) 정상 5프레임 발행
+    for _ in range(5):
+        bed_exit_node.BedExitNode.process_frame(node)
+    assert published == [False, False, False, False, True]
+
+    # 2) 실행 중 USB 웹캠 분리(read 실패): 즉시 핸들 해제 + history 초기화 + previous 유지 + 미발행
+    cap1.read = lambda: (False, None)
+    bed_exit_node.BedExitNode.process_frame(node)
+    assert cap1.released is True
+    assert node.capture is None
+    assert list(node.state.history) == []
+    assert detector.previous == 'kept_bbox'
+    assert len(published) == 5
+
+    # 3) 쿨다운 전(0.4초): 재오픈 시도하지 않음
+    clock[0] = 20.4
+    bed_exit_node.BedExitNode.process_frame(node)
+    assert opened_sources == []
+    assert len(published) == 5
+
+    # 4) 쿨다운 이후(1.1초): USB 재연결 성공 -> previous 유지 상태로 5프레임 재워밍업 후 True 복구
+    clock[0] = 21.1
+    for _ in range(5):
+        bed_exit_node.BedExitNode.process_frame(node)
+    assert opened_sources == [2]
+    assert node.capture is cap2
+    assert detector.previous == 'kept_bbox'
+    assert published[5:] == [False, False, False, False, True]
+    assert info_logs == ['Webcam reconnected (camera_index=2)']

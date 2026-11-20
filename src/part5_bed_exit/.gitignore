@@ -1,5 +1,6 @@
 /models/
 /data/
+/run_data/
 /results/**
 !/results/README.md
 !/results/**/
@@ -9,9 +10,8 @@
 !/research/data/test_images/
 !/research/data/test_images/**
 /research/results/
-/config/methods.local.json
-/config/methods.webcam.json
-/config/testbed.local.json
+/config/*.json
+!/config/*.template.json
 /notebooks/.ipynb_checkpoints/
 *.task
 *.zip
