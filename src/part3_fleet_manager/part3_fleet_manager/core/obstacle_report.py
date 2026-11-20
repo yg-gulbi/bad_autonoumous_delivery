@@ -4,7 +4,8 @@ Timeline for one failed leg:
   MISSION_FAILED ("Nav2: ABORTED")  -> hold the NAV_FAILED card up to report_wait_s
   OBSTACLE (same PART 04 mission ID) -> wait up to timeout_s for the first PART 06 result
   verdict OBJECT  -> block the robot's region + obstacle card
-          NONE    -> one automatic retry after retry_delay_s, a second failure gets a card
+          NONE    -> card (4K default retry_if_clear: false: "no box" is not "path clear").
+                     With retry_if_clear: one automatic retry after retry_delay_s, a second failure gets a card
           UNKNOWN / no result -> obstacle card "판별 불가", no automatic retry
 No OBSTACLE in time -> the ordinary NAV_FAILED card.
 """
@@ -31,6 +32,7 @@ class ObstacleReports:
     def __init__(self, core):
         self.core = core
         self.policy = core.config.obstacle
+        self.yolo = {}  # latest informational sighting per robot
         self.failures: dict[str, Failure] = {}
         self.views: dict[str, tuple] = {}       # robot -> (observation for the robot card, failed move)
         self.retried: dict[str, tuple] = {}     # robot -> (job, stop index, target) already retried once
@@ -67,6 +69,17 @@ class ObstacleReports:
 
     def report(self, robot, data, now):
         """OBSTACLE status from PART 04, paired with the failed move by its mission ID."""
+        if data.get("source") == "yolo":
+            label = data.get("class") or "종류 미상"
+            confidence = f" {data['conf']:.2f}" if obstacle.finite(data.get("conf")) else ""
+            depth = f"약 {data['depth_m']:g} m" if obstacle.finite(data.get("depth_m")) else "거리 미측정"
+            text = f"주행 중 장애물 감지 · {label}{confidence} · {depth} · 계속 주행"
+            fields = {k: data.get(k) for k in ("class", "conf", "depth_m", "bearing_deg", "map_x", "map_y",
+                                                "robot_pose", "destination", "image_stamp")}
+            self.yolo[robot] = dict(fields, text=text, at=now, part4_mission_id=data.get("mission_id"))
+            self._record("OBSTACLE_REPORT", robot, now, text, **fields, source="yolo",
+                         part4_mission_id=data.get("mission_id"))
+            return
         failure = self.failures.get(robot)
         paired = bool(self.active and data.get("paired") and failure and failure.report is None
                       and failure.remote is not None and data.get("mission_id") == failure.remote)
@@ -132,8 +145,10 @@ class ObstacleReports:
             view["text"] = f"{text} · {self.policy.retry_delay_s:g}초 뒤 자동 재출발"
             return
         reason = text
-        if kind == "NONE":
+        if kind == "NONE" and self.policy.retry_if_clear:
             reason = f"{text} · 자동 재출발 뒤 다시 멈춤 — 로봇이 찍은 사진 확인"
+        elif kind == "NONE":
+            reason = f"{text} — 길이 비었다는 뜻은 아님, 로봇이 찍은 사진과 현장 확인"
         if kind == "OBJECT":
             self._block(robot, view, reason, now)
         best = obstacle.best_detection(answer, self.policy)

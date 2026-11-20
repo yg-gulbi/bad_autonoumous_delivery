@@ -65,7 +65,8 @@ def test_41_actual_fleet_event_titles_reasons_and_journal(tmp_path,monkeypatch):
     events = list(traffic(cfg))
     with ExitStack() as cleanup:
         def simulator(mode="inspect"):
-            sim = Simulation(replace(cfg,db_path=":memory:",obstacle=replace(cfg.obstacle,mode=mode)))
+            # 4K turned the NONE retry off in fleet.yaml; this scenario still produces OBSTACLE_RETRY.
+            sim = Simulation(replace(cfg,db_path=":memory:",obstacle=replace(cfg.obstacle,mode=mode,retry_if_clear=True)))
             cleanup.callback(sim.core.store.close)
             return sim
 
@@ -150,6 +151,26 @@ def test_41_actual_fleet_event_titles_reasons_and_journal(tmp_path,monkeypatch):
         for ts in (0,3,6):
             collect(sim,ts)
 
+        # 4K: PAUSE resent while STATE stays MOVING, the unconfirmed-stop card, then an arrival known
+        # only from STATE because the STATUS ARRIVED was lost.
+        sim = simulator()
+        sim.battery(A,80)
+        sim.call("stop","C")
+        collect(sim,0)
+        collect(sim,1)
+        sim.event(A,"MISSION_ACCEPTED")
+        collect(sim,2)
+        sim.cmd("PAUSE_ROBOT",robot=A)
+        for i in range(13):  # PAUSE at 3, again at 4.5, 6 and 7.5, the card at 9
+            collect(sim,3+i/2)
+        sim.event(A,"PAUSED")
+        collect(sim,9.5)
+        sim.cmd("RESUME_ROBOT",robot=A)
+        sim.event(A,"RESUMED")
+        collect(sim,10)
+        sim.frames[A].update(state="COMPLETE",percent=100,pose=sim.pose("C"))
+        collect(sim,11)
+
         sim = simulator()
         sim.cmd("GO_ZONE", robot=A, zone="F")
         collect(sim,0)
@@ -186,3 +207,11 @@ def test_41_actual_fleet_event_titles_reasons_and_journal(tmp_path,monkeypatch):
                 assert not codes.search(card["title"] + card["reason"])
     finally:
         store.close()
+
+
+def test_yolo_sighting_has_its_own_history_title():
+    reason = "주행 중 장애물 감지 · medical_box 0.93 · 약 0.85 m · 계속 주행"
+    event = {"type": "OBSTACLE_REPORT", "robot": B, "detail": {"source": "yolo", "reason": reason}}
+    row = present_event(event, {}, {B: "약품 운송 로봇"})
+    assert row["title"] == "약품 운송 로봇 주행 중 장애물 감지"
+    assert row["detail"]["reason"] == reason

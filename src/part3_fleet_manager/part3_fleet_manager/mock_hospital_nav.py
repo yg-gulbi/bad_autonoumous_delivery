@@ -87,6 +87,8 @@ class MockHospitalNav(Node):
             raise ValueError(check.reason)
         for name in ("reject_next", "fail_next", "drop_link"):
             self.declare_parameter(name, False)
+        # 4K bench check: true = every PAUSE is lost (the robot keeps MOVING), to see the unconfirmed-stop card.
+        self.declare_parameter("ignore_pause", False)
         self.add_on_set_parameters_callback(self.validate)
         self.yaw = 0.0
         self.predock, self.dock_point = unit.dock.path_end() if unit.dock else (None, None)
@@ -96,6 +98,7 @@ class MockHospitalNav(Node):
             self.pose = self.dock_point
         self.docked = True
         self.phase_until = 0.0
+        self.last_yolo = float("-inf")
         self.state, self.mid, self.dest, self.level, self.reason = "IDLE", None, None, 1, ""
         self.path, self.total, self.stalled_until, self.fail = [], 0.0, 0.0, False
         self.slot, self.via = None, None  # via: the crossroad point still ahead on this path
@@ -132,6 +135,15 @@ class MockHospitalNav(Node):
             if not isinstance(data, dict) or data.get("robot") != self.logical_id:
                 return
             action = data.get("action")
+            if action == "yolo":
+                if self.state == "MOVING" and self.sample and self.now() - self.last_yolo >= 10:
+                    self.last_yolo = self.now()
+                    self.image_pub.publish(CompressedImage(format="jpeg", data=self.sample))
+                    self.emit("OBSTACLE", source="yolo", **{"class": "medical_box"}, conf=0.93, depth_m=0.85,
+                              bearing_deg=0.0, map_x=self.pose[0] + 0.85 * cos(self.yaw),
+                              map_y=self.pose[1] + 0.85 * sin(self.yaw), destination=self.dest,
+                              image_stamp=self.now(), robot_pose={**self.position(), "yaw_deg": degrees(self.yaw)})
+                return
             if action == "obstacle":
                 # report mode: stop in front of the obstacle; Nav2 gives up after abort_after_s.
                 if self.config.obstacle.mode == "report":
@@ -284,6 +296,9 @@ class MockHospitalNav(Node):
         elif action == "RESUME" and self.state == "PAUSED":
             self.emit("RESUMED")
         elif action == "PAUSE" and self.state == "MOVING":
+            if self.value("ignore_pause"):
+                self.get_logger().info("시험: PAUSE 무시 (ignore_pause)")
+                return
             self.reason, self.state = "관제 요청", "STOPPING_PAUSE"
             return
         elif action == "CANCEL" and self.state in DONE:

@@ -35,6 +35,8 @@ class Move:
     slot: int | None = None       # 2 only for a robot whose STATE carries "slot"
     via: bool | None = None       # NAVIGATING said via the crossroad (None before NAVIGATING)
     via_passed: bool = False      # VIA_PASSED received for this move
+    wire_slot: int | None = None  # slot the last MOVE asked for (1 when it carried no number); None for DOCK
+    arrival: dict | None = None   # 4K: a COMPLETE STATE for this move, used if no ARRIVED comes in the same batch
 
 
 def number(value):
@@ -67,6 +69,11 @@ class RobotProtocol:
         self.cancel_unaccepted = False
         self.cancel_sent_at = None
         self.control_sent = None
+        # 4K PAUSE confirmation: sends in the current stop (first + resends), last send time, and
+        # whether more than control_retries resends went unanswered (operator card).
+        self.pause_sends = 0
+        self.pause_sent_at = None
+        self.stop_unconfirmed = False
         self.retired = set()
         self.slots = False  # STATE has carried a "slot" key at least once (4J PART 04)
 
@@ -224,6 +231,13 @@ class RobotProtocol:
                     and state == "COMPLETE" and data.get("docked") is True):
                 move.finished = True
                 return {"event": "DOCKED", "mission_id": remote}
+            slot = data.get("slot")
+            if (move and move.zone != "DOCK" and not move.finished and remote and remote == move.remote_id
+                    and state == "COMPLETE" and data.get("destination") == move.zone
+                    and (slot is None or slot == move.wire_slot)):
+                # The STATUS ARRIVED may have been lost. settle() uses this only if it did not come.
+                move.arrival = {"event": "ARRIVED", "destination": move.zone, "slot": slot,
+                                "mission_id": remote, "from_state": True}
             if inferred_accept:
                 return {"event": "MISSION_ACCEPTED", "destination": move.zone, "mission_id": remote}
             if state not in STATES and state not in self.warned_states:
@@ -259,8 +273,8 @@ class RobotProtocol:
             self.update_pose(data.get("pose"), stamp)
             return None
         if event == "OBSTACLE":
-            # Sent after MISSION_FAILED, so the move is already finished. Pair by PART 04 mission ID.
-            paired = bool(move and remote and remote == move.remote_id)
+            # A driving sighting can have the same mission ID as a subsequent abort report.
+            paired = bool(data.get("source") != "yolo" and move and remote and remote == move.remote_id)
             return {**data, "event": "OBSTACLE", "paired": paired}
         if event not in EVENT_STATE and event not in PASSING_EVENTS:
             return {"event": "WARNING", "reason": f"알 수 없는 PART 04 이벤트 {event}"}
@@ -301,6 +315,37 @@ class RobotProtocol:
             self._dock_report(event == "DOCKED", stamp)
         return data
 
+    def settle(self):
+        """After a batch of STATUS/STATE: a matching COMPLETE STATE stands for a lost ARRIVED (4K, D-34)."""
+        move = self.move
+        if move and move.arrival and not move.finished:
+            move.finished = True
+            return dict(move.arrival)
+        return None
+
+    def resend_pause(self):
+        """Operator chose [다시 보내기] on the unconfirmed stop card: start a fresh round of PAUSE."""
+        self.pause_sends, self.stop_unconfirmed = 0, False
+
+    def _pause(self, now):
+        """PAUSE while MOVING, again every control_retry_s until STOPPING_PAUSE or PAUSED (4K, D-32).
+
+        PART 04 ignores PAUSE unless MOVING, so a resend is harmless. After control_retries resends
+        the robot is marked unconfirmed and nothing more is sent until the operator decides.
+        """
+        if self.control_sent != "PAUSE":
+            self.pause_sends, self.stop_unconfirmed = 0, False
+        if self.state != "MOVING" or self.stop_unconfirmed:
+            return None
+        if self.pause_sends and now - self.pause_sent_at < self.policy.control_retry_s:
+            return None
+        if self.pause_sends > self.policy.control_retries:
+            self.stop_unconfirmed = True
+            return None
+        self.control_sent, self.pause_sent_at = "PAUSE", now
+        self.pause_sends += 1
+        return "PAUSE"
+
     def _control_ack(self, state):
         if ((state == "PAUSED" and self.control_sent == "PAUSE")
                 or (state == "MOVING" and self.control_sent == "RESUME")):
@@ -318,10 +363,8 @@ class RobotProtocol:
             return None, None
         move = self.move
         if stop:
-            if self.state == "MOVING" and self.control_sent != "PAUSE":
-                self.control_sent = "PAUSE"
-                return "PAUSE", None
-            return None, None
+            return self._pause(now), None
+        self.pause_sends, self.stop_unconfirmed = 0, False
         if resume and self.state == "PAUSED" and self.control_sent != "RESUME":
             self.control_sent = "RESUME"
             return "RESUME", None
@@ -340,6 +383,7 @@ class RobotProtocol:
         if move.zone == "DOCK":
             move.attempts += 1
             move.sent_at = now
+            move.wire_slot = None
             return "DOCK", None
         move.tagged = self.tagged if self.tagged is not None else move.attempts == 0
         move.attempts += 1
@@ -347,4 +391,5 @@ class RobotProtocol:
         suffix = f" id={move.leg_id}" if move.tagged else ""
         # A missing slot number means slot 1. Earlier PART 04 rejects "F2" as a syntax error.
         room = f"{move.zone}2" if move.slot == 2 and self.slots else move.zone
+        move.wire_slot = 2 if room != move.zone else 1
         return f"MOVE {room} {move.level}{suffix}", None

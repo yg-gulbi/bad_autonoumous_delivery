@@ -114,6 +114,8 @@ def test_57_box_card_return_unblocks_when_the_robot_moves_again(sim):
 
 
 def test_58_none_retries_once_after_3s_then_card_only(sim):
+    # 4K turned the automatic retry off in fleet.yaml (D-31). This keeps the retry_if_clear: true rule tested.
+    sim.core.reports.policy = replace(sim.core.reports.policy, retry_if_clear=True)
     drive_into_corridor(sim)
     abort(sim, 3)
     sim.core.enqueue("obstacle_result", verdict(None), 3.5, robot=A)

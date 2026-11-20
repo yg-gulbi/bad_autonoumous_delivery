@@ -1,0 +1,299 @@
+[
+  {
+    "scenario": "e",
+    "trial": 1,
+    "status": "PASS",
+    "cmd_ts": 1795141913.085231,
+    "dt_to_pause_cause_wall_s": 0.117,
+    "dt_to_stopping_pause_wall_s": null,
+    "dt_to_paused_confirm_wall_s": 0.335,
+    "dt_to_paused_confirm_sim_s": 0.255,
+    "stop_dist_from_cmd": {
+      "start_ts": 1795141913.111,
+      "stop_ts": 1795141913.611,
+      "elapsed_wall_s": 0.5,
+      "elapsed_sim_s": 0.432,
+      "straight_m": 0.0642,
+      "path_m": 0.0642,
+      "start_xy": [
+        -1.448,
+        -1.281
+      ],
+      "stop_xy": [
+        -1.461,
+        -1.344
+      ]
+    },
+    "stop_dist_from_db_pause": {
+      "start_ts": 1795141913.211,
+      "stop_ts": 1795141913.611,
+      "elapsed_wall_s": 0.4,
+      "elapsed_sim_s": 0.348,
+      "straight_m": 0.0418,
+      "path_m": 0.0418,
+      "start_xy": [
+        -1.453,
+        -1.303
+      ],
+      "stop_xy": [
+        -1.461,
+        -1.344
+      ]
+    },
+    "stop_resent_count": 0,
+    "stop_unconfirmed_count": 0,
+    "cards": [],
+    "samples": 464,
+    "moving_samples": 324,
+    "wall_duration_s": 46.3,
+    "sim_duration_s": 36.93,
+    "avg_rtf": 0.798,
+    "min_gt_moving": {
+      "dist_m": 1.0272,
+      "wall_ts": 1795141935.511,
+      "wall_iso": "2026-11-20 11:32:15.511",
+      "sim_ts": 2512.56,
+      "r3_xy": [
+        -2.123,
+        -4.672
+      ],
+      "r2_xy": [
+        -1.398,
+        -5.4
+      ],
+      "r3_v": 0.266,
+      "r2_v": 0.0
+    },
+    "min_amcl_moving": {
+      "dist_m": 1.0462,
+      "wall_ts": 1795141936.011,
+      "wall_iso": "2026-11-20 11:32:16.010",
+      "sim_ts": 2512.968,
+      "r3_xy": [
+        -2.199,
+        -4.746
+      ],
+      "r2_xy": [
+        -1.398,
+        -5.4
+      ],
+      "r3_v": 0.253,
+      "r2_v": 0.0
+    },
+    "min_gt_all": {
+      "dist_m": 1.0272,
+      "wall_ts": 1795141935.511,
+      "wall_iso": "2026-11-20 11:32:15.511",
+      "sim_ts": 2512.56,
+      "r3_xy": [
+        -2.123,
+        -4.672
+      ],
+      "r2_xy": [
+        -1.398,
+        -5.4
+      ],
+      "r3_v": 0.266,
+      "r2_v": 0.0
+    },
+    "gt_ge_045": true
+  },
+  {
+    "scenario": "e",
+    "trial": 2,
+    "status": "PASS",
+    "cmd_ts": 1795141981.8536808,
+    "dt_to_pause_cause_wall_s": 0.232,
+    "dt_to_stopping_pause_wall_s": null,
+    "dt_to_paused_confirm_wall_s": 0.34,
+    "dt_to_paused_confirm_sim_s": 0.225,
+    "stop_dist_from_cmd": {
+      "start_ts": 1795141981.953,
+      "stop_ts": 1795141982.552,
+      "elapsed_wall_s": 0.599,
+      "elapsed_sim_s": 0.453,
+      "straight_m": 0.0551,
+      "path_m": 0.0551,
+      "start_xy": [
+        -1.388,
+        -1.356
+      ],
+      "stop_xy": [
+        -1.398,
+        -1.41
+      ]
+    },
+    "stop_dist_from_db_pause": {
+      "start_ts": 1795141982.052,
+      "stop_ts": 1795141982.552,
+      "elapsed_wall_s": 0.5,
+      "elapsed_sim_s": 0.378,
+      "straight_m": 0.0364,
+      "path_m": 0.0364,
+      "start_xy": [
+        -1.391,
+        -1.375
+      ],
+      "stop_xy": [
+        -1.398,
+        -1.41
+      ]
+    },
+    "stop_resent_count": 0,
+    "stop_unconfirmed_count": 0,
+    "cards": [],
+    "samples": 439,
+    "moving_samples": 333,
+    "wall_duration_s": 43.8,
+    "sim_duration_s": 34.67,
+    "avg_rtf": 0.792,
+    "min_gt_moving": {
+      "dist_m": 1.0081,
+      "wall_ts": 1795142000.852,
+      "wall_iso": "2026-11-20 11:33:20.851",
+      "sim_ts": 2564.571,
+      "r3_xy": [
+        -2.112,
+        -4.689
+      ],
+      "r2_xy": [
+        -1.398,
+        -5.4
+      ],
+      "r3_v": 0.25,
+      "r2_v": 0.0
+    },
+    "min_amcl_moving": {
+      "dist_m": 1.0624,
+      "wall_ts": 1795142000.552,
+      "wall_iso": "2026-11-20 11:33:20.551",
+      "sim_ts": 2564.334,
+      "r3_xy": [
+        -2.071,
+        -4.645
+      ],
+      "r2_xy": [
+        -1.398,
+        -5.4
+      ],
+      "r3_v": 0.231,
+      "r2_v": 0.0
+    },
+    "min_gt_all": {
+      "dist_m": 1.0081,
+      "wall_ts": 1795142000.852,
+      "wall_iso": "2026-11-20 11:33:20.851",
+      "sim_ts": 2564.571,
+      "r3_xy": [
+        -2.112,
+        -4.689
+      ],
+      "r2_xy": [
+        -1.398,
+        -5.4
+      ],
+      "r3_v": 0.25,
+      "r2_v": 0.0
+    },
+    "gt_ge_045": true
+  },
+  {
+    "scenario": "e",
+    "trial": 3,
+    "status": "PASS",
+    "cmd_ts": 1795142043.7766387,
+    "dt_to_pause_cause_wall_s": 0.227,
+    "dt_to_stopping_pause_wall_s": null,
+    "dt_to_paused_confirm_wall_s": 0.444,
+    "dt_to_paused_confirm_sim_s": 0.402,
+    "stop_dist_from_cmd": {
+      "start_ts": 1795142043.86,
+      "stop_ts": 1795142044.36,
+      "elapsed_wall_s": 0.5,
+      "elapsed_sim_s": 0.408,
+      "straight_m": 0.0596,
+      "path_m": 0.0596,
+      "start_xy": [
+        -1.457,
+        -1.456
+      ],
+      "stop_xy": [
+        -1.462,
+        -1.515
+      ]
+    },
+    "stop_dist_from_db_pause": {
+      "start_ts": 1795142043.86,
+      "stop_ts": 1795142044.36,
+      "elapsed_wall_s": 0.5,
+      "elapsed_sim_s": 0.408,
+      "straight_m": 0.0596,
+      "path_m": 0.0596,
+      "start_xy": [
+        -1.457,
+        -1.456
+      ],
+      "stop_xy": [
+        -1.462,
+        -1.515
+      ]
+    },
+    "stop_resent_count": 0,
+    "stop_unconfirmed_count": 0,
+    "cards": [],
+    "samples": 435,
+    "moving_samples": 330,
+    "wall_duration_s": 43.4,
+    "sim_duration_s": 34.67,
+    "avg_rtf": 0.799,
+    "min_gt_moving": {
+      "dist_m": 0.951,
+      "wall_ts": 1795142062.66,
+      "wall_iso": "2026-11-20 11:34:22.659",
+      "sim_ts": 2613.711,
+      "r3_xy": [
+        -2.079,
+        -4.736
+      ],
+      "r2_xy": [
+        -1.398,
+        -5.4
+      ],
+      "r3_v": 0.287,
+      "r2_v": 0.0
+    },
+    "min_amcl_moving": {
+      "dist_m": 1.0262,
+      "wall_ts": 1795142063.06,
+      "wall_iso": "2026-11-20 11:34:23.060",
+      "sim_ts": 2614.041,
+      "r3_xy": [
+        -2.14,
+        -4.794
+      ],
+      "r2_xy": [
+        -1.398,
+        -5.4
+      ],
+      "r3_v": 0.249,
+      "r2_v": 0.0
+    },
+    "min_gt_all": {
+      "dist_m": 0.951,
+      "wall_ts": 1795142062.66,
+      "wall_iso": "2026-11-20 11:34:22.659",
+      "sim_ts": 2613.711,
+      "r3_xy": [
+        -2.079,
+        -4.736
+      ],
+      "r2_xy": [
+        -1.398,
+        -5.4
+      ],
+      "r3_v": 0.287,
+      "r2_v": 0.0
+    },
+    "gt_ge_045": true
+  }
+]

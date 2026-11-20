@@ -45,8 +45,7 @@ class FleetCore:
         self.links = {r: RobotProtocol(c.ns, config.robot_link) for r, c in config.robots.items()}
         self.mission = MissionManager(config, self.resources, self.deadlock, self.decisions,
                                       self.safety, self.links, self.store.next_id)
-        self.collision = CollisionControl(self.resources, self.links, self.decisions,
-                                          zone_of=lambda robot: self.mission.robots[robot].zone)
+        self.collision = CollisionControl(self.resources, self.links, self.decisions)
         self.stalls = {r: Stall(config.stall) for r in config.robots}
         self.inspect_inflight = {}
         self.blocks = {}
@@ -120,6 +119,12 @@ class FleetCore:
         card = self.decisions.validate(key, choice)
         if card["kind"] == "BED_MONITOR_LOST":
             self.safety.monitor.choose(choice, by, now)
+            return
+        if card["kind"] == "STOP_UNCONFIRMED":
+            # [다시 보내기] starts a new round of PAUSE in this tick; [현장에서 멈춘 것 확인] sends no more.
+            if choice == "resend":
+                self.links[card["robots"][0]].resend_pause()
+            self.decisions.close(key, now, "selected", choice=choice, by=by)
             return
         robot = card["robots"][0]
         r = self.mission.robots[robot]
@@ -304,7 +309,8 @@ class FleetCore:
                 else:
                     ui.append((topic, data))
             elif topic == "obstacle_result":
-                results[robot].append((stamp, payload))
+                if not obstacle.is_yolo_result(payload):
+                    results[robot].append((stamp, payload))
             elif topic == "status":
                 message = self.links[robot].receive(payload, stamp)
                 if message:
@@ -319,6 +325,10 @@ class FleetCore:
                 safety.append((topic, payload, robot, stamp))
             else:
                 raise ValueError(f"unknown input {topic}")
+        for robot, link in self.links.items():
+            arrival = link.settle()  # a COMPLETE STATE with no ARRIVED in this batch (4K)
+            if arrival:
+                messages.append((robot, arrival))
         for robot, link in self.links.items():
             online = link.online(now)
             if online != self.link_ok[robot]:
@@ -409,7 +419,8 @@ class FleetCore:
         self.collision.reconcile_zones(now)
         motions = {request.robot: request.command for request in arbitration.commands}
         for robot in self.links:
-            traffic_stop = robot in self.collision.contacts or robot in self.collision.zone
+            traffic_stop = (robot in self.collision.contacts or robot in self.collision.zone
+                            or self.collision.yielding_priority(robot))
             command = self.mission.wire_step(robot, now, motions.get(robot), traffic_stop=traffic_stop,
                                              stalled=robot in self.blocks or self.stalls[robot].short,
                                              hold_restart=self.collision.hold_restart)
@@ -507,6 +518,7 @@ class FleetCore:
             crossing = bool(leg and not leg.dock_path and (
                 move.via if move and move.via is not None
                 else origin and uses_crossroad(self.config, origin, leg.destination)))
+            sighting = self.reports.yolo.get(robot)
             observation = self.stalls[robot].obstacle or self.reports.view(robot)
             robots[robot] = {
                 "label": self.config.robots[robot].label, "mark": self.config.robots[robot].mark, "ns": link.ns, "link_ok": self.link_ok[robot],
@@ -521,8 +533,10 @@ class FleetCore:
                 "returning": r.returning,
                 "slot": r.slot if region == g.ZONE_REGIONS[r.zone] else None,
                 "via": {"point": "교차로", "passed": via_done} if crossing else None,
-                "zone_wait": {"peer": zone.peer, "zone": zone.leg.destination, "reason": zone.reason, "since": zone.since} if zone else None,
-                "proximity": {"peer": near.peer, "reason": near.reason, "since": near.since} if near else None,
+                "yolo": sighting if sighting and now < sighting["at"] + 30 else None,
+                "zone_wait": {"peer": zone.peer, "zone": zone.exit_zone or zone.leg.destination, "exit": bool(zone.exit_zone), "reason": zone.reason, "since": zone.since} if zone else None,
+                "proximity": {"peer": near.peer, "peer_first": self.collision.can_go_first(near.peer, robot, self.mission, now),
+                              "self_first": self.collision.can_go_first(robot, near.peer, self.mission, now), "reason": near.reason, "since": near.since} if near else None,
                 "wait_reason": self.wait_reason(robot), "progress_pct": link.percent,
                 "obstacle": observation,
                 "obstacle_pending": (self.stalls[robot].requested_at is not None and self.stalls[robot].obstacle is None)

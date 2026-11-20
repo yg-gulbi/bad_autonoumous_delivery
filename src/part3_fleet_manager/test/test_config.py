@@ -45,8 +45,10 @@ def test_default_yaml_loads(cfg):
     assert all(cfg.slot_count(z) == 2 for z in cfg.zones) and cfg.zones["B"] == (-2.5, -1.25)
     assert cfg.corridor.crossroad == (-1.5, -2.18) and cfg.corridor.crossroad_clear_m == 0.6
     assert cfg.corridor.room_mode == "DOOR" and cfg.corridor.doors
-    # D-31: obstacle report mode, medical box label, retry once when PART 06 sees nothing.
-    assert (cfg.obstacle.mode, cfg.obstacle.timeout_s, cfg.obstacle.retry_if_clear) == ("report", 6.0, True)
+    # D-31: obstacle report mode, medical box label. 4K: no automatic retry when PART 06 sees nothing.
+    assert (cfg.obstacle.mode, cfg.obstacle.timeout_s, cfg.obstacle.retry_if_clear) == ("report", 6.0, False)
+    # D-32: PAUSE resend every 1.5 s, the card after more than 3 resends.
+    assert (cfg.robot_link.control_retry_s, cfg.robot_link.control_retries) == (1.5, 3)
     assert cfg.obstacle.label_ko["medical_box"] == "의료용 상자" and cfg.obstacle.none_text == "의료용 상자는 보이지 않음"
     assert cfg.obstacle.image_topic.format(ns="robot2") == "/robot2/hospital_nav/obstacle_image"
     assert cfg.mock.abort_after_s == 5.0 and cfg.safety.slot_stop_m == 0.45
@@ -86,6 +88,7 @@ def test_default_yaml_loads(cfg):
     ("obstacle.image_topic", "/robot2/hospital_nav/obstacle_image"),
     ("obstacle.none_text", ""),
     ("safety.slot_stop_m", 0),
+    ("zones.F.slot2_blocks_exit", "false"),
     ("mock.abort_after_s", 0),
     ("corridor.mode", "SHARE"),
     ("corridor.yield_enabled", "false"),
@@ -158,15 +161,30 @@ def test_fleet_file_before_4j_keeps_one_slot_rooms_and_inspection():
     data = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
     for zone in data["zones"].values():
         del zone["slot2"]
+        zone.pop("slot2_blocks_exit", None)
     for key in ("crossroad", "crossroad_clear_m", "room_mode"):
         del data["corridor"][key]
     del data["obstacle"]["mode"]
     config = config_from_dict(data)
     assert config.corridor.room_mode == "ROOM" and not config.corridor.doors
     assert config.slot_count("C") == 1 and config.slot_point("C", 2) == config.zones["C"]
+    assert not config.exit_blocked_zones
     assert config.obstacle.mode == "inspect"
     data["corridor"]["room_mode"] = "DOOR"
     with pytest.raises(ConfigError, match="corridor.room_mode"):
+        config_from_dict(data)
+
+
+def test_exit_policy_defaults_and_local_layout_override():
+    data = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    for zone in data["zones"].values():
+        del zone["slot2_blocks_exit"]
+    assert config_from_dict(data).exit_blocked_zones == {"A", "F"}
+    data["zones"]["F"]["slot2_blocks_exit"] = False
+    data["zones"]["C"]["slot2_blocks_exit"] = True
+    assert config_from_dict(data).exit_blocked_zones == {"A", "C"}
+    del data["zones"]["C"]["slot2"]
+    with pytest.raises(ConfigError, match="zones.C.slot2_blocks_exit"):
         config_from_dict(data)
 
 

@@ -90,6 +90,8 @@ KINDS = {"PATIENT_TRANSPORT": "환자 이송", "MED_ROUND": "약품 운송", "CA
 EVENTS = {
     "OBSTACLE_INSPECT": "{robot} 장애물 확인 요청", "OBSTACLE_RESULT": "{robot} 장애물 확인 결과",
     "OBSTACLE_REPORT": "{robot} 장애물 사진 수신", "OBSTACLE_RETRY": "{robot} 장애물 없음 · 자동 재출발",
+    "STOP_RESENT": "{robot} 정지 다시 보냄", "STOP_UNCONFIRMED": "{robot} 정지 미확인",
+    "ARRIVED_FROM_STATE": "{robot} · {zone} 도착 (상태 보고로 확인)",
     "MISSION_CREATED": "{kind} 요청 등록", "MISSION_ASSIGNED": "{robot} 임무 배정", "MISSION_REJECTED": "임무 등록 거절",
     "LEG_START": "{robot} 구간 출발", "ARRIVE": "{robot} · {zone} 도착", "CONFIRM_STEP": "{zone} 확인 결과",
     "MISSION_DONE": "{robot} 임무 완료", "MISSION_CANCELED": "임무 취소", "RESOURCE_REQUEST": "{robot} 통행 요청",
@@ -141,7 +143,9 @@ def present_event(event, names, robots=None, card=None):
                  for n in d.get("resources", [])]
     title = EVENTS.get(kind, "관제 기록").format(robot=robot, zone=zone, resource=" · ".join(resources) or "구간",
                                                kind=KINDS.get(d.get("mission_type"), "이송")).strip()
-    if kind == "CONFIRM_STEP":
+    if kind == "OBSTACLE_REPORT" and d.get("source") == "yolo":
+        title = f"{robot} 주행 중 장애물 감지".strip()
+    elif kind == "CONFIRM_STEP":
         result = d.get("result", reason)
         reason = CONFIRM_REASONS.get(result, reason)
         title = zone + (" 확인 완료" if reason == CONFIRM_REASONS["OK"] else " 확인 불일치")

@@ -110,6 +110,13 @@ class UIServer(Node):
             self.get_logger().warning(str(exc), throttle_duration_sec=2.0)
 
     def photo(self, robot, kind, msg):
+        # PART 04 YOLO sends a boxed JPEG with a default header. Abort photos
+        # and their PART 06 overlays preserve the camera header.
+        header = msg.header
+        if not header.frame_id and header.stamp.sec == 0 and header.stamp.nanosec == 0:
+            if kind == "raw":
+                self.photos.put(robot, "yolo", msg.data)
+            return
         self.photos.put(robot, kind, msg.data)
 
     def publish_fake_bed(self):

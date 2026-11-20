@@ -56,6 +56,8 @@ class RobotLinkCfg:
     accept_timeout_s: float
     link_timeout_s: float
     start_timeout_s: float = 120.0
+    control_retry_s: float = 1.5   # 4K: resend PAUSE if STATE is still MOVING after this long
+    control_retries: int = 3       # 4K: more resends than this opens the STOP_UNCONFIRMED card
 
 
 @dataclass(frozen=True)
@@ -121,7 +123,7 @@ class ObstacleCfg:
     image_topic: str = "/{ns}/hospital_nav/obstacle_image"
     marked_image_topic: str = "/{ns}/obstacle_classifier/image/compressed"
     report_wait_s: float = 4.0
-    retry_if_clear: bool = True
+    retry_if_clear: bool = False   # 4K: NONE ("no box") does not mean the path is clear (D-31)
     retry_delay_s: float = 3.0
     none_text: str = "의료용 상자는 보이지 않음"
 
@@ -199,6 +201,8 @@ class FleetConfig:
     assignment: AssignmentCfg = AssignmentCfg()
     zone_names: Mapping[str, str] = field(default_factory=dict)
     slots: Mapping[str, tuple[geometry.Point, ...]] = field(default_factory=dict)
+
+    exit_blocked_zones: frozenset[str] = frozenset()
 
     def slot_point(self, zone: str, slot: int | None = 1) -> geometry.Point:
         """Slot 1 is the zone point; slot 2 exists only where fleet.yaml gives slot2."""
@@ -330,8 +334,14 @@ def _load_robot_link(data: Mapping) -> RobotLinkCfg:
     for key in ("command_topic", "status_topic", "amcl_pose_topic", "battery_topic",
                 "hazard_topic", "dock_status_topic"):
         topics[key] = _topic(data, key, "robot_link")
+    retries = data.get("control_retries", RobotLinkCfg.control_retries)
+    if type(retries) is not int or retries < 0:
+        raise ConfigError("robot_link.control_retries: 0 이상의 정수가 필요합니다")
     return RobotLinkCfg(
         mode=_text(data.get("mode"), "robot_link.mode", ("HOSPITAL_NAV",)),
+        control_retry_s=_number(data.get("control_retry_s", RobotLinkCfg.control_retry_s),
+                                "robot_link.control_retry_s", positive=True),
+        control_retries=retries,
         request_id=_text(data.get("request_id"), "robot_link.request_id", ("auto", "always", "never")),
         start_timeout_s=_number(data.get("start_timeout_s", 120.0), "robot_link.start_timeout_s", positive=True),
         **topics,
@@ -349,6 +359,7 @@ def config_from_dict(data: Mapping) -> FleetConfig:
 
     zone_data = _mapping(cfg["zones"], "zones", geometry.ZONE_REGIONS)
     zones, slots = {}, {}
+    exit_blocked_zones = set()
     for zone, expected_region in geometry.ZONE_REGIONS.items():
         point = _point(zone_data[zone], f"zones.{zone}")
         points = [point]
@@ -361,6 +372,13 @@ def config_from_dict(data: Mapping) -> FleetConfig:
                 raise ConfigError(f"{where}: {expected_region}에 속해야 합니다 (현재 {region})")
         zones[zone] = point
         slots[zone] = tuple(points)
+        blocks_exit = zone_data[zone].get("slot2_blocks_exit", len(points) == 2 and zone in {"A", "F"})
+        if type(blocks_exit) is not bool:
+            raise ConfigError(f"zones.{zone}.slot2_blocks_exit: bool 값이 필요합니다")
+        if blocks_exit:
+            if len(points) != 2:
+                raise ConfigError(f"zones.{zone}.slot2_blocks_exit: 2번 자리 좌표가 필요합니다")
+            exit_blocked_zones.add(zone)
 
     robots = {}
     namespaces = set()
@@ -459,7 +477,7 @@ def config_from_dict(data: Mapping) -> FleetConfig:
         robot_link=_load_robot_link(cfg["robot_link"]),
         zones=zones,
         zone_names={z: zone_data[z].get("name") or f"{z} 구역" for z in zones},
-        slots=slots,
+        slots=slots, exit_blocked_zones=frozenset(exit_blocked_zones),
         corridor=corridor,
         resources=ResourcesCfg(
             zone_occupied_m=_number(cfg["resources"].get("zone_occupied_m", ResourcesCfg.zone_occupied_m),

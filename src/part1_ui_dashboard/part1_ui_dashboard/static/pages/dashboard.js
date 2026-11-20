@@ -66,6 +66,7 @@ function robotCard(id, r) {
         <p>${h(job ? job.mission_id + "　" + cfg.kinds[job.type] + "　Level " + job.level : home ? (r.leg?.purpose === "도크 복귀" ? "도크 복귀" : "홈 구역 복귀") : r.leg ? "직접 이동" : "배정된 작업 없음")}</p>
         <div class="unit-facts">${fields.map(([key,value]) => `<span><small>${key}</small> ${h(value)}</span>`).join("")}</div>
         ${r.via ? `<p class="via-note">교차로 경유${r.via.passed ? " · 통과" : ""}</p>` : ""}
+        ${r.yolo ? `<p data-yolo-until="${Number(r.yolo.at) + 30}">${h(r.yolo.text)} ${btn("감지 사진", "yolo-photo", id)}</p>` : ""}
         ${obstacleText(r) ? `<p>${h(obstacleText(r))}</p>` : ""}
         <div class="buttons">${controls}${job ? btn("작업 상세", "inspect", job.mission_id, "linkbtn") : ""}</div>`;
 }
@@ -81,7 +82,8 @@ function roadPanel() {
     return `<div class="road-line"><h2>복도</h2><strong>${h(passing.map(entry => robotName(entry.robot) + (stateColor(S.robots[entry.robot].state) === "red" ? " 정지" : entry.state === "OCCUPIED" ? " 통과 중" : " 진입 허가")).join(", ") || "통행 없음")}</strong>
         ${heading ? "<span>사용 방향　" + h(heading) + "</span>" : ""}<span>${waiting.length ? "대기　" + h(waiting.map(r => robotName(r) + ", " + locationText(S.robots[r])).join(", ")) : "대기 없음"}</span></div>
         ${waiting.length && track ? '<div class="checks"><b>출발 조건</b>' + labels.map((l,i) => `<span>${S.resume_checks[i] ? "☑" : "□"} ${l}</span>`).join("") + '</div>' : ""}
-        ${c.state === "UNKNOWN" ? btn("현장 확인 후 복도 비움", "clear", "", "danger") : ""}`;
+        ${Object.entries(S.resources).filter(([, res]) => res.state === "UNKNOWN")
+            .map(([key]) => btn("현장 확인 후 " + resLabel(key) + " 비움", "clear", key, "danger")).join("")}`;
 }
 
 function basis(e) {
@@ -142,4 +144,15 @@ renderers.dashboard = () => {
         '</tbody></table>' + (jobs.length ? "" : empty("해당 작업 없음")));
     put("latest", cardTitle("최근 기록", btn("전체 기록","logs","","linkbtn")) +
         (E.length ? E.slice(-3).reverse().map(e => `<div class="timeline"><time>${tm(e.ts)}</time><b>${h(e.title)}</b><span>${h(e.title.replace(/[ ·]/g,"") === e.detail.reason.replace(/[ ·]/g,"") ? "" : e.detail.reason)}</span></div>`).join("") : empty("수신된 이벤트가 없습니다.")));
+};
+
+
+actions["yolo-photo"] = id => {
+    const sighting = S?.robots[id]?.yolo;
+    if (!sighting) return;
+    openModal("yolo-photo", dialogHead("주행 중 감지 사진") +
+        `<figure class="obstacle-photo"><img id="yolo-image" alt="주행 중 감지 사진"><figcaption>${h(sighting.text)}</figcaption></figure>`);
+    const image = $("yolo-image");
+    image.onerror = () => { image.hidden = true; image.nextElementSibling.textContent = "이 감지에 해당하는 사진이 없습니다."; };
+    image.src = `/api/obstacle_image/${encodeURIComponent(id)}?kind=yolo&at=${encodeURIComponent(sighting.at)}`;
 };

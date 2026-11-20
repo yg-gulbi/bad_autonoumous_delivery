@@ -172,9 +172,12 @@ def test_55_leaving_slot1_passes_the_robot_at_slot2(make):
     """F: slot 2 lies between slot 1 and the hall mouth, so the leaving robot passes beside it."""
     sim = make()
     sim.frames[A]["pose"] = slot_pose(sim, "F", 2)  # A rests at F2, B leaves F1
-    sim.call("call", "A")
-    sim.tick(0)
-    assert commands(sim.tick(1))[B].startswith("MOVE A 1")
+    sim.call("call", "A", level=3)
+    card, = sim.tick(0).cards
+    assert card["context"] == "EXIT"
+    sim.choose(card, "depart")  # 4L: operator authorizes leaving F1 with F2 still occupied.
+    sim.tick(0.1)
+    assert commands(sim.tick(1))[B].startswith("MOVE A 3")
     sim.event(B, "MISSION_ACCEPTED")
     sim.tick(1.1)
     sim.frames[B]["pose"] = sim.pose((-1.85, -4.75))  # 0.50 m beside A
