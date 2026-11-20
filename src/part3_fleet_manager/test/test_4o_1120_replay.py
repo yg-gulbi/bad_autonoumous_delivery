@@ -1,8 +1,12 @@
 """Stage 4O: 11/20 mock log replay (5 scenes, 16:09:59 in two variants) and 4N 15:02:26/15:03:38 in PLAN.
 
 The Level 3 robot is always robot_b. Each scene is measured in LEGACY too; the report table
-(docs/part3/ui/stage4o-report.md) lists LEGACY, ac58e60 SEGMENTS and PLAN side by side.
+(docs/part3/ui/stage4o-report.md) lists LEGACY, ac58e60 SEGMENTS and PLAN side by side. The mock robots
+drive through the middle of the B·E doors (plan_graph.door_route) in both modes, so the arrival bounds
+include that walk.
 """
+from dataclasses import replace
+
 import pytest
 
 from kinematic_mock import KinematicSim
@@ -43,6 +47,8 @@ def _measure(sim, req_t):
         "prox_stops": sum(1 for e in sim.all_events if e["type"] == "PROXIMITY_STOP"),
         "a_waits": [e["detail"]["reason"] for e in sim.all_events if e["type"] == "PLAN_WAIT" and e["robot"] == A],
         "a_aside": sum(1 for e in sim.all_events if e["type"] == "PLAN_YIELD_MOVE" and e["robot"] == A),
+        "fallbacks": [e["detail"]["reason"] for e in sim.all_events
+                      if e["type"] == "PLAN_UPDATE" and e["detail"].get("fallback")],
     }
 
 
@@ -155,10 +161,11 @@ def test_160550_l2_robot_starts_at_once_and_waits_at_the_corridor_stop_line(cfg)
 def test_160632_l3_waits_only_while_a_crosses_and_arrives_before_legacy(cfg):
     leg = _run_160632(cfg, "LEGACY")
     plan = _run_160632(cfg, "PLAN")
-    # A is inside its stop line before CROSSROAD: it cannot stop, so B waits for it to pass.
+    # A is inside its stop line before CROSSROAD: it cannot stop, so B waits for it to pass. B leaves E1 once
+    # A is past the room E way and may stop once at the CROSSROAD stop line while A clears it (clear_hold_s).
     assert plan["wait_s"] < leg["wait_s"]
-    assert plan["arrive_s"] is not None and plan["arrive_s"] <= 26.0
-    assert plan["a_paused_s"] == 0.0 and plan["b_paused_s"] == 0.0
+    assert plan["arrive_s"] is not None and plan["arrive_s"] <= 29.0 and plan["arrive_s"] < leg["arrive_s"]
+    assert plan["a_paused_s"] == 0.0 and plan["b_paused_s"] <= cfg.resources.clear_hold_s
     assert plan["a_zone"] == "C" and plan["b_zone"] == "B"
     assert plan["prox_stops"] == 0
 
@@ -167,7 +174,7 @@ def test_160709_l3_goes_first_and_l1_robot_waits_below_crossroad(cfg):
     leg = _run_160709(cfg, "LEGACY")
     plan = _run_160709(cfg, "PLAN")
     assert plan["wait_s"] <= 1.0
-    assert plan["arrive_s"] < leg["arrive_s"] and plan["arrive_s"] <= 21.0
+    assert plan["arrive_s"] < leg["arrive_s"] and plan["arrive_s"] <= 23.0
     assert plan["b_paused_s"] == 0.0 and leg["b_paused_s"] > 10.0
     assert plan["a_paused_s"] > 0.0
     assert plan["a_zone"] == "D" and plan["b_zone"] == "D"
@@ -185,7 +192,7 @@ def test_160959_l3_starts_at_once_whether_or_not_a_can_stop_before_crossroad(cfg
         assert plan["a_dist"] < plan["stop_line"]     # A cannot stop before CROSSROAD: it gets out of B's way
         assert plan["a_aside"] >= 1
     assert plan["wait_s"] <= 1.0
-    assert plan["arrive_s"] <= 25.0 and plan["arrive_s"] < leg["arrive_s"]
+    assert plan["arrive_s"] <= 27.0 and plan["arrive_s"] < leg["arrive_s"]
     assert plan["b_paused_s"] == 0.0
     assert plan["a_zone"] == "C" and plan["b_zone"] == "E"
     assert plan["prox_stops"] == 0
@@ -195,9 +202,19 @@ def test_161049_l3_starts_at_once_and_l2_robot_waits_in_corridor_bottom(cfg):
     leg = _run_161049(cfg, "LEGACY")
     plan = _run_161049(cfg, "PLAN")
     assert plan["wait_s"] <= 1.0 and leg["wait_s"] > 20.0
-    assert plan["arrive_s"] <= 15.0 and plan["arrive_s"] < leg["arrive_s"]
+    assert plan["arrive_s"] <= 19.5 and plan["arrive_s"] < leg["arrive_s"]
     assert plan["b_paused_s"] == 0.0 and plan["a_paused_s"] > 0.0
     assert plan["a_zone"] == "A" and plan["b_zone"] == "B"
+    assert plan["prox_stops"] == 0
+
+
+def test_160959_level_order_plan_when_every_joint_search_runs_out_of_time(cfg):
+    """plan_limit_ms past (here: every joint search): the Level-order plan takes over and PLAN_UPDATE says so."""
+    tiny = replace(cfg, traffic=replace(cfg.traffic, graph=replace(cfg.traffic.graph, plan_limit_ms=0.01)))
+    plan = _run_160959(tiny, "PLAN", lead_s=9.8)
+    assert plan["fallbacks"] and all("Level 순 계획으로 대신 (계획 시간 초과)" in r for r in plan["fallbacks"])
+    assert plan["wait_s"] <= 1.0 and plan["b_paused_s"] == 0.0
+    assert plan["a_zone"] == "C" and plan["b_zone"] == "E"
     assert plan["prox_stops"] == 0
 
 

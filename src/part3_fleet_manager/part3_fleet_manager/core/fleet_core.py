@@ -11,6 +11,7 @@ from . import obstacle, schemas
 from .deadlock import DeadlockManager
 from .mission import MissionManager
 from .obstacle_report import ObstacleReports
+from .plan_graph import door_route
 from .route_planner import uses_crossroad, waypoints
 from .resource_manager import MotionRequest, RobotReport
 from .robot_protocol import DONE, PREPARING, RobotProtocol
@@ -531,7 +532,9 @@ class FleetCore:
             # NAVIGATING without "via" (PART 04 before 4J) drives straight through the door.
             via_done = bool(move and (move.via_passed or move.via is False))
             if leg and link.pose is not None:
-                route = [link.pose, *waypoints(self.config, link.pose, leg.destination, slot, via_done=via_done)]
+                # PLAN shows the way its graph walks: through the middle of a B·E door (4O).
+                way = door_route if self.traffic.mode == "PLAN" else waypoints
+                route = [link.pose, *way(self.config, link.pose, leg.destination, slot, via_done=via_done)]
                 if leg.dock_path:
                     route[-1:] = leg.dock_path
             origin = self.resources._origins.get(robot) or region

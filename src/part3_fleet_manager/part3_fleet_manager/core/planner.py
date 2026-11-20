@@ -15,8 +15,9 @@ Cost = sum of ``level_weights[Level]`` x arrival time at a goal (the last arriva
 goal again). A robot without a mission has its current spot as goal with ``idle_weight``. Ties prefer
 slot 1 over slot 2 and fewer route changes. Nothing here knows about corridors, rooms or zone names.
 
-With more than two robots, or when the joint search runs past ``plan_limit_ms``, robots are planned one
-at a time in Level order (prioritized planning) against the trajectories already fixed.
+With more than two robots, or when the joint search runs past ``plan_limit_ms`` (200 ms; the plan runs inside
+the 10 Hz tick), robots are planned one at a time in Level order (prioritized planning) against the
+trajectories already fixed. That fallback has its own ``plan_limit_ms``.
 """
 
 import heapq
@@ -182,7 +183,7 @@ class Planner:
 
     # --- entry points ---------------------------------------------------------------------------
 
-    def plan(self, agents, *, limit_ms=1000.0):
+    def plan(self, agents, *, limit_ms=200.0):
         """Joint plan for up to two moving agents; more agents or a timeout fall back to Level order."""
         start = time.perf_counter()
         movers = [a for a in agents if not a.static]
@@ -199,7 +200,7 @@ class Planner:
         fallback.reason = reason
         return fallback
 
-    def prioritized(self, agents, *, limit_ms=1000.0):
+    def prioritized(self, agents, *, limit_ms=200.0):
         """Plan one agent at a time in descending weight against the trajectories already fixed.
 
         An agent left without a route keeps still. The higher agents were planned as if it could move, so
@@ -355,7 +356,9 @@ class Planner:
                 continue
             entries.append((t, arrivals, extra))
             expansions += 1
-            if expansions & 63 == 0 and time.perf_counter() > deadline:
+            # Every expansion: one can take milliseconds while new pieces get their first conflict checks,
+            # and the plan runs inside the 10 Hz tick.
+            if time.perf_counter() > deadline:
                 return Plan(False, {}, 0.0, expansions, 0.0, "JOINT", "계획 시간 초과")
             if t >= self.horizon:
                 continue

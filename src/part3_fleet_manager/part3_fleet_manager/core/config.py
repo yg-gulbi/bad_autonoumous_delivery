@@ -204,7 +204,7 @@ class GraphCfg:
     idle_weight: float = 0.5
     replan_delay_s: float = 5.0
     plan_budget_ms: float = 200.0
-    plan_limit_ms: float = 1000.0
+    plan_limit_ms: float = 200.0           # joint search; over it -> Level order (inside the 10 Hz tick)
     aside_candidates: int = 4             # slots nearest to the robot offered as a move aside at plan start
     move_start_s: float = 1.0             # from a new MOVE (or CANCEL then MOVE) until the robot drives
     corridor: tuple[str, ...] = ()

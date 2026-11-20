@@ -4,8 +4,10 @@ Points are the zone slots, the robot_b dock, the crossroad, the B/E doors and ro
 and the corridor cells (CORRIDOR_TOP/BOTTOM split into about ``cell_m``). Every point keeps the region of
 its segment in the segment map for the "inside" judgement.
 
-Robots never get a path from us: PART 04 drives ``route_planner.waypoints`` toward a slot. So the graph is
-built by walking those physical routes. Each run of a route inside one point's region is a *piece*: the
+Robots never get a path from us: PART 04 drives toward a slot. The graph walks ``door_route``: the
+``route_planner.waypoints`` mouths and crossroad, and into or out of room B or E through the middle of the
+door and the point inside the room (``door_walks``), so no route runs over a door frame. LEGACY keeps
+``waypoints`` as it is. Each run of a route inside one point's region is a *piece*: the
 exact line the robot drives there. Neighbouring points are consecutive pieces, travel time is the piece
 length over ``plan_speed_mps``, and two positions conflict when their pieces come closer than the
 proximity distance (moving robots) or the slot distance (a robot standing at a slot). Nothing about a
@@ -157,6 +159,69 @@ def region_of(p, corridor):
     return g.ROOM_E
 
 
+def point_anchor(spec, seg):
+    """Where a graph point (``traffic.graph.points``) stands: the centre of its segment's circle, its own
+    x, y, or the middle of its segment's polygon."""
+    if seg.circle is not None:
+        return tuple(seg.circle[:2])
+    if spec.anchor is not None:
+        return tuple(spec.anchor)
+    if seg.polygon:
+        return tuple(sum(c) / len(seg.polygon) for c in zip(*seg.polygon))
+    return None
+
+
+def door_walks(config):
+    """{room region: (door middle, point inside the room)} from the graph's door and room points. Empty
+    unless room B and E have doors (``corridor.room_mode: DOOR``)."""
+    if not config.corridor.doors:
+        return {}
+    segs = config.traffic.segments
+    doors, rooms = {}, {}
+    for spec in config.traffic.graph.points.values():
+        seg = segs.get(spec.segment) if spec.segment else None
+        if seg is None:
+            continue
+        if spec.kind == "door" and seg.room in g.ROOMS:
+            doors[seg.room] = point_anchor(spec, seg)
+        elif spec.kind == "room" and seg.region in g.ROOMS:
+            rooms[seg.region] = point_anchor(spec, seg)
+    return {room: (doors[room], rooms[room]) for room in g.ROOMS
+            if doors.get(room) is not None and rooms.get(room) is not None}
+
+
+def door_route(config, pose, destination, slot=1, *, via_done=False):
+    """``route_planner.waypoints`` with the walk through a B·E door: crossroad -> door middle -> point in
+    the room -> slot, and the same way back out (B -> E: room B point, door B, crossroad, door E, room E
+    point). A route made again from where a driving robot is now leaves out the walk points it is already
+    past: a robot is past a point once it is nearer the next point than that point is. A robot inside a
+    room goes straight to a slot of the same room, unless it is still coming in through the door."""
+    path = list(waypoints(config, pose, destination, slot, via_done=via_done))
+    walks = door_walks(config)
+    if not walks:
+        return path
+    goal = path[-1]
+    start, end = config.corridor.region_of(pose), config.corridor.region_of(goal)
+    if start == end:
+        if end not in walks:
+            return path
+        door, room = walks[end]
+        if dist(pose, door) >= dist(room, door):
+            return path                     # standing in the room: slot to slot
+        return [room, goal] if dist(pose, room) < dist(door, room) else [door, room, goal]
+    out = list(path[:-1])
+    if end in walks:
+        out += walks[end]
+    if start in walks:
+        door, room = walks[start]
+        after = out[0] if out else goal
+        if dist(pose, door) >= dist(room, door):
+            out = [room, door, *out]
+        elif dist(pose, after) >= dist(door, after):
+            out = [door, *out]
+    return [*out, goal]
+
+
 @dataclass(frozen=True)
 class Point:
     name: str
@@ -226,14 +291,13 @@ class PlanGraph:
                 continue
             seg = segs[spec.segment]
             if seg.circle is not None:
-                region, anchor = Circle(*seg.circle), seg.circle[:2]
+                region = Circle(*seg.circle)
             elif seg.polygon:
                 region = Poly(seg.polygon)
-                anchor = spec.anchor or tuple(sum(c) / len(seg.polygon) for c in zip(*seg.polygon))
             else:
-                region, anchor = Region(self.corridor, seg.region), spec.anchor
+                region = Region(self.corridor, seg.region)
                 self.region_points[seg.region] = name
-            self.points[name] = Point(name, spec.kind, spec.label, tuple(anchor), region, spec.segment)
+            self.points[name] = Point(name, spec.kind, spec.label, point_anchor(spec, seg), region, spec.segment)
         self.cells = []
         for seg_name in gcfg.corridor:
             self._split_corridor(seg_name, segs[seg_name], gcfg.cell_m)
@@ -334,9 +398,9 @@ class PlanGraph:
         if point.kind == "dock":
             dock = next(r.dock for r in self.config.robots.values() if r.dock and (r.dock.x, r.dock.y) == point.anchor)
             approach, contact = dock.path_end()
-            path = waypoints(self.config, start_xy, point.zone, 1, via_done=via_done)[:-1]
+            path = door_route(self.config, start_xy, point.zone, 1, via_done=via_done)[:-1]
             return (start_xy, *path, approach, contact)
-        return (start_xy, *waypoints(self.config, start_xy, point.zone, point.slot, via_done=via_done))
+        return (start_xy, *door_route(self.config, start_xy, point.zone, point.slot, via_done=via_done))
 
     def _classify(self, xy, own):
         for name in own:

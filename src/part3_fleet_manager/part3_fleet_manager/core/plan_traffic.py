@@ -413,7 +413,8 @@ class PlanManager:
         count = self.config.slot_count(leg.destination) if self.slot_support.get(robot, True) else 1
         return [self.map.slot_names[(leg.destination, s)] for s in range(1, count + 1)]
 
-    def _aside_targets(self, robot, start_xy, exclude_zone, here):
+    def _aside_targets(self, robot, start_xy, exclude_zone, here, *, every=False):
+        """The ``aside_candidates`` slots with the shortest route (``every``: all of them, nearest first)."""
         if not self.gcfg.aside_candidates:
             return []
         slots = [n for n, p in self.graph.endpoints.items() if p.kind == "slot" and p.zone != exclude_zone
@@ -423,7 +424,8 @@ class PlanManager:
             steps = {n: self.graph.route_steps(table[n]) for n in slots if n in table}
         else:
             steps = {n: self.graph.route_steps(self.graph.route_from(start_xy, n)) for n in slots}
-        return sorted(steps, key=lambda n: (steps[n], n))[:self.gcfg.aside_candidates]
+        ranked = sorted(steps, key=lambda n: (steps[n], n))
+        return ranked if every else ranked[:self.gcfg.aside_candidates]
 
     def _agent(self, robot):
         """Agent for the planner, or None when the robot cannot be placed on the map."""
@@ -475,9 +477,14 @@ class PlanManager:
             heading = (first[0] - pose[0], first[1] - pose[1])
             norm = hypot(*heading) or 1.0
             committed = [self.graph.pieces[p].point for p in route.pieces[:(until or 0) + 1]]
-            for other in [*goals, *self._aside_targets(robot, pose, goal_zone, None)]:
+            # Aside slots it can still turn to: the nearest aside_candidates among the slots ahead (a slot
+            # behind it would need a turn inside the stop line, so it does not take one of the places).
+            asides = 0
+            for other in [*goals, *self._aside_targets(robot, pose, goal_zone, None, every=True)]:
                 if other == target:
                     continue
+                if other not in goals and asides >= self.gcfg.aside_candidates:
+                    break
                 alt = self.graph.route_from(pose, other, start=origin, via_done=via_done, extra=extra, cut=cut)
                 alt_route = self.graph.routes[alt]
                 if len(alt_route.line) < 2 or not alt_route.pieces:
@@ -487,6 +494,7 @@ class PlanManager:
                 alt_points = [self.graph.pieces[p].point for p in alt_route.pieces[:len(committed)]]
                 if cos > 0.7 and alt_points == committed:
                     starts.append((alt, until))
+                    asides += other not in goals
             stand_goal = None
         else:
             extra = self._still_held(robot)

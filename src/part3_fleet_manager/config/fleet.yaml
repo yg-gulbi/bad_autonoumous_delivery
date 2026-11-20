@@ -167,8 +167,8 @@ traffic:                        # 단계 4O 교통 판단 (기본값은 LEGACY �
     idle_weight: 0.5            # 임무 없는 로봇(목표 = 지금 서 있는 자리)
     replan_delay_s: 5.0         # 계획보다 이만큼 늦으면 다시 계획
     plan_budget_ms: 200         # 보통 계획 시간 목표
-    plan_limit_ms: 1000         # 넘으면 Level 순 계획으로 대신하고 PLAN_UPDATE에 남긴다
-    aside_candidates: 4         # 계획 시작 때 비켜설 자리 후보: 지금 위치에서 경로가 짧은 자리 4곳 (목표 구역 제외)
+    plan_limit_ms: 200          # 두 대 함께 계획(JOINT)의 시간 한도. 넘으면 Level 순 계획으로 대신하고 PLAN_UPDATE에 남긴다 (10 Hz tick 안에서 돈다)
+    aside_candidates: 4         # 계획 시작 때 비켜설 자리 후보: 지금 위치에서 경로가 짧은 자리 4곳 (목표 구역 제외, 주행 중이면 지금 방향으로 갈 수 있는 자리 중)
     move_start_s: 1.0           # 새 MOVE(또는 CANCEL 뒤 MOVE)부터 실제로 움직일 때까지. STATE 1 Hz 기준
     points:
       HALL_TOP:    {kind: hall,      segment: HALL_TOP,    x: -1.37, y: -0.55, label: "위쪽 홀 입구"}

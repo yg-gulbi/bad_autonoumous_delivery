@@ -18,6 +18,7 @@ from sensor_msgs.msg import BatteryState, CompressedImage
 from std_msgs.msg import String
 
 from .core.config import load_config
+from .core.plan_graph import door_route
 from .core.route_planner import waypoints
 from .core.robot_protocol import DONE
 from .core.schemas import dumps
@@ -273,9 +274,10 @@ class MockHospitalNav(Node):
             self.via, self.blocked_since = None, None
             if action == "DOCK":
                 anchor = min(self.config.zones, key=lambda z: dist(self.config.zones[z], self.predock))
-                self.path = [*waypoints(self.config, self.pose, anchor)[:-1], self.predock]
+                self.path = [*door_route(self.config, self.pose, anchor)[:-1], self.predock]
             elif action == "MOVE" and self.slots():
-                self.path = waypoints(self.config, self.pose, dest, slot or 1)
+                # Nav2 goes through the middle of a B·E door and the room, not over the door frame (4O).
+                self.path = door_route(self.config, self.pose, dest, slot or 1)
                 if self.config.corridor.crossroad in self.path[:-1]:
                     self.via = self.config.corridor.crossroad  # into or out of B·E: crossroad first (PART 04)
             elif action == "MOVE":

@@ -7,7 +7,7 @@ from math import dist
 from part3_fleet_manager.core import schemas
 from part3_fleet_manager.core.fleet_core import FleetCore
 from part3_fleet_manager.core.robot_protocol import DONE
-from part3_fleet_manager.core.route_planner import waypoints
+from part3_fleet_manager.core.plan_graph import door_route
 
 
 def _parse_cmd(text: str):
@@ -29,7 +29,8 @@ def _parse_cmd(text: str):
 
 
 class KinematicRobot:
-    """Single robot moving along route_planner.waypoints at speed_mps and emitting 1 Hz STATE."""
+    """Single robot moving at speed_mps and emitting 1 Hz STATE. It drives plan_graph.door_route: into and
+    out of room B or E through the middle of the door and the point inside the room, as Nav2 would."""
 
     def __init__(self, cfg, robot_id: str, *, speed_mps: float = 0.2, start_pose=None):
         self.cfg = cfg
@@ -98,7 +99,7 @@ class KinematicRobot:
             self.mid = tag or f"sim-{int(now * 1000)}"
             self.slot = slot or 1
             self.reason = ""
-            self.path = waypoints(self.cfg, self.pose, dest, self.slot)
+            self.path = door_route(self.cfg, self.pose, dest, self.slot)
             self.via = self.cfg.corridor.crossroad if self.cfg.corridor.crossroad in self.path[:-1] else None
             self.total = sum(dist(a, b) for a, b in pairwise([self.pose, *self.path]))
             self.state = "MOVING"

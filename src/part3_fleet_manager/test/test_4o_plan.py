@@ -67,14 +67,19 @@ class Kit:
         starts = [(rid, until)]
         heading = (route.line[1][0] - pose[0], route.line[1][1] - pose[1])
         committed = [self.G.pieces[p].point for p in route.pieces[:(until or 0) + 1]]
-        for other in [*names, *self.aside(None, pose, zone)]:
+        asides, room = 0, self.cfg.traffic.graph.aside_candidates
+        # Aside slots: the nearest aside_candidates among those it can still turn to (slots ahead).
+        for other in [*names, *self.aside(None, pose, zone, k=len(self.slots))]:
             if other == target:
                 continue
+            if other not in names and asides >= room:
+                break
             alt = self.G.routes[self.G.route_from(pose, other)]
             step = (alt.line[1][0] - pose[0], alt.line[1][1] - pose[1])
             cos = (step[0] * heading[0] + step[1] * heading[1]) / ((hypot(*step) or 1) * (hypot(*heading) or 1))
             if cos > 0.7 and [self.G.pieces[p].point for p in alt.pieces[:len(committed)]] == committed:
                 starts.append((alt.id, until))
+                asides += other not in names
         return Agent(name, self.weights[level], starts, goals, names, names)
 
     def timeline(self, plan, name):
@@ -143,7 +148,13 @@ def test_graph_points_cells_and_edges_come_from_config_and_routes(kit):
     assert [G.pieces[p].point for p in route.pieces] == [
         "D1", "HALL_TOP", "CORRIDOR_TOP_1", "CORRIDOR_TOP_2", "CROSSROAD",
         "CORRIDOR_BOTTOM_1", "CORRIDOR_BOTTOM_2", "CORRIDOR_BOTTOM_3", "HALL_BOTTOM", "C1"]
-    assert ("CROSSROAD", "DOOR_E") in G.edges and ("DOOR_E", "E1") in G.edges
+    # Into a room: crossroad, the middle of the door, the point inside the room, then the slot (and back out).
+    route = G.routes[G.from_endpoint["D1"]["E1"]]
+    assert [G.pieces[p].point for p in route.pieces][-4:] == ["CROSSROAD", "DOOR_E", "ROOM_E", "E1"]
+    route = G.routes[G.from_endpoint["B2"]["C1"]]
+    assert [G.pieces[p].point for p in route.pieces][:4] == ["B2", "ROOM_B", "DOOR_B", "CROSSROAD"]
+    assert ("DOOR_E", "E1") not in G.edges and ("DOOR_B", "B2") not in G.edges
+    route = G.routes[G.from_endpoint["D1"]["C1"]]
     # Travel time is length / plan_speed_mps in plan steps.
     first = G.pieces[route.pieces[2]]
     assert first.steps == max(1, round(first.length / (kit.cfg.mock.speed_mps * kit.cfg.traffic.graph.plan_step_s)))
@@ -254,7 +265,7 @@ def test_plans_never_hold_a_conflict_or_a_swap(kit):
 
 def test_plan_time_for_every_slot_pair_and_level_pair(kit, tmp_path):
     """Every ordered pair of slots heading into each other's zone, for all Level pairs."""
-    times, methods = [], {}
+    times, methods, samples = [], {}, []
     slots = kit.slots
     for a in slots:
         for b in slots:
@@ -267,6 +278,7 @@ def test_plan_time_for_every_slot_pair_and_level_pair(kit, tmp_path):
                     plan = kit.P.plan([kit.standing("p", a, zb, la), kit.standing("q", b, za, lb)],
                                       limit_ms=kit.cfg.traffic.graph.plan_limit_ms)
                     times.append((time.perf_counter() - start) * 1000.0)
+                    samples.append((times[-1], plan.method))
                     methods[plan.method] = methods.get(plan.method, 0) + 1
                     assert plan.ok, (a, b, la, lb)
     stats = {"plans": len(times), "mean_ms": round(statistics.mean(times), 1),
@@ -274,8 +286,19 @@ def test_plan_time_for_every_slot_pair_and_level_pair(kit, tmp_path):
              "methods": methods}
     print(json.dumps(stats, ensure_ascii=False))
     gcfg = kit.cfg.traffic.graph
+    assert gcfg.plan_limit_ms == 200
     assert stats["mean_ms"] <= gcfg.plan_budget_ms
-    assert stats["max_ms"] <= gcfg.plan_limit_ms * 1.1      # the joint search itself stops at plan_limit_ms
+    # The joint search stops at plan_limit_ms (checked every expansion); a timed-out one is followed by the
+    # Level-order plan, which has its own plan_limit_ms.
+    for ms, method in samples:
+        assert ms <= gcfg.plan_limit_ms * (1.1 if method == "JOINT" else 2.2), (ms, method)
+
+
+def test_joint_search_over_the_limit_falls_back_to_level_order(kit):
+    """Past plan_limit_ms the joint search stops and robots are planned one at a time in Level order."""
+    plan = kit.P.plan([kit.standing("p", "D2", "C", 2), kit.standing("q", "C1", "D", 2)], limit_ms=0.01)
+    assert plan.ok and plan.method == "PRIORITIZED" and plan.reason == "계획 시간 초과"
+    assert_clean(kit, plan)
 
 
 # --- 3. config, LEGACY isolation, snapshot --------------------------------------------------------
