@@ -362,7 +362,8 @@ ROS 파라미터는 노드를 다시 빌드하지 않고 실행 구성을 전달
 | `tts_message` | 문자열 | `주행 중인 침상에서 이탈하지 말아주세요.` | 반복 안내 문구 |
 | `tts_language` | 문자열 | `ko` | OS TTS 언어 코드 (`spd-say -l` / `espeak-ng -v`) |
 | `tts_repeat_interval` | 실수 | `1.0` | 1회 발화 종료 후 다음 반복까지 대기 시간(초, `>= 0.0`) |
-| `tts_command` | 문자열 | `""` | 사용자 지정 TTS 명령 (`""`이면 `spd-say`→`espeak-ng`→`espeak` 자동 탐색, `{message}`/`{language}` 치환 지원) |
+| `tts_command` | 문자열 | `""` | 사용자 지정 TTS 명령 (`{message}`/`{language}` 치환 지원) |
+| `tts_audio_file` | 문자열 | `""` | 사전 생성 오디오 파일 경로 (`""`이면 기본 문구용 내장 여성 한국어 음성 `config/tts_bed_exit_ko.mp3`를 `ffplay`로 우선 재생, 문구 변경 시 `spd-say`→`espeak-ng`→`espeak` 폴백) |
 
 > **비동기 반복 TTS 동작 보장**: 환자 이탈(`True`)이 확정되면 별도 데몬 스레드에서 TTS를
 > 재생해 ROS 타이머와 `/patient/bed_exit` 발행을 블로킹하지 않는다. 환자 상태가 정상(`False`)으로
@@ -713,11 +714,18 @@ v1.3.2의 `test_v3_mp4_replay_resilience.py`는 연구용 MP4 ROS 노드에
 Part 5 검증은 결과 로그와 정량 요약을 함께 생성하는 래퍼를 사용한다.
 
 ```bash
+# v1.3 하위 호환 검증 (단위·통합·벤치마크)
 bash src/part5_bed_exit/test/80805b4_v1_3/run_validation.sh unit
 bash src/part5_bed_exit/test/80805b4_v1_3/run_validation.sh integration
 bash src/part5_bed_exit/test/80805b4_v1_3/run_validation.sh benchmark
+
+# v1.4 신규 기능 검증 (비동기 TTS·파라미터화·회전·앙상블)
+bash src/part5_bed_exit/test/1e0faac_v1_4/run_validation.sh unit
+bash src/part5_bed_exit/test/1e0faac_v1_4/run_validation.sh integration
 ```
 
-실험 결과는
-`results/80805b4_v1_3/YYYYMMDD_HHMMSS_PROFILE[_실험명]/`에 저장한다. 세부 테스트
-구성과 산출물 계약은 [v1.3 검증 문서](test/80805b4_v1_3/README.md)를 참고한다.
+실험 결과는 각각
+`results/80805b4_v1_3/YYYYMMDD_HHMMSS_PROFILE[_실험명]/`과
+`results/1e0faac_v1_4/YYYYMMDD_HHMMSS_PROFILE[_실험명]/`에 저장한다. 세부 테스트
+구성과 산출물 계약은 [v1.3 검증 문서](test/80805b4_v1_3/README.md) 및
+[v1.4 검증 문서](test/1e0faac_v1_4/README.md)를 참고한다.
