@@ -1,11 +1,28 @@
 """Latched stop causes; only explicit operator input releases a safety stop."""
 
 from collections import deque
+from dataclasses import dataclass
 from math import dist
 
 
 MONITOR_DENIED = "침상 감시가 끊겨 재개할 수 없습니다. 웹캠을 확인하세요"
 EXIT_DENIED = "침상 이탈 해제 전에는 재개할 수 없습니다"
+
+
+@dataclass(frozen=True)
+class BedExitSignal:
+    value: bool | None = None
+    normal_since: float | None = None
+    last_rx: float | None = None
+
+    def after_sample(self, value, stamp, policy):
+        if value:
+            return BedExitSignal(True, None, stamp)
+        start = self.normal_since
+        if start is None or stamp >= self.last_rx + policy.warn_s:
+            start = stamp  # A reception gap does not count as continuous normal readings.
+        confirmed = False if stamp >= start + policy.exit_clear_hold_s else self.value
+        return BedExitSignal(confirmed, start, stamp)
 
 
 class BedMonitor:
@@ -120,7 +137,8 @@ class Safety:
         self.use_hazard_topic = config.safety.use_hazard_topic
         self.bump_neighbor_m = config.safety.bump_neighbor_m
         self.bump = dict.fromkeys(config.robots, False)
-        self.bed_exit = self.since = None
+        self.exit_signal = BedExitSignal()
+        self.since = None
         self.record = record
 
     def pause(self, robot, cause, now, *, by=None):
@@ -137,10 +155,16 @@ class Safety:
             if self.monitor.blocked(now):
                 self.pause(robot, "BED_MONITOR_LOST", now)
 
+    @property
+    def bed_exit(self):
+        return self.exit_signal.value
+
     def observe(self, value, active, stamp):
         self.monitor.receive(stamp)
-        if value != self.bed_exit:
-            self.bed_exit, self.since = value, stamp
+        previous = self.bed_exit
+        self.exit_signal = self.exit_signal.after_sample(value, stamp, self.monitor.policy)
+        if self.bed_exit != previous:
+            self.since = stamp
             self.record("BED_EXIT" if value else "BED_EXIT_CLEAR", stamp, "침상 이탈" if value else "침상 정상")
         for robot in active:
             self.protect(robot, stamp)

@@ -10,6 +10,10 @@ async function start() {
     on("snapshot", s => {
         historySlots.clear();
         S = s.state;
+        // State and events are published separately. An older OK cannot clear a newer outage.
+        const healthyAt = ["OK", "WARN"].includes(S?.bed_exit?.monitor?.state) ? S.stamp : -Infinity;
+        const back = s.events.findLast(e => e.type === "BED_MONITOR_BACK");
+        clearLostAlarms(Math.max(healthyAt, back?.ts ?? -Infinity));
         received = performance.now() - (s.age ?? 0) * 1000;
         E = s.events;
         cards = new Map(s.cards.map(c => [c.card_id, c]));
@@ -36,14 +40,7 @@ async function start() {
             if (modalCard === id)
                 closeModal();
         }
-        if (e.type === "BED_MONITOR_WARN")
-            toast(e.detail.reason, false);
-        if (alarmKinds[e.type]) {
-            alerts.push(e);
-            beep();
-            if (modal !== "alarm")
-                alarm();
-        }
+        handleAlarmEvent(e);
         render();
         nextNotice();
     });
