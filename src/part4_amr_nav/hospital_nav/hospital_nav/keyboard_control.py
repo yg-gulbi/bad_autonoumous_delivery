@@ -73,11 +73,15 @@ class ControlConsole(Node):
             def m(v):
                 return "-" if v is None else f"{v:.2f} m"
             rp = d.get("robot_pose") or {}
-            line = (f"!!! 장애물 발견 (목적지 {d.get('destination')} 이동 중단) "
-                    f"로봇위치=({rp.get('x')}, {rp.get('y')}, {rp.get('yaw_deg')}°) "
-                    f"뎁스={m(d.get('depth_m'))} 라이다={m(d.get('lidar_m'))} "
-                    f"방향={d.get('bearing_deg')}° 장애물좌표=({d.get('map_x')}, {d.get('map_y')}) "
-                    f"수신={d.get('captured')}")
+            where = (f"로봇위치=({rp.get('x')}, {rp.get('y')}, {rp.get('yaw_deg')}°) "
+                     f"방향={d.get('bearing_deg')}° 장애물좌표=({d.get('map_x')}, {d.get('map_y')})")
+            if d.get("source") == "yolo":  # real-time detection: robot paused itself
+                line = (f"!!! 장애물 감지 (YOLO {d.get('class')} {d.get('conf')}, 목적지 "
+                        f"{d.get('destination')}, 계속 주행) 거리={m(d.get('depth_m'))} {where}")
+            else:  # Nav2 gave up
+                line = (f"!!! 장애물 발견 (목적지 {d.get('destination')} 이동 중단) "
+                        f"뎁스={m(d.get('depth_m'))} 라이다={m(d.get('lidar_m'))} {where} "
+                        f"수신={d.get('captured')}")
         else:
             extra = {k: v for k, v in d.items()
                      if k not in ("type", "event", "robot_id", "mission_id") and v not in (None, "")}

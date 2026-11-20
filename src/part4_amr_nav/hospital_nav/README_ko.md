@@ -85,6 +85,17 @@ Nav2 가 **첫 복구 동작을 시작하는 순간**(막혀서 멈춘 직후, �
 `robot_pose`(x, y, yaw_deg), `depth_m`(화면 중앙 거리), `lidar_m`·`bearing_deg`(전방 ±45° 최근접), `map_x`·`map_y`(장애물 지도 좌표), `captured`.
 상태는 FAILED 라 다음 명령을 바로 받습니다.
 
+## 실시간 YOLO 장애물 감지 (선택)
+```bash
+ros2 run hospital_nav command_receiver --robot robot2 \
+  --yolo-model ~/rokey_ws/src/hospital_nav/models/medical_box_yolo11n.pt
+```
+- 이동(MOVING) 중에만 RGB compressed 구독, `--yolo-period`(기본 2초)마다 추론. 뎁스는 평소 구독 안 함
+- 감지 → 즉시 PAUSE → RGB+뎁스 1초 수집해 시각이 맞는 쌍(≤0.2초)으로 박스 거리 계산 → `OBSTACLE`(source=yolo, class, conf, bbox, depth_m, bearing_deg, map_x/y, robot_pose) + 사진 1장
+- 관제에서 `RESUME` / `CANCEL`. 같은 물체 재보고는 `--yolo-cooldown`(기본 10초) 뒤
+- 옵션: `--yolo-classes`, `--yolo-conf`(0.5), `--yolo-max-dist`(3.0 m)
+- 필요: command_receiver 를 실행하는 파이썬에 ultralytics (이 PC 는 rokey_venv 에 설치됨)
+
 ## 주의
 - 로봇끼리 길을 양보하거나 복도 점유를 막는 기능은 **없습니다**. 두 대가 같은 복도를 쓰면 사람이 지켜보세요.
 - `command_receiver` 를 Ctrl+C / SIGTERM 으로 끄면 진행 중인 주행을 취소합니다(최대 10초 대기).

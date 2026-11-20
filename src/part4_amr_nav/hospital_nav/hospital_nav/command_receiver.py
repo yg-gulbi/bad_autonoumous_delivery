@@ -5,6 +5,8 @@ Subscribe: /<robot>/hospital_nav/command (std_msgs/String)
 Examples: 'F', 'F 3', 'MOVE F 3', 'DOCK', 'UNDOCK', 'PAUSE', 'RESUME', 'CANCEL'
 """
 import argparse
+import importlib.util
+import os
 import signal
 import threading
 
@@ -61,6 +63,8 @@ def init_ros():
 def run(mission, *extra_nodes):
     """Spin all nodes in the background; on any exit cancel and wait for Nav2."""
     nodes = (mission, mission.nav, mission.dock, mission.obstacle, *extra_nodes)
+    if mission.yolo is not None:
+        nodes += (mission.yolo,)
     executor = MultiThreadedExecutor(num_threads=4)
     for node in nodes:
         executor.add_node(node)
@@ -96,14 +100,45 @@ class CommandReceiver(Node):
             self.get_logger().warning(f"관제 명령 무시 ({msg.data!r}): {exc}")
 
 
+def default_yolo_model():
+    """medical_box_yolo11n.pt installed with the package (share/hospital_nav/models)."""
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        return os.path.join(get_package_share_directory("hospital_nav"), "models",
+                            "medical_box_yolo11n.pt")
+    except Exception:
+        return None
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--robot", default="robot3")
     parser.add_argument("--dock", nargs=3, type=float, metavar=("X", "Y", "YAW_DEG"),
                         help="도킹 상태 위치 (기본: goal_manager.DOCKS)")
+    parser.add_argument("--yolo-model", default=default_yolo_model(),
+                        help="YOLO .pt 경로 (기본: 패키지 models/medical_box_yolo11n.pt)")
+    parser.add_argument("--no-yolo", action="store_true", help="실시간 YOLO 감지 끄기")
+    parser.add_argument("--yolo-conf", type=float, default=0.5, help="신뢰도 기준 (기본 0.5)")
+    parser.add_argument("--yolo-period", type=float, default=2.0, help="추론 주기 초 (기본 2.0)")
+    parser.add_argument("--yolo-classes", default="", help="장애물로 볼 클래스, 쉼표 구분 (기본 전부)")
+    parser.add_argument("--yolo-max-dist", type=float, default=3.0, help="이보다 먼 물체는 보고 안 함 (m)")
+    parser.add_argument("--yolo-cooldown", type=float, default=10.0, help="보고 후 재보고 대기 (초)")
     args = parser.parse_args()
     init_ros()
-    mission = MissionManager(args.robot, GoalPoint(*args.dock) if args.dock else None)
+    yolo = None
+    model = os.path.expanduser(args.yolo_model or "")
+    if args.no_yolo:
+        print("[YOLO] --no-yolo: 실시간 감지 끔")
+    elif not os.path.isfile(model):
+        print(f"[YOLO] 모델 파일 없음 ({model or '-'}): 실시간 감지 없이 실행")
+    elif importlib.util.find_spec("ultralytics") is None:
+        print("[YOLO] ultralytics 미설치 (pip install ultralytics): 실시간 감지 없이 실행")
+    else:
+        yolo = {"model_path": model, "conf": args.yolo_conf,
+                "period": args.yolo_period, "cooldown": args.yolo_cooldown,
+                "max_dist": args.yolo_max_dist,
+                "classes": [c for c in args.yolo_classes.split(",") if c.strip()] or None}
+    mission = MissionManager(args.robot, GoalPoint(*args.dock) if args.dock else None, yolo)
     run(mission, CommandReceiver(mission))
 
 

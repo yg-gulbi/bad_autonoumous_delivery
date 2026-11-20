@@ -21,6 +21,7 @@ from geometry_msgs.msg import PoseWithCovarianceStamped
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import BatteryState
+from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import String
 
 from .dock_manager import DockManager
@@ -53,13 +54,17 @@ def locked(fn):
 
 
 class MissionManager(Node):
-    def __init__(self, robot="robot3", dock_pose=None):
+    def __init__(self, robot="robot3", dock_pose=None, yolo=None):
         self.robot = robot.strip("/")
         super().__init__("hospital_mission_manager", namespace="/" + self.robot)
         self._mission_lock = threading.RLock()
         self.nav = NavigationManager("/" + self.robot)
         self.dock = DockManager("/" + self.robot)
         self.obstacle = ObstacleReporter(self.robot, self._on_obstacle_report)
+        self.yolo = None  # real-time YOLO detection while MOVING (optional, --yolo-model)
+        if yolo:
+            from .yolo_detector import YoloDetector
+            self.yolo = YoloDetector(self.robot, on_report=self._on_yolo_report, **yolo)
         self.yaw_deg = None
         self._precaptured = False  # photo taken at the first recovery of this goal
         self.dock_pose = dock_pose or DOCKS.get(self.robot)
@@ -263,6 +268,8 @@ class MissionManager(Node):
     @locked
     def _tick(self):
         self._auto_initial_pose()
+        if self.yolo is not None:
+            self.yolo.set_active(self.state == "MOVING", self._obstacle_context())
         ready = self._ready()
         if ready and not self._was_ready:
             self.emit("READY", pose=self._pose_dict())  # console: safe to send A~F now
@@ -354,6 +361,12 @@ class MissionManager(Node):
         if robot_pose is not None and self.yaw_deg is not None:
             robot_pose["yaw_deg"] = round(self.yaw_deg, 1)
         return {"mission_id": self.mission_id, "destination": self.dest, "robot_pose": robot_pose}
+
+    def _on_yolo_report(self, report, jpeg):
+        """YOLO saw an obstacle while driving: one photo + depth report to 관제.
+        The robot keeps going; if Nav2 later gives up, the ABORTED report follows."""
+        self.obstacle.image_pub.publish(CompressedImage(format="jpeg", data=jpeg))
+        self.emit("OBSTACLE", **report)
 
     def _on_obstacle_report(self, report, jpeg):
         """Called once per capture (from the reporter node, not under the lock)."""
