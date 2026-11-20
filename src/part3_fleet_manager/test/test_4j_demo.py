@@ -187,14 +187,23 @@ def test_61_demo_five_acts(demo):
     assert call_row()["robot"] == B
     assert demo.wait_move(B).startswith("MOVE A2 1")  # A waits for confirmation in A1
     sim.confirm(A, "p")
-    assert demo.wait_move(A).startswith("MOVE D 1")
-    demo.drive(A, (-1.0, 0.5))
+    demo.tick()
+    assert not demo.moved(A)[-1].startswith("MOVE D")  # B is arriving within the A2 approach radius
     demo.drive(B, CROSSROAD, (-1.5, -0.8), via=True)
     arrived = demo.of("ARRIVE", B)[-1]
-    assert arrived["detail"]["slot"] == 2 and arrived["detail"]["reason"] == "A 구역 (2번 자리) 도착"
+    assert arrived["detail"]["slot"] == 2 and arrived["detail"]["reason"] == "응급실(A) 2번 자리 도착"
     sim.confirm(B, "call")
     assert demo.wait_move(B).startswith("MOVE F 1")
-    demo.drive(B, (-1.5, -1.0), (-1.7, -4.3))
+    # B leaves the blocking second slot first. Drive the two home legs as their MOVEs are issued.
+    sim.event(B, "MISSION_ACCEPTED")
+    demo.tick()
+    demo.at(B, (-1.5, -1.0))
+    demo.until(lambda: demo.moved(A)[-1].startswith("MOVE D 1"))
+    demo.drive(A, (-1.0, 0.5))
+    demo.at(B, (-1.7, -4.3))
+    demo.tick()
+    sim.event(B, "ARRIVED")
+    demo.tick()
     for robot, zone in ((A, "D"), (B, "F")):
         assert demo.state(robot) == "IDLE" and demo.snapshot()["robots"][robot]["zone"] == zone
     done = {m["mission_id"] for m in demo.snapshot()["missions"] if m["status"] == "DONE"}

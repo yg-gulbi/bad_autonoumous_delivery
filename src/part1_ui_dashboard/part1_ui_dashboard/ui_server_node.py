@@ -14,7 +14,7 @@ from werkzeug.serving import make_server
 import yaml
 
 from part3_fleet_manager.core import schemas
-from part3_fleet_manager.core.config import read_config_yaml
+from part3_fleet_manager.core.config import read_config_yaml, zone_display_name
 from . import ui_api
 from .web import Feed, Photos, create_app
 
@@ -46,7 +46,7 @@ class UIServer(Node):
         if not self.demo and self.mode == "auto":
             self.create_timer(1.0, self.detect_mock)
         self.testing = self.dev_tools and self.demo and self.mode != "live"
-        self.names = {z: data.get("name") or f"{z} 구역" for z, data in cfg["zones"].items()}
+        self.names = {z: zone_display_name(z, data.get("name")) for z, data in cfg["zones"].items()}
         self.robot_names = {robot: unit["label"] for robot, unit in cfg["robots"].items()}
         self.track = None
         map_path = Path(self.map_yaml).expanduser()

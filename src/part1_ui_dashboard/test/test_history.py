@@ -143,3 +143,17 @@ def test_41_present_old_and_current_events_in_both_tables(journal):
         assert live["detail"]["reason"] == logged["detail"]["reason"] == detailed["detail"]["reason"] == reason
         assert live["title"] == logged["title"] == detailed["title"]
     assert log[-1]["title"] == "침상형 이송 로봇 · A 구역 도착"
+
+
+def test_old_events_and_cards_render_named_slots_without_writing_back(journal):
+    path, store, _ = journal
+    reason = "출구 막힘 대기 · C 구역 (2번 자리)"
+    store.save([], [event("CARD_OPEN", 90, "robot_b", card_id="K-head", reason=reason,
+                          card={"card_id":"K-head","kind":"BLOCKED","robots":["robot_b"],
+                                "title":"C 구역 출구", "reason":reason, "created_at":90, "options":[]})])
+    client = create_app(Feed(), {"names":{"C":"수술실(C)"}}, None, None, db_path=path).test_client()
+    card = client.get("/api/cards").get_json()["items"][0]
+    assert (card["title"], card["reason"]) == ("수술실(C) 출구", "출구 막힘 대기 · 수술실(C) 2번 자리")
+    row = client.get("/api/events").get_json()["items"][0]
+    assert row["detail"]["reason"] == card["reason"]
+    assert store.db.execute("SELECT reason FROM cards WHERE id='K-head'").fetchone()[0] == reason

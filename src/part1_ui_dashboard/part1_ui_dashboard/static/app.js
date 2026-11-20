@@ -4,7 +4,7 @@ const h = v => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&
 const nav = { dashboard: ["종합 관제", "로봇 운행과 이송 작업을 실시간으로 확인하세요."], missions: ["이송 작업", "요청부터 완료까지 이송 작업의 진행 상황을 확인하세요."], patient: ["환자 등록", "환자 정보와 이동 경로를 등록하세요."], supply: ["약품 운송 요청", "수령지와 전달지를 지정하고 인계 과정을 확인하세요."], log: ["운영 기록", "로봇 운행과 관제 판단을 시간순으로 확인하세요."] };
 const robotName = r => S?.robots[r]?.label || cfg.robot_names?.[r] || "관제";
 const zn = z => cfg.names[z] || "구역 미확인";
-const zs = (z, slot) => zn(z) + (slot === 2 ? " (2번 자리)" : "");
+const zs = (z, slot) => zn(z) + (slot === 2 ? " 2번 자리" : "");
 const resNames = { FREE: "비어 있음", GRANTED: "허가", OCCUPIED: "점유 중", UNKNOWN: "점유 불명" };
 const resLabel = key => key === "CORRIDOR" ? "복도" : zn(key.slice(-1)) + " 출입";
 const routeText = m => m.stops.map(zn).join(" → ");
@@ -23,8 +23,11 @@ function displayState(id, robot) {
     const state = robot.state, road = S?.resources.CORRIDOR;
     // 4K (D-32): a stop cause is a request until the robot's STATE reports standing still.
     if (state === "SAFE_PAUSE") return stopConfirmed(robot) ? ["정지 확인", "red"] : ["정지 요청 중(확인 전)", "amber"];
-    if (state === "HOLD" && robot.proximity) return ["가까움 정지", "amber"];
-    if (state === "HOLD" && robot.zone_wait) return [robot.zone_wait.exit ? "출구 막힘 대기" : "목적지 대기", "amber"];
+    if (state === "HOLD" && robot.proximity) return [robot.proximity.head_on ? "마주 봄" : "가까움 정지", "amber"];
+    if (state === "HOLD" && robot.zone_wait) {
+        const access = {NEAR_START:"출발 대기", INBOUND:"도착 로봇 대기", OUTBOUND:"출구 양보"};
+        return [access[robot.zone_wait.rule] || (robot.zone_wait.exit ? "출구 막힘 대기" : "목적지 대기"), "amber"];
+    }
     if (state === "HOLD" && road?.follow_stop?.rear === id) return ["후행 대기", "amber"];
     if (["MOVING","SENDING","RETURNING"].includes(state)) {
         if (["UNDOCKING","LOCALIZING"].includes(robot.part4_state)) return ["도크에서 출발 준비", ""];
@@ -197,8 +200,9 @@ function situation(fresh) {
             {type:"PROXIMITY_STOP", ts:r.proximity.since, robot:id, detail:r.proximity});
         if (r.zone_wait) {
             const peer = S.robots[r.zone_wait.peer];
-            add(1, r.zone_wait.reason, r.zone_wait.exit ? "2번 자리가 비면 출발합니다." : peer?.state === "IDLE"
-                ? peer.label + "을 다른 구역으로 보내면 출발합니다" : "목적지가 비면 자동으로 출발합니다.",
+            const accessHint = {NEAR_START:"재개 간격이 확보되면 출발합니다.", INBOUND:"상대가 자리에 서면 출구를 다시 확인합니다.", OUTBOUND:"상대가 구역을 벗어나면 재개합니다."}[r.zone_wait.rule];
+            add(1, r.zone_wait.reason, accessHint || (r.zone_wait.exit ? "2번 자리가 비면 출발합니다." : peer?.state === "IDLE"
+                ? peer.label + "을 다른 구역으로 보내면 출발합니다" : "목적지가 비면 자동으로 출발합니다."),
                 {type:"ZONE_OCCUPIED_HOLD", ts:r.zone_wait.since, robot:id, detail:{...r.zone_wait, destination:r.zone_wait.zone}});
         }
         if (!r.proximity && !r.zone_wait && id !== follow?.rear && ["HOLD", "GIVE_WAY", "YIELDING"].includes(r.state))
@@ -302,16 +306,17 @@ function showCard(id) {
     if (!c)
         return;
     const r = S?.robots[c.robots[0]], job = mById(c.mission_id), def = c.options.find(o => o.id === c.default);
-    const title = c.context === "EXIT" ? "출구 막힘 대기" : c.context === "ZONE" ? "목적지 대기" : c.context === "PROXIMITY" ? "로봇 근접 정지" : c.kind === "BLOCKED" && r ? r.label + "이 막혔습니다" : c.title;
+    const title = c.head_on ? "마주 봄" : c.context === "EXIT" ? "출구 막힘 대기" : c.context === "ZONE" ? "목적지 대기" : c.context === "PROXIMITY" ? "로봇 근접 정지" : c.kind === "BLOCKED" && r ? r.label + "이 막혔습니다" : c.title;
     const stalled = !c.context && c.kind === "BLOCKED" && r?.stall_s > 0;
     const facts = [["작업", job ? job.mission_id + " " + cfg.kinds[job.type] + ", Level " + job.level : c.mission_id || "직접 이동 또는 임무 없음"],
         [c.kind === "STOP_UNCONFIRMED" ? "지금 위치" : "멈춘 곳", locationText(r)]];
+    if (c.head_on) facts.push(["되돌아가기 추천", robotName(c.robots[0])]);
     if (c.kind === "BLOCKED" && !c.context && !c.obstacle) facts.push(["앞에 있는 것", obstacleText(r || {}) || "분류 결과 없음"]);
     const photo = c.obstacle ? `<figure class="obstacle-photo" id="obstacle-photo" hidden><img alt="${h((r?.label || "로봇") + "이 찍은 장애물 사진")}"><figcaption></figcaption></figure>` : "";
     openModal("card", `<header class="pop-head attention">${r ? robotMark(r) : ""}<h2>${h(title)}</h2>${elapsedSince(stalled ? S.stamp-r.stall_s : c.created_at, stalled)}</header>
         <div class="pop-body"><p class="lead">${h(c.reason)}</p>${photo}${factList(facts)}
         <h3>어떻게 할까요?</h3><div class="choices">${c.options.map(o =>
-            `<button data-act="choose" data-id="${h(o.id)}" ${c.context === "PROXIMITY" && ["peer_first","self_first"].includes(o.id) && !r?.proximity?.[o.id] ? "disabled" : ""}><strong>${h(o.label)}${def && o.id === c.recommended ? " · 추천" : ""}</strong>
+            `<button data-act="choose" data-id="${h(o.id)}" ${c.context === "PROXIMITY" && ["peer_first","self_first"].includes(o.id) && !r?.proximity?.[o.id] ? "disabled" : ""}><strong>${h(o.label)}${o.id === c.recommended ? " · 추천" : ""}</strong>
             <small>${h(choiceDescriptions[c.context || c.kind]?.[o.id] || "선택한 로봇이 대피 구역으로 이동합니다.")}</small></button>`).join("")}</div>
         ${def ? `<p>시간이 지나면 ‘${h(def.label)}’로 자동 진행합니다. <b id="card-clock"></b></p><progress id="card-bar" max="${c.timeout_s}"></progress>` : ""}
         <footer class="row"><small>운영자의 결정을 기다립니다.</small>${btn("나중에", "defer")}</footer></div>`);

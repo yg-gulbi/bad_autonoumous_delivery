@@ -32,7 +32,7 @@ function obstacleText(r) {
     return obs.kind === "NONE" ? "카메라에 보이는 장애물 없음" : "장애물 분류 불가";
 }
 
-const locationText = r => r?.zone ? zs(r.zone, r.slot) : ({CORRIDOR:"복도 안",ROOM_B:zn("B"),ROOM_E:zn("E"),TOP:"A, D 구역 쪽",BOTTOM:"C, F 구역 쪽"})[r?.region] || "위치 미수신";
+const locationText = r => r?.zone ? zs(r.zone, r.slot) : ({CORRIDOR:"복도 안",ROOM_B:zn("B"),ROOM_E:zn("E"),TOP:zn("A") + ", " + zn("D") + " 쪽",BOTTOM:zn("C") + ", " + zn("F") + " 쪽"})[r?.region] || "위치 미수신";
 const robotMark = r => `<span class="mark ${r.mark === "B" ? "square" : ""}">${h(r.mark)}</span>`;
 function destinationText(r, job) {
     if (!r.leg) return "—";
@@ -92,9 +92,10 @@ function basis(e) {
     const d = e.detail;
     if (["ZONE_OCCUPIED_HOLD","PROXIMITY_STOP"].includes(e.type)) {
         const zone = e.type === "ZONE_OCCUPIED_HOLD";
-        openModal("basis", dialogHead(zone ? "목적지 점유 판단" : "로봇 근접 판단") +
+        const access = ["NEAR_START","INBOUND","OUTBOUND"].includes(d.rule);
+        openModal("basis", dialogHead(access ? "구역 출입 판단" : zone ? "목적지 점유 판단" : "로봇 근접 판단") +
             factList([["대기 로봇",robotName(e.robot)], ["상대 로봇",robotName(d.peer)],
-                ...(zone ? [["목적지",zn(d.destination)]] : []), ["판단 시각",tm(e.ts)]]) +
+                ...(zone ? [[access ? "구역" : "목적지",zn(access ? d.zone : d.destination)]] : []), ["판단 시각",tm(e.ts)]]) +
             '<p class="notice blue-surface">' + h(d.reason) + '</p>' + btn("판단 기록 보기","decision-log"));
         return;
     }
@@ -140,7 +141,7 @@ renderers.dashboard = () => {
     put("dash-jobs", '<div class="row"><h2>작업</h2><div class="buttons">' + controls + btn("전체 작업", "alljobs", "", "linkbtn") + '</div></div>' +
         '<table><thead><tr><th>작업</th><th>경로</th><th>응급도</th><th>로봇</th></tr></thead><tbody>' +
         jobs.map(m => `<tr><td>${btn(m.mission_id, "inspect", m.mission_id, "table-link")}<small>${h(cfg.kinds[m.type])}</small></td>
-        <td>${h(m.stops.join(" → "))}</td><td>Level ${m.level}</td><td>${h(m.robot ? robotName(m.robot) : "미배정")}</td></tr>`).join("") +
+        <td>${h(routeText(m))}</td><td>Level ${m.level}</td><td>${h(m.robot ? robotName(m.robot) : "미배정")}</td></tr>`).join("") +
         '</tbody></table>' + (jobs.length ? "" : empty("해당 작업 없음")));
     put("latest", cardTitle("최근 기록", btn("전체 기록","logs","","linkbtn")) +
         (E.length ? E.slice(-3).reverse().map(e => `<div class="timeline"><time>${tm(e.ts)}</time><b>${h(e.title)}</b><span>${h(e.title.replace(/[ ·]/g,"") === e.detail.reason.replace(/[ ·]/g,"") ? "" : e.detail.reason)}</span></div>`).join("") : empty("수신된 이벤트가 없습니다.")));

@@ -186,8 +186,9 @@ def history_api(path, names, robots=None):
             card = dict(row)
             payload = json.loads(card.pop("payload_json") or "{}")
             card["choice_label"] = next((o["label"] for o in payload.get("options", []) if o["id"] == card["choice"]), None)
-            if card["choice_label"]:
-                card["choice_label"] = legacy_names(card["choice_label"], robots)
+            for key in ("choice_label", "title", "reason"):
+                if card.get(key):
+                    card[key] = legacy_names(card[key], robots, names)
             return card
         return jsonify(paged(g.history_db, sql + " ORDER BY opened_at DESC,rowid DESC", args, card_row))
 

@@ -175,6 +175,8 @@ def main(args=None):
     except ConfigError as exc:
         print(f"설정 오류 · {exc}\n실제 실행 안 됨")
         return 1
+    for warning in config.exit_warnings():
+        print("경고 · " + warning)
     goals = Path(options.goals_file).expanduser() if options.goals_file else find_goal_file(options.config_file)
     try:
         if goals is None:

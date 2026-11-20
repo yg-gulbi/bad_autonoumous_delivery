@@ -122,7 +122,10 @@ RULES = {"GAP": "앞 로봇과 간격 유지", "FOLLOW": "앞 로봇 정지", "O
 DEFAULT_ROBOT_NAMES = {"robot_a": "침상형 이송 로봇", "robot_b": "약품 운송 로봇"}
 
 
-def legacy_names(text, robots):
+def legacy_names(text, robots, names=None):
+    for zone, label in (names or {}).items():
+        text = text.replace(f"{zone} 구역", label)
+    text = text.replace(" (2번 자리)", " 2번 자리")
     for key, label in robots.items():
         old_label = {"robot_a": "Robot A", "robot_b": "Robot B"}.get(key)
         if old_label:
@@ -137,7 +140,7 @@ def present_event(event, names, robots=None, card=None):
     kind, reason = event["type"], d.get("reason") or ""
     zone = names.get(d.get("destination"), "정류장")
     if d.get("slot") == 2 and d.get("destination") in names:
-        zone += " (2번 자리)"
+        zone += " 2번 자리"
     robot = robots.get(event.get("robot"), "")
     resources = ["복도" if n == "CORRIDOR" else names.get(n[-1], n[-1] + " 구역") + " 출입"
                  for n in d.get("resources", [])]
@@ -174,7 +177,7 @@ def present_event(event, names, robots=None, card=None):
                   "MOVE_REJECTED": "이동 요청을 수락하지 못했습니다.", "WARNING": "로봇 상태 또는 명령 응답을 확인하세요."}[kind]
     if re.fullmatch(r"[A-Za-z][A-Za-z0-9_ .:/-]*", reason):
         reason = ""
-    d["reason"] = legacy_names(reason, robots)
+    d["reason"] = legacy_names(reason, robots, names)
     return {**event, "title": title, "detail": d}
 
 

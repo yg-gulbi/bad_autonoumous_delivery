@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
-from math import cos, isfinite, radians, sin
+from math import cos, dist, isfinite, radians, sin
 from os import PathLike
 from os.path import expanduser
 
@@ -15,6 +15,10 @@ from .schemas import MISSION_TYPES
 CORRIDOR_MODES = ("DIRECTIONAL", "SHARED_YIELD", "EXCLUSIVE")
 ROOM_MODES = ("DOOR", "ROOM")
 OBSTACLE_MODES = ("report", "inspect")
+
+
+def zone_display_name(zone, name):
+    return f"{name}({zone})" if name else f"{zone} 구역"
 
 
 class ConfigError(ValueError):
@@ -92,6 +96,7 @@ class ResourcesCfg:
     decision_window_s: float
     aging_s: float
     zone_occupied_m: float = 0.6
+    zone_arrival_clear_m: float = 2.0
 
 
 @dataclass(frozen=True)
@@ -209,6 +214,24 @@ class FleetConfig:
         """Slot 1 is the zone point; slot 2 exists only where fleet.yaml gives slot2."""
         points = self.slots.get(zone) or (self.zones[zone],)
         return points[slot - 1] if slot and slot <= len(points) else points[0]
+
+    def exit_clearance(self, zone):
+        """Distance from slot 2 to the finite path between slot 1 and its nearest entrance."""
+        start = self.slot_point(zone)
+        entrance = min(self.corridor.mouths.values(), key=lambda point: dist(start, point))
+        return geometry.segment_distance(self.slot_point(zone, 2), start, entrance)
+
+    def exit_warnings(self):
+        threshold = self.safety.slot_stop_m + 0.10
+        warnings = []
+        for zone in self.zones:
+            if self.slot_count(zone) < 2 or zone in self.exit_blocked_zones:
+                continue
+            gap = self.exit_clearance(zone)
+            if gap < threshold:
+                warnings.append(f"{self.zone_names.get(zone, zone)} 출구 경로와 2번 자리 간격 {gap:.2f} m "
+                                f"(기준 {threshold:.2f} m 미만). slot2_blocks_exit 설정을 확인하세요.")
+        return warnings
 
     def slot_count(self, zone: str) -> int:
         return len(self.slots.get(zone) or (self.zones[zone],))
@@ -373,7 +396,7 @@ def config_from_dict(data: Mapping) -> FleetConfig:
                 raise ConfigError(f"{where}: {expected_region}에 속해야 합니다 (현재 {region})")
         zones[zone] = point
         slots[zone] = tuple(points)
-        blocks_exit = zone_data[zone].get("slot2_blocks_exit", len(points) == 2 and zone in {"A", "F"})
+        blocks_exit = zone_data[zone].get("slot2_blocks_exit", len(points) == 2 and zone in {"A", "C", "F"})
         if type(blocks_exit) is not bool:
             raise ConfigError(f"zones.{zone}.slot2_blocks_exit: bool 값이 필요합니다")
         if blocks_exit:
@@ -478,10 +501,12 @@ def config_from_dict(data: Mapping) -> FleetConfig:
         type_to_robot=type_to_robot,
         robot_link=_load_robot_link(cfg["robot_link"]),
         zones=zones,
-        zone_names={z: zone_data[z].get("name") or f"{z} 구역" for z in zones},
+        zone_names={z: zone_display_name(z, zone_data[z].get("name")) for z in zones},
         slots=slots, exit_blocked_zones=frozenset(exit_blocked_zones),
         corridor=corridor,
         resources=ResourcesCfg(
+            zone_arrival_clear_m=_number(cfg["resources"].get("zone_arrival_clear_m", ResourcesCfg.zone_arrival_clear_m),
+                                         "resources.zone_arrival_clear_m", positive=True),
             zone_occupied_m=_number(cfg["resources"].get("zone_occupied_m", ResourcesCfg.zone_occupied_m),
                                    "resources.zone_occupied_m", positive=True),
             **_numbers(cfg["resources"], "resources", ("clear_margin_m", "clear_hold_s", "decision_window_s", "aging_s")),

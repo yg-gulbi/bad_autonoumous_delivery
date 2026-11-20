@@ -24,6 +24,8 @@ class FleetManagerNode(Node):
     def __init__(self):
         super().__init__("fleet_manager")
         config = load_config(self.declare_parameter("config_file", default_config()).value)
+        for warning in config.exit_warnings():
+            self.get_logger().warning(warning)
         mode = self.declare_parameter("assignment_mode", config.assignment.mode).value
         if mode not in ("IDLE_BEST_BATTERY", "ROLE"):
             raise ValueError("assignment_mode must be IDLE_BEST_BATTERY or ROLE")
