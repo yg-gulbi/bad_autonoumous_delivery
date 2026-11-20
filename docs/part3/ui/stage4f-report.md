@@ -21,7 +21,7 @@
 
 ![E방의 Robot A와 복도를 지나는 Robot B](screens/4f-01-room-hold.png)
 
-**B가 나간 뒤 A가 출발.** 복도 패널의 통행자가 A로 바뀌고, B의 카드에 C 구역 대기가 표시됐다.
+**B가 나간 뒤 A가 출발.** 복도 패널의 통행자가 A로 바뀌고, B의 카드에 수술실(C) 대기가 표시됐다.
 
 ![B가 C에 도착한 뒤 E방을 나오는 Robot A](screens/4f-02-after-release.png)
 

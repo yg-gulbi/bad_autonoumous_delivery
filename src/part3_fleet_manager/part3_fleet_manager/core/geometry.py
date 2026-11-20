@@ -39,6 +39,10 @@ def _point(p: Point) -> ShapelyPoint:
     return ShapelyPoint(x, y)
 
 
+def segment_distance(point: Point, start: Point, end: Point) -> float:
+    return _point(point).distance(LineString((start, end)))
+
+
 def corridor_polygon(vertices: Sequence[Point]) -> Polygon:
     """Validate the strictly convex clockwise [TL, TR, BR, BL] quadrilateral."""
     if len(vertices) != 4:

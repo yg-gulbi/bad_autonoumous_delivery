@@ -1,10 +1,12 @@
 """Position-based holds independent of mission faults and operator safety stops."""
+from collections import deque
 from dataclasses import dataclass
-from itertools import combinations
+from itertools import combinations, pairwise
 from math import dist
 
 from .resource_manager import Leg
 from .robot_protocol import DONE, Move
+from .zone_traffic import ZoneTraffic
 
 ZONE_CARD_S = 30
 PROXIMITY_CARD_S = 10
@@ -33,6 +35,10 @@ class CollisionControl:
         self.exit_pass = {}  # robot -> (leg, peer) for this departure only
         self.zone = {}
         self.contacts = {}  # held robot -> peer -> continuous stop
+        self.access = ZoneTraffic(resources, links, self.parked_slot)
+        self.distances = {}
+        self.head_on = {}  # pair -> robot recommended to retreat
+        self.retreats = {}  # awaiting cancellation and the new return leg
         self.priority = {}  # pair -> one operator-authorized departure
 
     @property
@@ -100,6 +106,8 @@ class CollisionControl:
                 self.rm.slot_choice.pop(leg, None)
             else:
                 self.rm.slot_choice[leg] = slot
+        access_wait = self.access.before_departure(leg, now)
+        access = self.access.waits.get(robot)
         old = self.zone.get(robot)
         origin = self.parked_slot(robot)
         exit_zone = old.exit_zone if old and old.leg is leg else None
@@ -108,14 +116,15 @@ class CollisionControl:
         if exit_zone:
             blocker = next((r for r in self.links if r != robot and self.parked_slot(r) == (exit_zone, 2)), None)
             # Even an accepted MOVE is not evidence that the robot has left slot 2.
-            if blocker and self.exit_pass.get(robot) != (leg, blocker):
+            arriving = access and access.rule == "INBOUND" and access.peer == blocker
+            if blocker and not arriving and self.exit_pass.get(robot) != (leg, blocker):
                 peer = blocker
             else:
                 exit_zone = None
         if old and (old.leg is not leg or old.peer != peer or old.exit_zone != exit_zone):
             self._clear_zone(robot, now)
         if not peer:
-            return False
+            return access_wait
         if robot not in self.zone:
             if exit_zone:
                 reason = f"출구 막힘 대기 · {self.rm.zone_label(exit_zone)} 2번 자리에 {self.rm.robot_label(peer)} 있음"
@@ -128,6 +137,7 @@ class CollisionControl:
         return True
 
     def reconcile_zones(self, now):
+        self.access.reconcile(now)
         for robot, (leg, _) in list(self.exit_pass.items()):
             if leg is not (self.rm.active.get(robot) or self.rm.pending.get(robot)):
                 del self.exit_pass[robot]
@@ -157,7 +167,8 @@ class CollisionControl:
                        mission_id=wait.leg.mission_id if wait.leg else None)
 
     def yielding_priority(self, robot):
-        return any(robot in pair and first.robot != robot for pair, first in self.priority.items())
+        return (any(robot in pair and first.robot != robot for pair, first in self.priority.items())
+                or any(robot in pair and retreat[0] != robot for pair, retreat in self.retreats.items()))
 
     def _hold_near(self, robot, peer, distance, now):
         first = self.priority.get(frozenset((robot, peer)))
@@ -182,6 +193,40 @@ class CollisionControl:
                 return min(policy.proximity_stop_m, policy.slot_stop_m)
         return policy.proximity_stop_m
 
+    def _separating(self, pair, stamp, distance, now):
+        history = self.distances.setdefault(pair, deque())
+        if not history or stamp > history[-1][0]:
+            history.append((stamp, distance))
+        while len(history) > 1 and history[1][0] <= stamp - 0.5:
+            history.popleft()
+        # A sparse or stale pose stream cannot establish a half-second trend.
+        return (now - stamp <= 0.5 and history[0][0] <= stamp - 0.5
+                and len(history) >= 2 and distance > history[-2][1]
+                and all(t2 - t1 <= 0.500001 and d2 >= d1
+                        for (t1, d1), (t2, d2) in pairwise(history)))
+
+    def _face_to_face(self, pair, mover, now):
+        departed = self.access.departures
+        candidates = [r for r in self.links if r in pair and r in departed]
+        wire_order = tuple(self.links)
+        self.head_on[pair] = max(candidates, key=lambda r: (departed[r].at, wire_order.index(r))) if candidates else mover
+        for robot in pair:
+            self._close(robot, "PROXIMITY", now)
+
+    def arm_retreat(self, mission, now):
+        for pair, (robot, job, destination) in list(self.retreats.items()):
+            unit, link = mission.robots[robot], self.links[robot]
+            peer, = pair - {robot}
+            if unit.job is not job or unit.target_override != destination or unit.canceling:
+                del self.retreats[pair]
+                continue
+            if (not unit.replacing and link.move and not link.move.attempts and link.move.zone == destination
+                    and self.can_go_first(robot, peer, mission, now)):
+                distance = dist(link.pose, self.links[peer].pose)
+                self.priority[pair] = FirstToMove(robot, link.move, distance)
+                self._clear_near(robot, peer, now, "운영자가 이전 구역으로 되돌아가기를 선택했습니다.")
+                del self.retreats[pair]
+
     def observe_distance(self, now):
         policy = self.rm.config.safety
         for a, b in combinations(self.links, 2):
@@ -190,8 +235,11 @@ class CollisionControl:
                 continue
             distance = dist(left.pose, right.pose)
             pair = frozenset((a, b))
+            separating = self._separating(pair, max(left.pose_at, right.pose_at), distance, now)
             if distance >= policy.proximity_resume_m and left.online(now) and right.online(now):
                 self.priority.pop(pair, None)
+                self.head_on.pop(pair, None)
+                self.retreats.pop(pair, None)
                 for robot, peer in ((a, b), (b, a)):
                     self._clear_near(robot, peer, now, "로봇 사이에 재개 간격이 확보됐습니다.")
                 continue
@@ -207,12 +255,15 @@ class CollisionControl:
                 elif (not self.links[peer].online(now) or self.links[peer].state not in DONE | {"PAUSED"}
                       or distance < first.distance):
                     del self.priority[pair]
+                    if distance < first.distance:
+                        self._face_to_face(pair, robot, now)
                     self._hold_near(robot, peer, distance, now)
                     if peer in self.rm.active:
                         self._hold_near(peer, robot, distance, now)
                 else:
                     first.distance = distance
-            if distance < self.stop_distance(a, b, now):
+            fresh = left.online(now) and right.online(now) and now - min(left.pose_at, right.pose_at) <= 0.5
+            if not (separating and fresh) and distance < self.stop_distance(a, b, now):
                 for robot, peer in ((a, b), (b, a)):
                     if self.links[robot].state in {"MOVING", "DOCKING"} or robot in self.contacts:
                         self._hold_near(robot, peer, distance, now)
@@ -236,7 +287,7 @@ class CollisionControl:
         return bool(peer_still and other.online(now) and link.online(now) and link.move and not link.move.finished
                     and (link.state == "PAUSED" or (link.state in DONE and not link.move.attempts))
                     and unit.job and not (unit.fault_stop or unit.canceling or unit.replacing or mission.safety.causes[robot])
-                    and robot not in self.zone and not self.yielding_priority(robot) and not self.rm.following(robot)
+                    and robot not in self.zone and robot not in self.access.waits and not self.yielding_priority(robot) and not self.rm.following(robot)
                     and not self.rm.reports[robot].stalled
                     and self.rm.robot_state(robot, unit.state) != "GIVE_WAY"
                     and not (self.contacts.get(robot, {}).keys() - {peer}))
@@ -251,6 +302,15 @@ class CollisionControl:
                 options = {"retry": "다시 확인", "return": "되돌아가기", "hold": "보류"}
                 if wait.exit_zone:
                     options = {"retry": "다시 확인", "depart": "그대로 출발(근접 규칙 유지)", "hold": "보류"}
+                pair = frozenset((robot, wait.peer))
+                if context == "PROXIMITY" and pair in self.head_on:
+                    if self.head_on[pair] != robot or pair in self.retreats or pair in self.priority:
+                        continue
+                    self.decisions.open("BLOCKED", robot, unit.job.journal_id if unit.job else None,
+                                        "두 로봇이 마주 보고 있어 한쪽이 물러나야 합니다", now,
+                                        context="PROXIMITY", options={"return": "되돌아가기", "hold": "보류"},
+                                        extra={"head_on": True, "recommended": "return", "peer": wait.peer})
+                    continue
                 if context == "PROXIMITY":
                     options["self_first"] = "이 로봇 먼저 보내기"
                     options["peer_first"] = f"{self.rm.robot_label(wait.peer)} 먼저 보내기"
@@ -293,3 +353,9 @@ class CollisionControl:
                 raise ValueError("E-409: 돌아갈 구간 기록이 없습니다.")
             unit.state = "FAULT"
             mission.retry(robot, now, back=True)
+            if card.get("head_on"):
+                pair = frozenset((robot, wait.peer))
+                departure = self.access.departures.get(robot)
+                if departure and departure.origin:
+                    unit.target_override = departure.origin
+                self.retreats[pair] = robot, unit.job, unit.target_override

@@ -181,7 +181,7 @@ def test_exit_policy_defaults_and_local_layout_override():
     data = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
     for zone in data["zones"].values():
         del zone["slot2_blocks_exit"]
-    assert config_from_dict(data).exit_blocked_zones == {"A", "F"}
+    assert config_from_dict(data).exit_blocked_zones == {"A", "C", "F"}
     data["zones"]["F"]["slot2_blocks_exit"] = False
     data["zones"]["C"]["slot2_blocks_exit"] = True
     assert config_from_dict(data).exit_blocked_zones == {"A", "C"}
