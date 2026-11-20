@@ -1,0 +1,118 @@
+# Part 5 Bed Exit ROS 2 파라미터 템플릿
+#
+# 사용 예:
+#   cp src/part5_bed_exit/config/bed_exit.params.template.yaml \
+#      src/part5_bed_exit/config/bed_exit.params.local.yaml
+#   # local YAML에서 method_config, camera_index 등을 수정한 뒤 실행:
+#   ros2 run part5_bed_exit bed_exit --ros-args \
+#     --params-file "$(pwd)/src/part5_bed_exit/config/bed_exit.params.local.yaml"
+#
+# 참고:
+# - 모델 파라미터의 센티널 값(-1.0, 0, "")은 "미지정"을 뜻하며,
+#   method_config JSON 값 또는 v1.3 기본값을 그대로 유지한다.
+# - ROS 2 YAML 타입 규칙상 실수(float) 항목은 반드시 소수점(.0 등)을 표기해야 한다.
+
+bed_exit:
+  ros__parameters:
+    # ------------------------------------------------------------------
+    # 1. 판단 모델 선택 및 입출력
+    # ------------------------------------------------------------------
+    # 내장 이름(detection, segmentation, yolo_pose, mediapipe_pose),
+    # 외부 모듈(package.module:ClassOrObject), 또는 빈 문자열(JSON의 method 사용)
+    method: ""
+    # 내장 모델 사용 시 필수: ROI·model_dir·device가 담긴 JSON 경로
+    method_config: ""
+    # 최종 std_msgs/msg/Bool 발행 토픽 (True=이탈, False=정상)
+    output_topic: "/patient/bed_exit"
+    # ROS 퍼블리셔 QoS 큐 깊이 (>= 1)
+    publisher_qos_depth: 10
+    # USB 웹캠 장치 번호 (video_path가 비어 있을 때 사용)
+    camera_index: 0
+    # 웹캠 미연결·끊김 시 재연결 시도 최소 간격(초, > 0.0)
+    reconnect_interval: 1.0
+    # 값이 있으면 웹캠 대신 해당 MP4 파일을 입력으로 사용
+    video_path: ""
+    # MP4 끝(EOF)에서 프레임 0으로 되감아 반복할지 여부
+    loop_video: false
+    # 타이머 콜백 목표 주기(Hz, > 0.0)
+    capture_fps: 30.0
+    # 입력 프레임 반시계 회전 각도(0, 90, 180, 270)
+    frame_rotate_ccw: 0
+    # true이면 frame_rotate_ccw 적용 시 JSON ROI를 추가 회전하지 않음
+    roi_already_rotated: false
+    # OpenCV 실시간 프리뷰 창 표시 여부 (GUI 환경에서만 true 권장)
+    show: false
+    # OpenCV 프리뷰 창 제목
+    preview_window_title: "Part 5 Bed Exit (/patient/bed_exit)"
+
+    # ------------------------------------------------------------------
+    # 2. N프레임 다수결 투표
+    # ------------------------------------------------------------------
+    # 다수결 슬라이딩 윈도우 길이 (>= 1, 기본 5)
+    voting_window: 5
+    # 이탈(True) 확정에 필요한 윈도우 내 최소 True 횟수 (1..voting_window, 기본 3)
+    voting_threshold: 3
+    # true이면 시작·초기화 직후 윈도우를 False로 채워 초기 워밍업 지연을 제거
+    prefill_safe_queue: false
+
+    # ------------------------------------------------------------------
+    # 3. 비동기 반복 TTS 경고 안내
+    # ------------------------------------------------------------------
+    # 환자 이탈(True) 동안 비동기 반복 TTS 음성 안내 활성화 여부
+    tts_enabled: true
+    # 이탈 시 반복 재생할 안내 문구
+    tts_message: "주행 중인 침상에서 이탈하지 말아주세요."
+    # OS TTS 언어 코드 (spd-say -l / espeak-ng -v)
+    tts_language: "ko"
+    # 1회 발화가 끝난 뒤 다음 반복 발화까지의 대기 간격(초, >= 0.0)
+    tts_repeat_interval: 1.0
+    # 사용자 지정 TTS 명령 (비어 있으면 spd-say -> espeak-ng -> espeak 자동 탐색)
+    # 예: "spd-say -l {language} -r -10 -w {message}"
+    tts_command: ""
+
+    # ------------------------------------------------------------------
+    # 4. 내장 모델 하이퍼파라미터 오버라이드 (센티널 유지 시 JSON/v1.3 기본값)
+    # ------------------------------------------------------------------
+    # 가중치 파일명(model_dir 기준) 또는 절대 경로 ("" = JSON/MODEL_FILES 기본값)
+    weights: ""
+    # 추론 장치 예: "cpu", "cuda:0" ("" = JSON/기본값 "cpu")
+    device: ""
+    # YOLO 사람 검출 최소 신뢰도 [0.0, 1.0] (-1.0 = JSON/기본값 0.5)
+    yolo_confidence: -1.0
+    # YOLO 입력 해상도 (> 0 정수, 0 = JSON/기본값 640)
+    yolo_imgsz: 0
+    # Detection/Segmentation ROI 밖 허용 비율 [0.0, 1.0] (-1.0 = JSON/기본값 0.05)
+    outside_fraction: -1.0
+    # Segmentation 마스크 이진화 임계치 [0.0, 1.0] (-1.0 = JSON/기본값 0.5)
+    mask_threshold: -1.0
+    # 최초 프레임 환자 선정용 Bed ROI 최소 겹침 비율 [0.0, 1.0] (-1.0 = JSON/기본값 0.5)
+    selector_init_overlap: -1.0
+    # 연속 프레임 환자 추적 최소 BBox IoU [0.0, 1.0] (-1.0 = JSON/기본값 0.15)
+    selector_min_iou: -1.0
+    # 1·2위 후보 간 최소 점수 차이(미만이면 ambiguous_people) [0.0, 1.0] (-1.0 = JSON/기본값 0.15)
+    selector_ambiguity_gap: -1.0
+    # Pose 판정 정책: "any_body" 또는 "torso" ("" = JSON/기본값 "any_body")
+    pose_policy: ""
+    # Pose 관절 최소 신뢰도 [0.0, 1.0] (-1.0 = JSON/기본값 0.5)
+    pose_point_conf: -1.0
+    # Pose ROI 경계 허용 오차 픽셀 (>= 0.0, -1.0 = JSON/기본값 3.0)
+    pose_tolerance_px: -1.0
+    # MediaPipe 최대 검출 인원수 (>= 1 정수, 0 = JSON/기본값 4)
+    mediapipe_num_poses: 0
+    # MediaPipe 포즈 검출 최소 신뢰도 [0.0, 1.0] (-1.0 = JSON/기본값 0.5)
+    mediapipe_min_detection_conf: -1.0
+    # MediaPipe 포즈 존재 최소 신뢰도 [0.0, 1.0] (-1.0 = JSON/기본값 0.5)
+    mediapipe_min_presence_conf: -1.0
+
+    # ------------------------------------------------------------------
+    # 5. 선택적 다중 모델 앙상블 ("" 유지 시 단일 모델)
+    # ------------------------------------------------------------------
+    # 쉼표로 구분된 내장 모델 목록 (예: "segmentation,yolo_pose,detection")
+    # JSON의 method="ensemble" + ensemble.models 블록으로도 개별 가중치 앙상블 가능
+    ensemble_methods: ""
+    # 결합 정책: "majority"(과반), "any"(하나라도 이탈), "all"(전원 이탈) ("" = JSON/기본값 "majority")
+    ensemble_policy: ""
+    # 직접 최소 이탈 득표수 지정 (0 = ensemble_policy 사용, 1..모델수)
+    ensemble_min_votes: 0
+    # true이면 앙상블 멤버 중 하나라도 판정 불가 시 전체 프레임 판정 불가 처리
+    ensemble_require_all_valid: false

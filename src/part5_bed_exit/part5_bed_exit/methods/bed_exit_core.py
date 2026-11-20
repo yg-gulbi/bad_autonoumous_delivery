@@ -157,10 +157,18 @@ class PatientSelector:
     후보 점수가 비슷해 모호하면 임의로 고르지 않고 판단 불가 상태를 반환한다.
     """
 
-    def __init__(self, roi, min_iou=0.15):
-        """ROI와 최소 추적 IoU를 저장한다."""
+    def __init__(self, roi, min_iou=0.15, init_overlap=0.5, ambiguity_gap=0.15):
+        """ROI와 추적 IoU·최초 겹침·모호성 기준을 검증·저장한다."""
+        if not 0.0 <= min_iou <= 1.0:
+            raise ValueError("min_iou must be in [0,1]")
+        if not 0.0 <= init_overlap <= 1.0:
+            raise ValueError("init_overlap must be in [0,1]")
+        if not 0.0 <= ambiguity_gap <= 1.0:
+            raise ValueError("ambiguity_gap must be in [0,1]")
         self.roi = roi
-        self.min_iou = min_iou
+        self.min_iou = float(min_iou)
+        self.init_overlap = float(init_overlap)
+        self.ambiguity_gap = float(ambiguity_gap)
         self.reset()
 
     def reset(self):
@@ -184,13 +192,13 @@ class PatientSelector:
         for c in candidates:
             if reference is None:
                 # [순서도: 이전 환자 위치 없음]
-                # BBox의 절반 이상이 Bed ROI와 겹치는 후보 중 겹침 비율이 가장 큰 사람을 고른다.
+                # BBox의 init_overlap 이상이 Bed ROI와 겹치는 후보 중 겹침 비율이 가장 큰 사람을 고른다.
                 overlap = 1-self.roi.box_outside(c.bbox,shape)
-                if overlap >= 0.5:
+                if overlap >= self.init_overlap:
                     scored.append((overlap,c))
             else:
                 # [순서도: 이전 환자 위치 있음]
-                # 이전 환자 BBox와 IoU 0.15 이상 겹치는 사람만 같은 환자로 연결한다.
+                # 이전 환자 BBox와 min_iou 이상 겹치는 사람만 같은 환자로 연결한다.
                 overlap = box_iou(reference,c.bbox)
                 if overlap >= self.min_iou:
                     scored.append((overlap,c))
@@ -199,8 +207,8 @@ class PatientSelector:
         # 기준을 만족하는 후보가 없으면 다른 사람을 임의 환자로 바꾸지 않는다.
         if not scored:
             return None, "patient_unassociated"
-        # 1·2위 점수 차가 작으면 방문자와 환자를 구별할 근거가 부족하다고 본다.
-        if len(scored)>1 and scored[1][0]>=scored[0][0]-0.15:
+        # 1·2위 점수 차가 ambiguity_gap 이하이면 방문자와 환자를 구별할 근거가 부족하다고 본다.
+        if len(scored)>1 and scored[1][0]>=scored[0][0]-self.ambiguity_gap:
             return None, "ambiguous_people"
         chosen = scored[0][1]
 
@@ -212,10 +220,15 @@ class PatientSelector:
 class BedExitMethod(FrameMethod):
     """모든 내장 모델이 동일한 ``judge(frame)`` 흐름을 공유하도록 하는 전략 기반 클래스."""
 
-    def __init__(self, roi):
+    def __init__(self, roi, *, min_iou=0.15, init_overlap=0.5, ambiguity_gap=0.15):
         """ROI와 환자 선택기를 만들고 프레임별 상태를 초기화한다."""
         self.roi = roi
-        self.selector = PatientSelector(roi)
+        self._selector_kwargs = {
+            "min_iou": min_iou,
+            "init_overlap": init_overlap,
+            "ambiguity_gap": ambiguity_gap,
+        }
+        self.selector = PatientSelector(roi, **self._selector_kwargs)
         self.reset()
 
     def reset(self):
@@ -227,7 +240,7 @@ class BedExitMethod(FrameMethod):
     def set_roi(self, roi):
         """정적 이미지별 ROI를 바꿀 때 선택기와 추적 상태를 함께 초기화한다."""
         self.roi = roi
-        self.selector = PatientSelector(roi)
+        self.selector = PatientSelector(roi, **self._selector_kwargs)
         self.reset()
 
     @abstractmethod
@@ -284,9 +297,19 @@ class YoloMethod(BedExitMethod):
     """Ultralytics YOLO 기반 Detection·Segmentation·Pose의 공통 추론 클래스."""
 
     def __init__(self, roi, weights, task, device="cpu",
-                 confidence=YOLO_CONFIDENCE, imgsz=640, model=None):
+                 confidence=YOLO_CONFIDENCE, imgsz=640, model=None,
+                 min_iou=0.15, init_overlap=0.5, ambiguity_gap=0.15):
         """가중치와 추론 옵션을 검증하고 YOLO 모델을 준비한다."""
-        super().__init__(roi)
+        if not 0.0 <= confidence <= 1.0:
+            raise ValueError("confidence must be in [0,1]")
+        if type(imgsz) is not int or imgsz <= 0:
+            raise ValueError("imgsz must be a positive int")
+        super().__init__(
+            roi,
+            min_iou=min_iou,
+            init_overlap=init_overlap,
+            ambiguity_gap=ambiguity_gap,
+        )
 
         # 테스트가 가짜 모델을 주입하지 않은 운영 경로에서만 실제 가중치를 로드한다.
         if model is None:
@@ -359,15 +382,18 @@ class DetectionROI(YoloMethod):
 class SegmentationROI(YoloMethod):
     """사람 인스턴스 마스크 중 ROI 밖 픽셀 비율로 이탈을 판단하는 내장 메서드."""
 
-    def __init__(self, roi, weights, outside_fraction=0.05, **kwargs):
-        """Segmentation YOLO와 허용 가능한 ROI 밖 마스크 비율을 초기화한다."""
+    def __init__(self, roi, weights, outside_fraction=0.05, mask_threshold=0.5, **kwargs):
+        """Segmentation YOLO와 허용 가능한 ROI 밖 마스크 비율·이진화 임계치를 초기화한다."""
         super().__init__(roi,weights,"segment",**kwargs)
         if not 0<=outside_fraction<=1:
             raise ValueError("outside_fraction must be in [0,1]")
+        if not 0<=mask_threshold<=1:
+            raise ValueError("mask_threshold must be in [0,1]")
         self.outside_fraction=outside_fraction
+        self.mask_threshold=float(mask_threshold)
 
     def decide(self,candidate,shape):
-        """순서도의 마스크 이진화·ROI 적용·5% 이탈 판정을 수행한다."""
+        """순서도의 마스크 이진화·ROI 적용·이탈 임계치 판정을 수행한다."""
         # [PART05-V5-08 환자 마스크와 Bed ROI 비교]
         # 이전: PatientSelector.select(); 다음: BedExitState.update()
         # [순서도: 환자 마스크 존재 여부]
@@ -375,8 +401,8 @@ class SegmentationROI(YoloMethod):
         if candidate.mask is None:
             return None,None,"missing_mask"
 
-        # [순서도: 환자 마스크 이진화] 모델 출력값이 0.5를 초과한 픽셀만 환자로 본다.
-        m=candidate.mask>0.5
+        # [순서도: 환자 마스크 이진화] 모델 출력값이 mask_threshold를 초과한 픽셀만 환자로 본다.
+        m=candidate.mask>self.mask_threshold
         area=int(m.sum())
         if not area:
             return None,None,"empty_mask"
@@ -384,7 +410,7 @@ class SegmentationROI(YoloMethod):
         # [순서도: Bed ROI 마스크 적용 → ROI 밖 픽셀 비율 계산]
         # 계산식은 (환자 마스크 AND NOT Bed ROI)의 픽셀 수 / 전체 환자 마스크 픽셀 수다.
         score=float(np.count_nonzero(m & ~self.roi.mask(shape))/area)
-        # [순서도: ROI 밖 비율 5% 초과 여부] 정확히 5%는 정상, 5% 초과는 이탈이다.
+        # [순서도: ROI 밖 비율 임계치 초과 여부] 정확히 임계치는 정상, 초과는 이탈이다.
         return score>self.outside_fraction,score,"mask_outside_fraction"
 
     def render(self, frame):
@@ -395,7 +421,7 @@ class SegmentationROI(YoloMethod):
             _draw_banner(canvas, f'SEG | UNAVAILABLE ({self.last.reason})', (0, 165, 255))
             return canvas
 
-        person_mask = self.last.mask > 0.5
+        person_mask = self.last.mask > self.mask_threshold
         roi_mask = self.roi.mask(frame.shape)
         overlay = canvas.copy()
         overlay[person_mask & roi_mask] = (0, 200, 0)
@@ -499,8 +525,14 @@ class YoloPoseROI(YoloMethod):
     def __init__(self,roi,weights,policy="any_body",point_conf=0.5,
                  tolerance_px=3.0,**kwargs):
         """YOLO Pose 모델과 관절 판정 정책·신뢰도·경계 허용 오차를 설정한다."""
+        if policy not in ("any_body", "torso"):
+            raise ValueError("policy must be any_body or torso")
+        if not 0.0 <= point_conf <= 1.0:
+            raise ValueError("point_conf must be in [0,1]")
+        if not np.isfinite(tolerance_px) or tolerance_px < 0.0:
+            raise ValueError("tolerance_px must be >= 0")
         super().__init__(roi,weights,"pose",**kwargs)
-        self.policy,self.point_conf,self.tolerance_px=policy,point_conf,tolerance_px
+        self.policy,self.point_conf,self.tolerance_px=policy,float(point_conf),float(tolerance_px)
 
     def decide(self,candidate,shape):
         """COCO 관절 인덱스를 이용해 공통 ``pose_decision``을 호출한다."""
@@ -519,9 +551,29 @@ class MediaPipePoseROI(BedExitMethod):
     """MediaPipe 33개 관절을 공통 Pose 판정 규칙에 연결하는 내장 메서드."""
 
     def __init__(self,roi,weights,policy="any_body",point_conf=0.5,
-                 tolerance_px=3.0):
+                 tolerance_px=3.0, num_poses=4,
+                 min_pose_detection_confidence=0.5,
+                 min_pose_presence_confidence=0.5,
+                 min_iou=0.15, init_overlap=0.5, ambiguity_gap=0.15):
         """MediaPipe PoseLandmarker와 관절 판정 옵션을 초기화한다."""
-        super().__init__(roi)
+        if policy not in ("any_body", "torso"):
+            raise ValueError("policy must be any_body or torso")
+        if not 0.0 <= point_conf <= 1.0:
+            raise ValueError("point_conf must be in [0,1]")
+        if not np.isfinite(tolerance_px) or tolerance_px < 0.0:
+            raise ValueError("tolerance_px must be >= 0")
+        if type(num_poses) is not int or num_poses < 1:
+            raise ValueError("num_poses must be an int >= 1")
+        if not 0.0 <= min_pose_detection_confidence <= 1.0:
+            raise ValueError("min_pose_detection_confidence must be in [0,1]")
+        if not 0.0 <= min_pose_presence_confidence <= 1.0:
+            raise ValueError("min_pose_presence_confidence must be in [0,1]")
+        super().__init__(
+            roi,
+            min_iou=min_iou,
+            init_overlap=init_overlap,
+            ambiguity_gap=ambiguity_gap,
+        )
 
         # MediaPipe는 선택 메서드일 때만 지연 import해 다른 세 방법의 실행 의존성을 줄인다.
         import mediapipe as mp
@@ -531,12 +583,13 @@ class MediaPipePoseROI(BedExitMethod):
             raise FileNotFoundError(f"Run model-download cell first: {weights}")
         self.mp=mp
 
-        # 정지 이미지 모드로 최대 네 명의 Pose를 찾고 각 후보는 이후 환자 선택기를 거친다.
+        # 정지 이미지 모드로 최대 num_poses명의 Pose를 찾고 각 후보는 이후 환자 선택기를 거친다.
         self.model=vision.PoseLandmarker.create_from_options(vision.PoseLandmarkerOptions(
             base_options=python.BaseOptions(model_asset_path=str(weights)),
-            running_mode=vision.RunningMode.IMAGE,num_poses=4,
-            min_pose_detection_confidence=0.5,min_pose_presence_confidence=0.5))
-        self.policy,self.point_conf,self.tolerance_px=policy,point_conf,tolerance_px
+            running_mode=vision.RunningMode.IMAGE,num_poses=num_poses,
+            min_pose_detection_confidence=float(min_pose_detection_confidence),
+            min_pose_presence_confidence=float(min_pose_presence_confidence)))
+        self.policy,self.point_conf,self.tolerance_px=policy,float(point_conf),float(tolerance_px)
 
     def candidates(self,frame):
         """BGR 프레임을 MediaPipe에 전달하고 사람별 관절과 BBox 후보를 만든다."""

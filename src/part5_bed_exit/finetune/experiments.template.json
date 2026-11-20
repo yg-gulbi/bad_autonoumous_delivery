@@ -1,0 +1,37 @@
+{
+  "description": "PART 05 Segmentation 베이스라인(B1~B4) vs test_bed.mp4 파인튜닝(FT1~FT2) 비교 매트릭스",
+  "candidates": [
+    {
+      "label": "B1_yolo11n_seg",
+      "weights": "src/part5_bed_exit/models/yolo11n-seg.pt",
+      "rotate_ccw90": false
+    },
+    {
+      "label": "B2_yolo11s_seg",
+      "weights": "yolo11s-seg.pt",
+      "rotate_ccw90": false
+    },
+    {
+      "label": "B3_yolo11m_seg",
+      "weights": "yolo11m-seg.pt",
+      "rotate_ccw90": false
+    },
+    {
+      "label": "B4_yolo11l_seg",
+      "weights": "yolo11l-seg.pt",
+      "rotate_ccw90": false
+    },
+    {
+      "label": "FT1_yolo11n_testbed_0deg",
+      "weights": "src/part5_bed_exit/finetune/runs/ft1_yolo11n_seg_testbed_0deg/weights/best.pt",
+      "rotate_ccw90": false,
+      "optional": true
+    },
+    {
+      "label": "FT2_yolo11n_testbed_rot4",
+      "weights": "src/part5_bed_exit/finetune/runs/ft2_yolo11n_seg_testbed_rot4/weights/best.pt",
+      "rotate_ccw90": false,
+      "optional": true
+    }
+  ]
+}

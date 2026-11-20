@@ -12,6 +12,12 @@
 /research/results/
 /config/*.json
 !/config/*.template.json
+/config/*.yaml
+!/config/*.template.yaml
+/finetune/data/*
+!/finetune/data/.gitkeep
+/finetune/runs/*
+!/finetune/runs/.gitkeep
 /notebooks/.ipynb_checkpoints/
 *.task
 *.zip
