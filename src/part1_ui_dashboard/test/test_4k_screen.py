@@ -23,8 +23,12 @@ PROBE = r"""
 (async () => {
   const out = {};
   try {
-    cfg = {names: {A: "A 구역", B: "B 구역", C: "C 구역", D: "D 구역", E: "E 구역", F: "F 구역"},
+    cfg = {names: {A: "응급실(A)", B: "102호 병실(B)", C: "수술실(C)", D: "간호 스테이션(D)", E: "101호 병실(E)", F: "조제실(F)"},
            robot_names: {robot_a: "침상형 이송 로봇", robot_b: "약품 운송 로봇"}, ack_timeout_s: 2, states: __STATES__};
+    cfg.zones = Object.fromEntries(Object.keys(cfg.names).map(z => [z, {}]));
+    const select = document.createElement("select");
+    select.innerHTML = zoneOptions("C");
+    out.zones = [select.value, select.selectedOptions[0].textContent, locationText({zone:"C", slot:2}), resLabel("ROOM_B")];
     const robot = (label, part4_state, causes) => ({label, part4_state, pause_causes: causes, state: "SAFE_PAUSE", link_ok: true});
     const action = () => [$("alarm-action").textContent, $("alarm-action").className];
     const event = {type: "BED_EXIT", detail: {targets: ["robot_a"]}, ts: 1};
@@ -143,9 +147,9 @@ def test_64_stop_wording_waits_for_the_robot_state(browser):
 
 def test_65_each_unknown_resource_has_its_own_clear_button(browser):
     assert browser["buttons"] == [["CORRIDOR", "현장 확인 후 복도 비움"],
-                                  ["ROOM_B", "현장 확인 후 B 구역 출입 비움"],
-                                  ["ROOM_E", "현장 확인 후 E 구역 출입 비움"]]
-    for resource, label in (("CORRIDOR", "복도"), ("ROOM_B", "B 구역 출입"), ("ROOM_E", "E 구역 출입")):
+                                  ["ROOM_B", "현장 확인 후 102호 병실(B) 출입 비움"],
+                                  ["ROOM_E", "현장 확인 후 101호 병실(E) 출입 비움"]]
+    for resource, label in (("CORRIDOR", "복도"), ("ROOM_B", "102호 병실(B) 출입"), ("ROOM_E", "101호 병실(E) 출입")):
         sent = browser["clear"][resource]
         assert sent["url"] == "/api/command"
         assert sent["body"] == {"cmd": "RESOURCE_CLEAR_CONFIRM", "resource": resource, "operator": "시험자"}
@@ -189,3 +193,7 @@ def test_64_robot_block_badge_follows_the_robot_state(browser, key, expected):
 def test_64_situation_line_follows_the_robot_state(browser, key, expected):
     """Answer 1/2: the operator stop has no alarm window; the badge and this line show the unconfirmed stop."""
     assert browser["line"][key] == expected
+
+
+def test_named_zone_labels_keep_command_value(browser):
+    assert browser["zones"] == ["C", "수술실(C)", "수술실(C) 2번 자리", "102호 병실(B) 출입"]

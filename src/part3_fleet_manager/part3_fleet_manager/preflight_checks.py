@@ -116,20 +116,20 @@ def _far(left, right):
     return delta is None or (delta > .05 and not isclose(delta, .05, rel_tol=0, abs_tol=1e-12)), delta
 
 
-def compare_zones(zones, goals):
+def compare_zones(zones, goals, names=None):
     warnings = []
     for zone in sorted(set(zones) | set(goals)):
         left, right = zones.get(zone), goals.get(zone)
         far, delta = _far(left, right)
         if far:
             suffix = "" if delta is None else f" (거리 {delta:.3f} m)"
-            warnings.append(f"{zone} 구역 · 관제 {left} / PART 04 {right}{suffix}".replace("None", "없음"))
+            warnings.append(f"{(names or {}).get(zone, zone)} · 관제 {left} / PART 04 {right}{suffix}".replace("None", "없음"))
     return warnings
 
 
 def compare_points(config, part4):
     """Both slots of every zone and the crossroad, against fleet.yaml (0.05 m)."""
-    warnings = compare_zones(dict(config.zones), {z: points[0] for z, points in part4["slots"].items()})
+    warnings = compare_zones(dict(config.zones), {z: points[0] for z, points in part4["slots"].items()}, config.zone_names)
     for zone in sorted(set(config.slots) | set(part4["slots"])):
         mine = (config.slots.get(zone) or ())[1:2]
         theirs = part4["slots"].get(zone, [])[1:2]
@@ -139,7 +139,7 @@ def compare_points(config, part4):
         far, delta = _far(left, right)
         if far:
             suffix = "" if delta is None else f" (거리 {delta:.3f} m)"
-            warnings.append(f"{zone} 구역 2번 자리 · 관제 {left} / PART 04 {right}{suffix}".replace("None", "없음"))
+            warnings.append(f"{config.zone_names.get(zone, zone)} 2번 자리 · 관제 {left} / PART 04 {right}{suffix}".replace("None", "없음"))
     if part4["format"] == "SLOTS" or config.corridor.crossroad is not None:
         far, delta = _far(config.corridor.crossroad, part4["crossroad"])
         if far:

@@ -146,13 +146,13 @@ class ResourceManager:
 
     def zone_label(self, zone, slot=None):
         name = self.config.zone_names.get(zone) or f"{zone} 구역"
-        return f"{name} (2번 자리)" if slot == 2 else name
+        return f"{name} 2번 자리" if slot == 2 else name
 
     def resource_label(self, name):
         if name == g.CORRIDOR:
             return "복도"
         zone = name.removeprefix("ROOM_")
-        return self.config.zone_names.get(zone, f"{zone} 구역") + " 출입"
+        return self.zone_label(zone) + " 출입"
 
     def record(self, event_type, now, reason, *, robot=None, mission_id=None, candidates=None, **detail):
         if candidates is None:

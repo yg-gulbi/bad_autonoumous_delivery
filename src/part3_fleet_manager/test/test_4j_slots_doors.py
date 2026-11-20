@@ -90,7 +90,7 @@ def test_55_field_1530_1532_1536_second_slot_without_waiting(make):
         "SELECT type FROM events").fetchall())
     out = drive(sim, A, t + .1)
     arrived, = [e for e in out.events if e["type"] == "ARRIVE"]
-    assert arrived["detail"]["slot"] == 2 and arrived["detail"]["reason"] == "F 구역 (2번 자리) 도착"
+    assert arrived["detail"]["slot"] == 2 and arrived["detail"]["reason"] == "조제실(F) 2번 자리 도착"
     robot = sim.core.snapshot(sim.now)["robots"][A]
     assert robot["zone"] == "F" and robot["slot"] == 2 and sim.state(A) == "WAIT_CONFIRM"
     sim.confirm(A, "p")
@@ -250,7 +250,8 @@ def test_56_second_robot_enters_b_slot2_after_the_door_frees(make):
     for t in (2, 3, 4):
         out = sim.tick(t)
         assert A not in commands(out) and sim.state(B) == "MOVING"
-    assert "B 구역 출입" in sim.core.wait_reason(A)
+    assert sim.core.wait_reason(A) == "102호 병실(B)에 들어오는 로봇 대기"
+    assert "102호 병실(B) 출입" in sim.core.resources.wait_reasons[A]
     sim.frames[B]["pose"] = sim.pose((-2.3, -2.5))  # past the door, 0.86 m from the crossroad
     out = sim.tick(5)
     assert A not in commands(out)  # entering claim ends at the slot, not at the door

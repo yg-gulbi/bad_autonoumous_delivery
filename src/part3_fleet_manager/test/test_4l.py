@@ -140,7 +140,7 @@ def test_exit_override_keeps_proximity_before_the_first_move(sim):
 
 
 def test_exit_retry_then_hold_at_a(sim):
-    assert sim.cfg.exit_blocked_zones == {"A", "F"}
+    assert sim.cfg.exit_blocked_zones == {"A", "C", "F"}
     sim.frames[MED]["pose"] = sim.pose("A")
     sim.frames[BED]["pose"] = sim.pose(sim.cfg.slot_point("A", 2))
     sim.call("a1", "F", level=3)

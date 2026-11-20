@@ -25,12 +25,12 @@ robot_link:
   control_retries: 3            # 다시 보낸 횟수가 이 값을 넘으면 "정지 미확인" 카드 (D-32)
 
 zones:                          # PART 04 goal_manager.py SLOTS와 같은 값. x, y = 1번 자리, slot2 = 2번 자리 (D-30)
-  A: {x: -2.383, y:  1.027, slot2: {x: -2.458, y:  0.282}, slot2_blocks_exit: true, name: ""}   # 1번 안쪽, 2번 입구 쪽
-  B: {x: -2.500, y: -1.250, slot2: {x: -2.600, y: -2.800}, slot2_blocks_exit: false, name: ""}   # 문 양옆
-  C: {x: -2.758, y: -5.123, slot2: {x: -2.738, y: -4.573}, slot2_blocks_exit: false, name: ""}
-  D: {x: -1.000, y:  0.800, slot2: {x: -0.750, y: -0.150}, slot2_blocks_exit: false, name: ""}
-  E: {x: -0.400, y: -1.400, slot2: {x: -0.500, y: -2.950}, slot2_blocks_exit: false, name: ""}   # 문 양옆
-  F: {x: -1.400, y: -5.400, slot2: {x: -1.350, y: -4.700}, slot2_blocks_exit: true, name: ""}
+  A: {x: -2.383, y:  1.027, slot2: {x: -2.458, y:  0.282}, slot2_blocks_exit: true, name: "응급실"}   # 1번 안쪽, 2번 입구 쪽
+  B: {x: -2.500, y: -1.250, slot2: {x: -2.600, y: -2.800}, slot2_blocks_exit: false, name: "102호 병실"}   # 문 양옆
+  C: {x: -2.758, y: -5.123, slot2: {x: -2.738, y: -4.573}, slot2_blocks_exit: true, name: "수술실"}
+  D: {x: -1.000, y:  0.800, slot2: {x: -0.750, y: -0.150}, slot2_blocks_exit: false, name: "간호 스테이션"}
+  E: {x: -0.400, y: -1.400, slot2: {x: -0.500, y: -2.950}, slot2_blocks_exit: false, name: "101호 병실"}   # 문 양옆
+  F: {x: -1.400, y: -5.400, slot2: {x: -1.350, y: -4.700}, slot2_blocks_exit: true, name: "조제실"}
 
 corridor:
   mode: DIRECTIONAL
@@ -53,6 +53,7 @@ corridor:
   room_mode: DOOR                # DOOR(문·교차로 한 대씩, 방 안 두 대) | ROOM(방 하나에 한 대, 4J 이전)
 
 resources:
+  zone_arrival_clear_m: 2.0      # 출입 순서를 확인하는 각 자리 중심 반경
   zone_occupied_m: 0.6           # 목적지 중심에서 다른 로봇까지의 점유 반경
   clear_margin_m: 0.20
   clear_hold_s: 1.0

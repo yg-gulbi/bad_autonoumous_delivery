@@ -77,7 +77,7 @@ def test_62_preflight_slot_and_crossroad_differences_and_earlier_format(cfg, tmp
         f'    "{z}": (GoalPoint({x}, {y}), GoalPoint({cfg.slots[z][1][0] + (0.2 if z == "C" else 0)}, {cfg.slots[z][1][1]})),\n'
         for z, (x, y) in zones.items()) + "}\nCROSSROAD = GoalPoint(-1.5, -2.10)\n")
     warnings = checks.compare_points(cfg, checks.goal_points(path))
-    assert [w.split(" · ")[0] for w in warnings] == ["C 구역 2번 자리", "교차로"]
+    assert [w.split(" · ")[0] for w in warnings] == ["수술실(C) 2번 자리", "교차로"]
     # The earlier PART 04 (one GOALS point per zone, no crossroad) still parses; its slot 2 is "없음".
     path.write_text("GOALS = {" + ", ".join(f'"{z}": GoalPoint({x}, {y})' for z, (x, y) in zones.items()) + "}")
     earlier = checks.goal_points(path)

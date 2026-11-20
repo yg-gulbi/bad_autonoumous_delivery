@@ -16,7 +16,7 @@
 
 ROS Jazzy, 팀 가상환경, `ROS_DOMAIN_ID=95`, `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`, Fast DDS 루프백 전용 프로필을 사용했다. 발견 서버·슈퍼 클라이언트 설정을 해제한 셸에서 관제와 화면, mock 두 대를 실행했다. DB·빌드 산출물은 임시 디렉터리에 두었다.
 
-1. **기본 구역 복귀**. 화면에서 C 구역 호출을 등록했다. 약품 운송 로봇(robot3)이 도크 위 F에서 언독했다. LOCALIZING 동안 화면에 ‘도크에서 출발 준비’가 표시됐고 결정 카드는 0건이었다. C에 도착해 수령을 확인하자 임무가 DONE이 되고 F로 돌아가 IDLE이 됐다. 명령 토픽에서 `MOVE C 1 id=L-0001-1`, `MOVE C 1`, `MOVE F 1`을 순서대로 관측했다. 첫 명령은 실제 수신기와 같은 mock의 무통보 거절이고, 두 번째는 관제의 호환 재전송이다. 별도 재실행에서 robot3의 hazard_detection은 발행자 1개·구독자 0개였다. 임무가 끝난 뒤 robot3에 DOCK을 보내자 좌표 미등록 로그만 남고 COMMAND_REJECTED 이벤트는 0건이었다. [출발 준비 화면 · 1440×900](screens/4i-01-undocking.png)
+1. **기본 구역 복귀**. 화면에서 수술실(C) 호출을 등록했다. 약품 운송 로봇(robot3)이 도크 위 F에서 언독했다. LOCALIZING 동안 화면에 ‘도크에서 출발 준비’가 표시됐고 결정 카드는 0건이었다. C에 도착해 수령을 확인하자 임무가 DONE이 되고 F로 돌아가 IDLE이 됐다. 명령 토픽에서 `MOVE C 1 id=L-0001-1`, `MOVE C 1`, `MOVE F 1`을 순서대로 관측했다. 첫 명령은 실제 수신기와 같은 mock의 무통보 거절이고, 두 번째는 관제의 호환 재전송이다. 별도 재실행에서 robot3의 hazard_detection은 발행자 1개·구독자 0개였다. 임무가 끝난 뒤 robot3에 DOCK을 보내자 좌표 미등록 로그만 남고 COMMAND_REJECTED 이벤트는 0건이었다. [출발 준비 화면 · 1440×900](screens/4i-01-undocking.png)
 2. **도크 복귀**. 시험용 사본에서 robot2의 복귀 방식을 DOCK으로 바꾸고 호출을 robot2에 배정했다. robot3는 D에서 대기해 F 쪽 도크 접근 지점을 비웠다. C에 도착하여 수령을 확인한 뒤 마지막 명령은 `DOCK` 한 건이었다. 도크 접근 중 NAVIGATING, 접안 때 DOCKING, 완료 때 DOCKED가 차례로 왔고, 화면 상태는 IDLE, docked는 true가 됐다.
 3. **원본 토픽이 없는 점검**. 별도로 두 namespace에서 hospital_nav STATE만 발행했다. 배터리·도크·AMCL 원본 미수신, Nav2 액션 미발견, 범퍼 ‘사용 안 함’인 상태에서 preflight는 두 대 OK와 ‘실제 실행 가능’으로 종료했다(코드 0). 같은 조건에서 robot3의 docked 필드만 빼자 ‘/robot3 STATE.docked 없음’과 종료 코드 1이 나왔다. 캡처는 첫 번째 점검의 실제 표준출력을 브라우저에 그대로 표시해 저장한 것이다. [STATE 전용 preflight · 1440×900](screens/4i-02-preflight.png)
 
