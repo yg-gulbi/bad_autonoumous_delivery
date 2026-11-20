@@ -1,0 +1,242 @@
+[
+  {
+    "scenario": "b",
+    "trial": 1,
+    "status": "PASS",
+    "arrived_ok": true,
+    "stop_gaps": [
+      {
+        "rule": "GAP",
+        "db_gap_m": 0.084,
+        "gt_dist_m": 1.401,
+        "gt_axial_gap_m": 0.094,
+        "sim_ts": 629.16
+      }
+    ],
+    "clear_gaps": [
+      {
+        "reason": "앞 로봇의 전진을 확인해 뒤 로봇 대기를 해제했습니다.",
+        "gt_dist_m": 2.04,
+        "gt_axial_gap_m": 1.627,
+        "amcl_dist_m": 2.008,
+        "sim_ts": 636.47
+      }
+    ],
+    "proximity_stops": 0,
+    "cards": [],
+    "samples": 521,
+    "moving_samples": 450,
+    "wall_duration_s": 52.0,
+    "sim_duration_s": 39.38,
+    "avg_rtf": 0.757,
+    "min_gt_moving": {
+      "dist_m": 0.9475,
+      "wall_ts": 1795139602.383,
+      "wall_iso": "2026-11-20 10:53:22.383",
+      "sim_ts": 661.515,
+      "r3_xy": [
+        -2.537,
+        -5.067
+      ],
+      "r2_xy": [
+        -1.615,
+        -4.848
+      ],
+      "r3_v": 0.0,
+      "r2_v": 0.278
+    },
+    "min_amcl_moving": {
+      "dist_m": 1.0145,
+      "wall_ts": 1795139603.283,
+      "wall_iso": "2026-11-20 10:53:23.283",
+      "sim_ts": 662.268,
+      "r3_xy": [
+        -2.537,
+        -5.067
+      ],
+      "r2_xy": [
+        -1.566,
+        -5.036
+      ],
+      "r3_v": 0.0,
+      "r2_v": 0.305
+    },
+    "min_gt_all": {
+      "dist_m": 0.9475,
+      "wall_ts": 1795139602.383,
+      "wall_iso": "2026-11-20 10:53:22.383",
+      "sim_ts": 661.515,
+      "r3_xy": [
+        -2.537,
+        -5.067
+      ],
+      "r2_xy": [
+        -1.615,
+        -4.848
+      ],
+      "r3_v": 0.0,
+      "r2_v": 0.278
+    },
+    "gt_ge_045": true
+  },
+  {
+    "scenario": "b",
+    "trial": 2,
+    "status": "PASS",
+    "arrived_ok": true,
+    "stop_gaps": [
+      {
+        "rule": "GAP",
+        "db_gap_m": 0.093,
+        "gt_dist_m": 1.401,
+        "gt_axial_gap_m": 0.094,
+        "sim_ts": 684.49
+      }
+    ],
+    "clear_gaps": [
+      {
+        "reason": "앞 로봇의 전진을 확인해 뒤 로봇 대기를 해제했습니다.",
+        "gt_dist_m": 1.896,
+        "gt_axial_gap_m": 1.42,
+        "amcl_dist_m": 1.754,
+        "sim_ts": 691.05
+      }
+    ],
+    "proximity_stops": 0,
+    "cards": [],
+    "samples": 504,
+    "moving_samples": 433,
+    "wall_duration_s": 50.3,
+    "sim_duration_s": 38.74,
+    "avg_rtf": 0.77,
+    "min_gt_moving": {
+      "dist_m": 0.9621,
+      "wall_ts": 1795139673.106,
+      "wall_iso": "2026-11-20 10:54:33.106",
+      "sim_ts": 716.088,
+      "r3_xy": [
+        -2.544,
+        -5.037
+      ],
+      "r2_xy": [
+        -1.612,
+        -4.798
+      ],
+      "r3_v": 0.0,
+      "r2_v": 0.264
+    },
+    "min_amcl_moving": {
+      "dist_m": 0.9867,
+      "wall_ts": 1795139673.606,
+      "wall_iso": "2026-11-20 10:54:33.606",
+      "sim_ts": 716.517,
+      "r3_xy": [
+        -2.544,
+        -5.037
+      ],
+      "r2_xy": [
+        -1.585,
+        -4.902
+      ],
+      "r3_v": 0.0,
+      "r2_v": 0.223
+    },
+    "min_gt_all": {
+      "dist_m": 0.9621,
+      "wall_ts": 1795139673.106,
+      "wall_iso": "2026-11-20 10:54:33.106",
+      "sim_ts": 716.088,
+      "r3_xy": [
+        -2.544,
+        -5.037
+      ],
+      "r2_xy": [
+        -1.612,
+        -4.798
+      ],
+      "r3_v": 0.0,
+      "r2_v": 0.264
+    },
+    "gt_ge_045": true
+  },
+  {
+    "scenario": "b",
+    "trial": 3,
+    "status": "PASS",
+    "arrived_ok": true,
+    "stop_gaps": [
+      {
+        "rule": "GAP",
+        "db_gap_m": 0.107,
+        "gt_dist_m": 1.4,
+        "gt_axial_gap_m": 0.094,
+        "sim_ts": 740.0
+      }
+    ],
+    "clear_gaps": [
+      {
+        "reason": "앞 로봇의 전진을 확인해 뒤 로봇 대기를 해제했습니다.",
+        "gt_dist_m": 1.994,
+        "gt_axial_gap_m": 1.525,
+        "amcl_dist_m": 1.956,
+        "sim_ts": 746.82
+      }
+    ],
+    "proximity_stops": 0,
+    "cards": [],
+    "samples": 525,
+    "moving_samples": 451,
+    "wall_duration_s": 52.4,
+    "sim_duration_s": 39.35,
+    "avg_rtf": 0.751,
+    "min_gt_moving": {
+      "dist_m": 0.965,
+      "wall_ts": 1795139746.702,
+      "wall_iso": "2026-11-20 10:55:46.701",
+      "sim_ts": 771.702,
+      "r3_xy": [
+        -2.596,
+        -4.972
+      ],
+      "r2_xy": [
+        -1.645,
+        -4.805
+      ],
+      "r3_v": 0.0,
+      "r2_v": 0.22
+    },
+    "min_amcl_moving": {
+      "dist_m": 1.0266,
+      "wall_ts": 1795139746.902,
+      "wall_iso": "2026-11-20 10:55:46.902",
+      "sim_ts": 771.852,
+      "r3_xy": [
+        -2.596,
+        -4.972
+      ],
+      "r2_xy": [
+        -1.638,
+        -4.847
+      ],
+      "r3_v": 0.0,
+      "r2_v": 0.312
+    },
+    "min_gt_all": {
+      "dist_m": 0.965,
+      "wall_ts": 1795139746.702,
+      "wall_iso": "2026-11-20 10:55:46.701",
+      "sim_ts": 771.702,
+      "r3_xy": [
+        -2.596,
+        -4.972
+      ],
+      "r2_xy": [
+        -1.645,
+        -4.805
+      ],
+      "r3_v": 0.0,
+      "r2_v": 0.22
+    },
+    "gt_ge_045": true
+  }
+]

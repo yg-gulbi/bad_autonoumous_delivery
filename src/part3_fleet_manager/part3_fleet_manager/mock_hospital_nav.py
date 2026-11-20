@@ -1,7 +1,8 @@
 """One simulated PART 04 robot, using hospital_nav text commands and status JSON."""
 import json
 from itertools import pairwise
-from math import atan2, cos, dist, isfinite, sin
+from dataclasses import replace
+from math import atan2, cos, degrees, dist, isfinite, sin
 from uuid import uuid4
 
 from ament_index_python.packages import get_package_share_path
@@ -13,7 +14,7 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import BatteryState
+from sensor_msgs.msg import BatteryState, CompressedImage
 from std_msgs.msg import String
 
 from .core.config import load_config
@@ -28,21 +29,24 @@ except ImportError:
     NavigateToPose = None
 
 
-def parse_command(text, supports_id):
+def parse_command(text, supports_id, supports_slots=True):
+    """-> (action, zone, level, tag, slot). 4J PART 04 takes "MOVE F2 3" (slot 2); no number = slot 1."""
     words = text.strip().split()
     tag = None
     if supports_id and words and words[-1].lower().startswith("id="):
         tag = words.pop()[3:] or None
     words = [w.upper() for w in words]
     if len(words) == 1 and words[0] in ("PAUSE", "RESUME", "CANCEL", "DOCK", "UNDOCK"):
-        return words[0], None, None, tag
+        return words[0], None, None, tag, None
     if words[:1] == ["MOVE"]:
         words = words[1:]
-    if len(words) not in (1, 2) or words[0] not in set("ABCDEF"):
-        raise ValueError("구역 A~F와 선택 응급도 1~3이 필요합니다.")
+    room = words[0] if words else ""
+    slotted = supports_slots and len(room) == 2 and room[1] in "12"
+    if len(words) not in (1, 2) or room[:1] not in set("ABCDEF") or len(room) != 1 + slotted:
+        raise ValueError("구역 A~F(4J: A1/A2 …)와 선택 응급도 1~3이 필요합니다.")
     if len(words) == 2 and words[1] not in ("1", "2", "3"):
         raise ValueError("응급도는 1~3 정수입니다.")
-    return "MOVE", words[0], int(words[1]) if len(words) == 2 else 1, tag
+    return "MOVE", room[0], int(words[1]) if len(words) == 2 else 1, tag, int(room[1]) if slotted else 1
 
 
 def stall_point(start, end, target, radius):
@@ -70,6 +74,9 @@ class MockHospitalNav(Node):
         defaults = self.config.mock
         self.declare_parameter("supports_request_id", defaults.supports_request_id)
         self.declare_parameter("report_rejections", defaults.report_rejections)
+        # false = the PART 04 before 4J: no slot in STATE, "MOVE F2" is a syntax error, no crossroad leg.
+        self.declare_parameter("supports_slots", True)
+        self.declare_parameter("abort_after_s", defaults.abort_after_s)
         params = [self.declare_parameter("localizing_s", defaults.localizing_s),
                   self.declare_parameter("speed_mps", defaults.speed_mps),
                   self.declare_parameter("battery_pct", 80.0 if self.robot == "robot2" else 60.0),
@@ -80,6 +87,8 @@ class MockHospitalNav(Node):
             raise ValueError(check.reason)
         for name in ("reject_next", "fail_next", "drop_link"):
             self.declare_parameter(name, False)
+        # 4K bench check: true = every PAUSE is lost (the robot keeps MOVING), to see the unconfirmed-stop card.
+        self.declare_parameter("ignore_pause", False)
         self.add_on_set_parameters_callback(self.validate)
         self.yaw = 0.0
         self.predock, self.dock_point = unit.dock.path_end() if unit.dock else (None, None)
@@ -89,8 +98,13 @@ class MockHospitalNav(Node):
             self.pose = self.dock_point
         self.docked = True
         self.phase_until = 0.0
+        self.last_yolo = float("-inf")
         self.state, self.mid, self.dest, self.level, self.reason = "IDLE", None, None, 1, ""
         self.path, self.total, self.stalled_until, self.fail = [], 0.0, 0.0, False
+        self.slot, self.via = None, None  # via: the crossroad point still ahead on this path
+        self.block_armed, self.blocked_since = False, None  # /mock/control obstacle (report mode)
+        sample = get_package_share_path("part3_fleet_manager") / "mock" / "obstacle_sample.jpg"
+        self.sample = sample.read_bytes() if sample.is_file() else b""
         self.last_tick = self.now()
         link = self.config.robot_link
         self.status = self.create_publisher(String, link.status_topic.format(ns=self.robot), 10)
@@ -108,6 +122,7 @@ class MockHospitalNav(Node):
                 goal_callback=lambda _: GoalResponse.REJECT)
         self.pose_pub = self.create_publisher(PoseWithCovarianceStamped, link.amcl_pose_topic.format(ns=self.robot),
                                               AMCL_QOS)
+        self.image_pub = self.create_publisher(CompressedImage, self.config.obstacle.image_topic.format(ns=self.robot), 10)
         self.create_subscription(String, link.command_topic.format(ns=self.robot), self.command, 10)
         self.create_subscription(String, "/mock/control", self.control, 10)
         self.create_timer(1.0 / self.config.publish.tick_hz, self.tick)
@@ -120,7 +135,21 @@ class MockHospitalNav(Node):
             if not isinstance(data, dict) or data.get("robot") != self.logical_id:
                 return
             action = data.get("action")
+            if action == "yolo":
+                if self.state == "MOVING" and self.sample and self.now() - self.last_yolo >= 10:
+                    self.last_yolo = self.now()
+                    self.image_pub.publish(CompressedImage(format="jpeg", data=self.sample))
+                    self.emit("OBSTACLE", source="yolo", **{"class": "medical_box"}, conf=0.93, depth_m=0.85,
+                              bearing_deg=0.0, map_x=self.pose[0] + 0.85 * cos(self.yaw),
+                              map_y=self.pose[1] + 0.85 * sin(self.yaw), destination=self.dest,
+                              image_stamp=self.now(), robot_pose={**self.position(), "yaw_deg": degrees(self.yaw)})
+                return
             if action == "obstacle":
+                # report mode: stop in front of the obstacle; Nav2 gives up after abort_after_s.
+                if self.config.obstacle.mode == "report":
+                    self.block_armed = True
+                    self.get_logger().info("시험 장애물: 다음 복도 주행에서 멈춤" if self.state != "MOVING"
+                                           else "시험 장애물: 지금 멈춤")
                 return
             if action in ("fail_next", "reject_next"):
                 self.set_parameters([Parameter(action, value=True)])
@@ -169,6 +198,9 @@ class MockHospitalNav(Node):
         self.status.publish(String(data=dumps({"type": kind, "robot_id": self.robot,
                                                "mission_id": self.mid, **fields})))
 
+    def slots(self):
+        return self.value("supports_slots")
+
     def emit(self, event, **fields):
         self.publish("STATUS", event=event, **fields)
 
@@ -206,11 +238,12 @@ class MockHospitalNav(Node):
             progress = self.progress()
             self.emit("PROGRESS", destination=self.dest, **progress)
         if not self.value("drop_link") and self.now() >= self.drop_until:
+            extra = {"slot": self.slot} if self.slots() else {}
             self.publish("STATE", state=self.state, destination=self.dest, priority=self.level,
                          reason=self.reason, pose=self.position(), docked=self.docked,
                          ready=not self.docked and self.state != "LOCALIZING",
                          battery={"percent": self.value("battery_pct"), "voltage": float(battery.voltage),
-                                  "status": "CHARGING" if self.docked else "DISCHARGING"}, **progress)
+                                  "status": "CHARGING" if self.docked else "DISCHARGING"}, **extra, **progress)
 
     def reject(self, text, tag, reason):
         self.get_logger().warning(f"{text!r}: {reason}")
@@ -220,7 +253,7 @@ class MockHospitalNav(Node):
     def command(self, msg):
         text = msg.data.strip()
         try:
-            action, dest, level, tag = parse_command(text, self.value("supports_request_id"))
+            action, dest, level, tag, slot = parse_command(text, self.value("supports_request_id"), self.slots())
         except ValueError as exc:
             self.reject(text, None, str(exc))
             return
@@ -236,17 +269,26 @@ class MockHospitalNav(Node):
                 return
             self.dest = dest if action == "MOVE" else action
             self.level, self.mid, self.reason = level or 1, tag or uuid4().hex[:12], ""
+            self.slot = slot if action == "MOVE" and self.slots() else None
+            self.via, self.blocked_since = None, None
             if action == "DOCK":
                 anchor = min(self.config.zones, key=lambda z: dist(self.config.zones[z], self.predock))
                 self.path = [*waypoints(self.config, self.pose, anchor)[:-1], self.predock]
+            elif action == "MOVE" and self.slots():
+                self.path = waypoints(self.config, self.pose, dest, slot or 1)
+                if self.config.corridor.crossroad in self.path[:-1]:
+                    self.via = self.config.corridor.crossroad  # into or out of B·E: crossroad first (PART 04)
             elif action == "MOVE":
-                self.path = waypoints(self.config, self.pose, dest)
+                # The PART 04 before 4J drives through the door mouth to the single zone point.
+                rooms = replace(self.config, corridor=replace(self.config.corridor, room_mode="ROOM"))
+                self.path = waypoints(rooms, self.pose, dest)
             else:
                 self.path = []
             self.total = sum(dist(a, b) for a, b in pairwise([self.pose, *self.path]))
             self.fail, self.stalled_until = self.consume("fail_next"), 0.0
             if action != "UNDOCK":
-                self.emit("MISSION_ACCEPTED", destination=self.dest, priority=self.level)
+                extra = {"slot": self.slot} if self.slots() else {}
+                self.emit("MISSION_ACCEPTED", destination=self.dest, priority=self.level, **extra)
             if self.docked:
                 self.state, self.phase_until = "UNDOCKING", self.now() + 1.0
                 self.emit("UNDOCKING")
@@ -254,6 +296,9 @@ class MockHospitalNav(Node):
         elif action == "RESUME" and self.state == "PAUSED":
             self.emit("RESUMED")
         elif action == "PAUSE" and self.state == "MOVING":
+            if self.value("ignore_pause"):
+                self.get_logger().info("시험: PAUSE 무시 (ignore_pause)")
+                return
             self.reason, self.state = "관제 요청", "STOPPING_PAUSE"
             return
         elif action == "CANCEL" and self.state in DONE:
@@ -269,7 +314,30 @@ class MockHospitalNav(Node):
 
     def navigate(self):
         self.last_tick, self.state = self.now(), "MOVING"
-        self.emit("NAVIGATING", destination=self.dest)
+        if self.blocked_since is not None:
+            self.blocked_since = self.now()  # RESUME in front of the obstacle: Nav2 tries again
+        extra = {"via": "교차로" if self.via else None} if self.slots() else {}
+        self.emit("NAVIGATING", destination=self.dest, **extra)
+
+    def give_up(self):
+        """Nav2 ABORTED after recoveries: MISSION_FAILED, then the photo and OBSTACLE (PART 04 order)."""
+        self.state, self.reason, self.blocked_since = "FAILED", "Nav2: ABORTED", None
+        self.emit("MISSION_FAILED", reason=self.reason, **self.progress())
+        topic = self.config.obstacle.image_topic.format(ns=self.robot)
+        if self.sample:
+            image = CompressedImage(format="jpeg", data=self.sample)
+            image.header.stamp = self.get_clock().now().to_msg()
+            image.header.frame_id = "oakd_rgb_camera_optical_frame"
+            self.image_pub.publish(image)
+        ahead = self.path[0] if self.path else self.pose
+        bearing = atan2(ahead[1] - self.pose[1], ahead[0] - self.pose[0])
+        lidar = 0.42
+        self.emit("OBSTACLE", destination=self.dest,
+                  robot_pose={**self.position(), "yaw_deg": round(degrees(bearing), 1)},
+                  captured=["depth", "rgb", "scan"] if self.sample else ["depth", "scan"],
+                  **({"image_topic": topic} if self.sample else {}), depth_m=0.45, lidar_m=lidar, bearing_deg=0.0,
+                  map_x=round(self.pose[0] + lidar * cos(bearing), 3), map_y=round(self.pose[1] + lidar * sin(bearing), 3),
+                  reason=self.reason)
 
     def tick(self):
         now = self.now()
@@ -299,6 +367,14 @@ class MockHospitalNav(Node):
             return
         if self.state != "MOVING" or now < self.stalled_until:
             return
+        if self.blocked_since is not None:
+            if now - self.blocked_since >= self.value("abort_after_s"):
+                self.give_up()
+            return
+        if self.block_armed and self.config.corridor.region_of(self.pose) == "CORRIDOR":
+            self.block_armed, self.blocked_since = False, now
+            self.get_logger().info("시험 장애물 앞에서 정지 (Nav2 회복 시도 중)")
+            return
         if self.fail:
             self.state, self.reason, self.fail = "FAILED", "Nav2: ABORTED", False
             self.emit("MISSION_FAILED", reason=self.reason, **self.progress())
@@ -321,6 +397,10 @@ class MockHospitalNav(Node):
             budget -= step
             if step == length:
                 self.path.pop(0)
+                if self.via is not None and goal == self.via:
+                    self.via = None
+                    self.emit("VIA_PASSED", destination=self.dest)
+                    self.emit("NAVIGATING", destination=self.dest, via=None)
         if self.pose != initial:
             self.yaw = atan2(self.pose[1] - initial[1], self.pose[0] - initial[0])
             self.publish_pose()
@@ -330,7 +410,8 @@ class MockHospitalNav(Node):
                 self.emit("DOCKING")
                 return
             self.state = "COMPLETE"
-            self.emit("ARRIVED", destination=self.dest, pose=self.position(), percent=100.0, goal_error_m=0.0)
+            extra = {"slot": self.slot} if self.slots() else {}
+            self.emit("ARRIVED", destination=self.dest, pose=self.position(), percent=100.0, goal_error_m=0.0, **extra)
 
 
 def main(args=None):

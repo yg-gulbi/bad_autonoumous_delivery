@@ -63,7 +63,7 @@ function selectMapPoint(x, y) {
     } else if (hit?.z) {
         const buttons = Object.entries(S?.robots || {}).map(([id, r]) =>
             btn(r.label, "map-go", id + ":" + hit.z, "", r.state !== "IDLE"));
-        openModal("zone", dialogHead(zn(hit.z)) + "<p>이 구역으로 보내기</p>" + buttons.join(" "));
+        openModal("zone", dialogHead(zs(hit.z, hit.slot)) + "<p>이 구역으로 보내기</p>" + buttons.join(" "));
     }
 }
 
@@ -261,6 +261,11 @@ function paint() {
     for (const [z, pos] of zones) {
         const [x,y] = screen(pos.x,pos.y);
         dot(x,y,4,palette["wall"]);
+        if (pos.slot2) {  // slot 2 of the zone (D-30), drawn smaller than slot 1
+            const [u,v] = screen(pos.slot2.x,pos.slot2.y);
+            dot(u,v,2.5,palette["muted"]);
+            hits.push({x:u,y:v,w:5,h:5,z,slot:2});
+        }
         const room = S?.resources["ROOM_"+z];
 
         labels.push({x,y,z,
@@ -300,6 +305,8 @@ function paint() {
     let caption = plan?.labels?.corridor || "복도";
     const walls = (plan?.walls || []).map(([x,y,u,v]) => [screen(x,y),screen(u,v),3]);
     const placed = markers.map(({x,y}) => ({l:x-8,r:x+8,t:y-8,b:y+8}));
+    for (const point of hits.filter(hit => hit.z))
+        placed.push({l:point.x-6, r:point.x+6, t:point.y-6, b:point.y+6});
     const tagFont = palette["map-label-font"];
     const directions = (x,y,dy,side) => [[x,y+dy],[x,y-dy],[x+side,y],[x-side,y]];
     function place(candidates, half, height, captionOnly=false) {
@@ -336,7 +343,8 @@ function paint() {
         ctx.font = tagFont;
         const half = ctx.measureText(zn(z)).width/2 + 8;
         // A robot can cover the zone point. Leave room for its 14 px marker and outline.
-        const slot = place(directions(x,y,"DEF".includes(z) ? -26 : 26,half+20),half,12);
+        const offset = robots.some(r => Math.hypot(x-r.x, y-r.y) <= 15) ? 32 : 26;
+        const slot = place(directions(x,y,"DEF".includes(z) ? -offset : offset,half+20),half,12);
         tag(slot.x,slot.y,zn(z),slot.fallback ? palette["label-bg"] : bg,palette["ink"],border);
         hits.push({x:slot.x,y:slot.y,w:half,h:12,z});
     }

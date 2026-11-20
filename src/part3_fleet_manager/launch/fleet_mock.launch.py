@@ -22,6 +22,9 @@ def launch_nodes(context):
         r1 = LaunchConfiguration(robot + "_r1", default="")
         speed = LaunchConfiguration("mock_speed")
         battery = LaunchConfiguration(robot + "_battery", default="")
+        slots = LaunchConfiguration(robot + "_slots", default="")
+        if slots.perform(context):  # false = PART 04 before 4J (no slot, no crossroad leg)
+            params["supports_slots"] = ParameterValue(slots, value_type=bool)
         if battery.perform(context):
             params["battery_pct"] = ParameterValue(battery, value_type=float)
         if r1.perform(context):
@@ -48,5 +51,7 @@ def generate_launch_description():
         DeclareLaunchArgument("assignment_mode", default_value="", description="IDLE_BEST_BATTERY or ROLE"),
         DeclareLaunchArgument("robot_a_battery", default_value="", description="Robot A initial battery (%)"),
         DeclareLaunchArgument("robot_b_battery", default_value="", description="Robot B initial battery (%)"),
+        DeclareLaunchArgument("robot_a_slots", default_value="", description="false: robot_a runs PART 04 before 4J"),
+        DeclareLaunchArgument("robot_b_slots", default_value="", description="false: robot_b runs PART 04 before 4J"),
         OpaqueFunction(function=launch_nodes),
     ])

@@ -7,11 +7,13 @@ OPTIONS = {
     "NAV_FAILED": {"retry": "다시 시도", "return": "되돌아가기", "cancel": "취소"},
     "MOVE_REJECTED": {"retry": "다시 보내기", "cancel": "취소"},
     "STOP_MISMATCH": {"recheck": "다시 확인", "skip": "건너뛰기", "cancel": "취소"},
+    "STOP_UNCONFIRMED": {"resend": "다시 보내기", "confirmed": "현장에서 멈춘 것 확인"},
 }
 
 
 TITLES = {"BED_MONITOR_LOST": "침상 감시 끊김", "BLOCKED": "경로 막힘", "NAV_FAILED": "주행 실패",
-          "MOVE_REJECTED": "이동 명령 거절", "STOP_MISMATCH": "확인 불일치", "DEADLOCK": "교착 해소"}
+          "MOVE_REJECTED": "이동 명령 거절", "STOP_MISMATCH": "확인 불일치", "DEADLOCK": "교착 해소",
+          "STOP_UNCONFIRMED": "정지 미확인"}
 CONFIRM_REASONS = {"OK": "확인 완료", "MISMATCH": "내용 불일치 — 운영자 결정 대기"}
 DONE_REASON = "모든 정류장 확인 완료"
 
@@ -31,7 +33,8 @@ class Decisions:
         self.cards = {}
         self.record = record
 
-    def open(self, kind, robot, mission_id, reason, now, *, targets=None, obstacle_kind=None, context=None, options=None):
+    def open(self, kind, robot, mission_id, reason, now, *, targets=None, obstacle_kind=None, context=None, options=None,
+             extra=None):
         robots = list(targets) if targets is not None else [robot]
         for card in self.cards.values():
             if card["kind"] == kind and card["robots"] == robots and card.get("context") == context:
@@ -46,6 +49,8 @@ class Decisions:
                 "recommended": None, "timeout_s": None, "default": None, "created_at": now}
         if context:
             card["context"] = context
+        if extra:
+            card.update(extra)
         if mission_id is not None:
             card["mission_id"] = mission_id
         self.cards[card_id] = card

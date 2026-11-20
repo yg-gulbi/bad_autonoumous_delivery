@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 WORKSPACE=$(cd -- "$SCRIPT_DIR/../.." && pwd)
-PYTHON_BIN=${PART_INTEGRATION_PYTHON:-/home/hyunwoong/venvs/rokey_venv/bin/python3}
+PYTHON_BIN=${PART_INTEGRATION_PYTHON:-/home/mu-02/venvs/rokey_venv/bin/python3}
 RESULT_VERSION=80805b4_v1_3
 
 if [[ ! -x "$PYTHON_BIN" ]]; then

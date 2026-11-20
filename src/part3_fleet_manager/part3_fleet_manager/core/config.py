@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
-from math import cos, isfinite, radians, sin
+from math import cos, dist, isfinite, radians, sin
 from os import PathLike
 from os.path import expanduser
 
@@ -13,6 +13,12 @@ from .schemas import MISSION_TYPES
 
 
 CORRIDOR_MODES = ("DIRECTIONAL", "SHARED_YIELD", "EXCLUSIVE")
+ROOM_MODES = ("DOOR", "ROOM")
+OBSTACLE_MODES = ("report", "inspect")
+
+
+def zone_display_name(zone, name):
+    return f"{name}({zone})" if name else f"{zone} 구역"
 
 
 class ConfigError(ValueError):
@@ -54,6 +60,8 @@ class RobotLinkCfg:
     accept_timeout_s: float
     link_timeout_s: float
     start_timeout_s: float = 120.0
+    control_retry_s: float = 1.5   # 4K: resend PAUSE if STATE is still MOVING after this long
+    control_retries: int = 3       # 4K: more resends than this opens the STOP_UNCONFIRMED card
 
 
 @dataclass(frozen=True)
@@ -68,6 +76,14 @@ class CorridorCfg:
     yield_timeout_s: float = 10.0
     follow_gap_m: float = 1.0
     follow_resume_m: float = 1.4
+    crossroad: geometry.Point | None = None
+    crossroad_clear_m: float = 0.6
+    room_mode: str = "ROOM"
+
+    @property
+    def doors(self) -> bool:
+        """B·E rooms hold two robots; only their doors and the shared crossroad are single file."""
+        return self.room_mode == "DOOR" and self.crossroad is not None
 
     def region_of(self, point: geometry.Point) -> str:
         return geometry.region_of(point, self.polygon, include_boundary=self.include_boundary)
@@ -80,6 +96,7 @@ class ResourcesCfg:
     decision_window_s: float
     aging_s: float
     zone_occupied_m: float = 0.6
+    zone_arrival_clear_m: float = 2.0
 
 
 @dataclass(frozen=True)
@@ -107,6 +124,13 @@ class ObstacleCfg:
     object_blocks_now: bool = True
     min_confidence: float = 0.4
     label_ko: Mapping[str, str] = field(default_factory=dict)
+    mode: str = "inspect"
+    image_topic: str = "/{ns}/hospital_nav/obstacle_image"
+    marked_image_topic: str = "/{ns}/obstacle_classifier/image/compressed"
+    report_wait_s: float = 4.0
+    retry_if_clear: bool = False   # 4K: NONE ("no box") does not mean the path is clear (D-31)
+    retry_delay_s: float = 3.0
+    none_text: str = "의료용 상자는 보이지 않음"
 
 
 @dataclass(frozen=True)
@@ -116,6 +140,7 @@ class BedMonitorCfg:
     recover_s: float = 2.0
     min_rate_hz: float = 10.0
     require_at_start: bool = True
+    exit_clear_hold_s: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -126,6 +151,7 @@ class SafetyCfg:
     bump_neighbor_m: float = 1.0
     proximity_stop_m: float = 0.6
     proximity_resume_m: float = 0.9
+    slot_stop_m: float = 0.45
 
 
 @dataclass(frozen=True)
@@ -159,6 +185,7 @@ class MockCfg:
     supports_request_id: bool = False
     localizing_s: float = 3.0
     report_rejections: bool = False
+    abort_after_s: float = 5.0
 
 
 @dataclass(frozen=True)
@@ -179,6 +206,35 @@ class FleetConfig:
     obstacle: ObstacleCfg = field(default_factory=ObstacleCfg)
     assignment: AssignmentCfg = AssignmentCfg()
     zone_names: Mapping[str, str] = field(default_factory=dict)
+    slots: Mapping[str, tuple[geometry.Point, ...]] = field(default_factory=dict)
+
+    exit_blocked_zones: frozenset[str] = frozenset()
+
+    def slot_point(self, zone: str, slot: int | None = 1) -> geometry.Point:
+        """Slot 1 is the zone point; slot 2 exists only where fleet.yaml gives slot2."""
+        points = self.slots.get(zone) or (self.zones[zone],)
+        return points[slot - 1] if slot and slot <= len(points) else points[0]
+
+    def exit_clearance(self, zone):
+        """Distance from slot 2 to the finite path between slot 1 and its nearest entrance."""
+        start = self.slot_point(zone)
+        entrance = min(self.corridor.mouths.values(), key=lambda point: dist(start, point))
+        return geometry.segment_distance(self.slot_point(zone, 2), start, entrance)
+
+    def exit_warnings(self):
+        threshold = self.safety.slot_stop_m + 0.10
+        warnings = []
+        for zone in self.zones:
+            if self.slot_count(zone) < 2 or zone in self.exit_blocked_zones:
+                continue
+            gap = self.exit_clearance(zone)
+            if gap < threshold:
+                warnings.append(f"{self.zone_names.get(zone, zone)} 출구 경로와 2번 자리 간격 {gap:.2f} m "
+                                f"(기준 {threshold:.2f} m 미만). slot2_blocks_exit 설정을 확인하세요.")
+        return warnings
+
+    def slot_count(self, zone: str) -> int:
+        return len(self.slots.get(zone) or (self.zones[zone],))
 
 
 def _mapping(value, path: str, keys=()) -> Mapping:
@@ -263,7 +319,20 @@ def _load_corridor(data: Mapping) -> CorridorCfg:
     # A fleet file written before shared corridors inherits the section 8 policy.
     keys = ("mode", "yield_enabled", "yield_trigger_m", "yield_release_m", "yield_timeout_s")
     policy = {key: data.get(key, getattr(CorridorCfg, key)) for key in keys}
+    crossroad = None
+    if data.get("crossroad") is not None:
+        crossroad = _point(data["crossroad"], "corridor.crossroad")
+        if geometry.region_of(crossroad, vertices, include_boundary=include_boundary) != geometry.CORRIDOR:
+            raise ConfigError("corridor.crossroad: 복도 안에 있어야 합니다")
+    # A file written before 4J keeps one robot per side room.
+    room_mode = _text(data.get("room_mode", "DOOR" if crossroad else "ROOM"), "corridor.room_mode", ROOM_MODES)
+    if room_mode == "DOOR" and crossroad is None:
+        raise ConfigError("corridor.room_mode: DOOR에는 corridor.crossroad가 필요합니다")
     return CorridorCfg(
+        crossroad=crossroad,
+        crossroad_clear_m=_number(data.get("crossroad_clear_m", CorridorCfg.crossroad_clear_m),
+                                  "corridor.crossroad_clear_m", positive=True),
+        room_mode=room_mode,
         **_distance_limits(data, "corridor", "follow_gap_m", "follow_resume_m", CorridorCfg),
         polygon=tuple(vertices),
         mouths=points,
@@ -289,8 +358,14 @@ def _load_robot_link(data: Mapping) -> RobotLinkCfg:
     for key in ("command_topic", "status_topic", "amcl_pose_topic", "battery_topic",
                 "hazard_topic", "dock_status_topic"):
         topics[key] = _topic(data, key, "robot_link")
+    retries = data.get("control_retries", RobotLinkCfg.control_retries)
+    if type(retries) is not int or retries < 0:
+        raise ConfigError("robot_link.control_retries: 0 이상의 정수가 필요합니다")
     return RobotLinkCfg(
         mode=_text(data.get("mode"), "robot_link.mode", ("HOSPITAL_NAV",)),
+        control_retry_s=_number(data.get("control_retry_s", RobotLinkCfg.control_retry_s),
+                                "robot_link.control_retry_s", positive=True),
+        control_retries=retries,
         request_id=_text(data.get("request_id"), "robot_link.request_id", ("auto", "always", "never")),
         start_timeout_s=_number(data.get("start_timeout_s", 120.0), "robot_link.start_timeout_s", positive=True),
         **topics,
@@ -307,13 +382,27 @@ def config_from_dict(data: Mapping) -> FleetConfig:
     corridor = _load_corridor(cfg["corridor"])
 
     zone_data = _mapping(cfg["zones"], "zones", geometry.ZONE_REGIONS)
-    zones = {}
+    zones, slots = {}, {}
+    exit_blocked_zones = set()
     for zone, expected_region in geometry.ZONE_REGIONS.items():
         point = _point(zone_data[zone], f"zones.{zone}")
-        region = corridor.region_of(point)
-        if region != expected_region:
-            raise ConfigError(f"zones.{zone}: {expected_region}에 속해야 합니다 (현재 {region})")
+        points = [point]
+        if zone_data[zone].get("slot2") is not None:
+            points.append(_point(zone_data[zone]["slot2"], f"zones.{zone}.slot2"))
+        for index, xy in enumerate(points, 1):
+            region = corridor.region_of(xy)
+            if region != expected_region:
+                where = f"zones.{zone}" + (".slot2" if index == 2 else "")
+                raise ConfigError(f"{where}: {expected_region}에 속해야 합니다 (현재 {region})")
         zones[zone] = point
+        slots[zone] = tuple(points)
+        blocks_exit = zone_data[zone].get("slot2_blocks_exit", len(points) == 2 and zone in {"A", "C", "F"})
+        if type(blocks_exit) is not bool:
+            raise ConfigError(f"zones.{zone}.slot2_blocks_exit: bool 값이 필요합니다")
+        if blocks_exit:
+            if len(points) != 2:
+                raise ConfigError(f"zones.{zone}.slot2_blocks_exit: 2번 자리 좌표가 필요합니다")
+            exit_blocked_zones.add(zone)
 
     robots = {}
     namespaces = set()
@@ -365,6 +454,7 @@ def config_from_dict(data: Mapping) -> FleetConfig:
     policy = {**asdict(BedMonitorCfg()), **_mapping(cfg["safety"].get("bed_monitor", {}), "safety.bed_monitor")}
     monitor = BedMonitorCfg(**_numbers(policy, "safety.bed_monitor", ("warn_s", "lost_s", "recover_s", "min_rate_hz"),
                                        positive=True),
+                            exit_clear_hold_s=_number(policy["exit_clear_hold_s"], "safety.bed_monitor.exit_clear_hold_s", minimum=0),
                             require_at_start=_value(policy, "require_at_start", "safety.bed_monitor", bool))
     if monitor.warn_s >= monitor.lost_s:
         raise ConfigError("safety.bed_monitor.lost_s: warn_s보다 커야 합니다")
@@ -387,9 +477,14 @@ def config_from_dict(data: Mapping) -> FleetConfig:
     threshold = _number(values["min_confidence"], "obstacle.min_confidence", minimum=0)
     if threshold > 1:
         raise ConfigError("obstacle.min_confidence: 0~1 범위가 필요합니다")
-    obstacle = ObstacleCfg(**{k: _topic(values, k, "obstacle") for k in ("inspect_topic", "result_topic")},
-                           **_numbers(values, "obstacle", ("inspect_at_s", "timeout_s"), positive=True),
+    obstacle = ObstacleCfg(**{k: _topic(values, k, "obstacle")
+                              for k in ("inspect_topic", "result_topic", "image_topic", "marked_image_topic")},
+                           **_numbers(values, "obstacle", ("inspect_at_s", "timeout_s", "report_wait_s", "retry_delay_s"),
+                                      positive=True),
                            enabled=_value(values, "enabled", "obstacle", bool),
+                           mode=_text(values["mode"], "obstacle.mode", OBSTACLE_MODES),
+                           retry_if_clear=_value(values, "retry_if_clear", "obstacle", bool),
+                           none_text=_text(values["none_text"], "obstacle.none_text"),
                            object_blocks_now=_value(values, "object_blocks_now", "obstacle", bool),
                            min_confidence=threshold, label_ko={_text(k, "obstacle.label_ko"): _text(v, "obstacle.label_ko")
                                for k, v in _mapping(values["label_ko"], "obstacle.label_ko").items()})
@@ -398,7 +493,7 @@ def config_from_dict(data: Mapping) -> FleetConfig:
         raise ConfigError("publish.finished_mission_limit: 0 이상의 정수가 필요합니다")
     return FleetConfig(obstacle=obstacle,
         assignment=AssignmentCfg(_text(assignment["mode"], "assignment.mode", ("IDLE_BEST_BATTERY", "ROLE")), minimum),
-        mock=MockCfg(**_numbers(mock, "mock", ("speed_mps", "stall_radius_m"), positive=True),
+        mock=MockCfg(**_numbers(mock, "mock", ("speed_mps", "stall_radius_m", "abort_after_s"), positive=True),
                      localizing_s=_number(mock["localizing_s"], "mock.localizing_s", minimum=0),
                      report_rejections=_value(mock, "report_rejections", "mock", bool),
                      supports_request_id=_value(mock, "supports_request_id", "mock", bool)),
@@ -406,9 +501,12 @@ def config_from_dict(data: Mapping) -> FleetConfig:
         type_to_robot=type_to_robot,
         robot_link=_load_robot_link(cfg["robot_link"]),
         zones=zones,
-        zone_names={z: zone_data[z].get("name") or f"{z} 구역" for z in zones},
+        zone_names={z: zone_display_name(z, zone_data[z].get("name")) for z in zones},
+        slots=slots, exit_blocked_zones=frozenset(exit_blocked_zones),
         corridor=corridor,
         resources=ResourcesCfg(
+            zone_arrival_clear_m=_number(cfg["resources"].get("zone_arrival_clear_m", ResourcesCfg.zone_arrival_clear_m),
+                                         "resources.zone_arrival_clear_m", positive=True),
             zone_occupied_m=_number(cfg["resources"].get("zone_occupied_m", ResourcesCfg.zone_occupied_m),
                                    "resources.zone_occupied_m", positive=True),
             **_numbers(cfg["resources"], "resources", ("clear_margin_m", "clear_hold_s", "decision_window_s", "aging_s")),
@@ -424,6 +522,8 @@ def config_from_dict(data: Mapping) -> FleetConfig:
             use_hazard_topic=_value({"use_hazard_topic": False, **cfg["safety"]}, "use_hazard_topic", "safety", bool),
             bump_neighbor_m=_number(cfg["safety"].get("bump_neighbor_m", SafetyCfg.bump_neighbor_m),
                                     "safety.bump_neighbor_m", minimum=0),
+            slot_stop_m=_number(cfg["safety"].get("slot_stop_m", SafetyCfg.slot_stop_m),
+                                "safety.slot_stop_m", positive=True),
             **_distance_limits(cfg["safety"], "safety", "proximity_stop_m", "proximity_resume_m", SafetyCfg),
         ),
         mission=MissionCfg(

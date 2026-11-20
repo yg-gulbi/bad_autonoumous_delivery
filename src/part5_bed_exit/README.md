@@ -328,26 +328,127 @@ unset ROS_DISCOVERY_SERVER ROS_SUPER_CLIENT
 ## ROS 파라미터
 
 ROS 파라미터는 노드를 다시 빌드하지 않고 실행 구성을 전달하는 값이다. PART 05는 아래
-8개 값을 노드 시작 시 한 번 읽는다. 현재 구현은 실행 중 `ros2 param set`으로 값을
+파라미터를 노드 시작 시 한 번 읽는다. 기존 v1.3 실행 명령(`method_config`, `camera_index` 등
+최소 인자만 전달)은 그대로 동작하며, 필요할 때 `-p` 또는 YAML `--params-file`로 모든
+투표·회전·TTS·모델 임계치를 조정할 수 있다. 현재 구현은 실행 중 `ros2 param set`으로 값을
 바꿔도 카메라나 판단 객체를 다시 생성하지 않으므로, 변경 후 노드를 재시작해야 한다.
+
+### 기본 실행·입출력·회전 파라미터
 
 | 파라미터 | 형식 | 기본값 | 필수 여부 | 용도 |
 | --- | --- | --- | --- | --- |
 | `method` | 문자열 | `""` | 조건부 | 내장 모델 이름 또는 `package.module:ClassOrObject` |
 | `method_config` | 문자열 | `""` | 내장 모델 사용 시 필수 | ROI·모델 경로·장치가 든 JSON 경로 |
-| `camera_index` | 정수 | `0` | 카메라 번호 변경 시 | OpenCV가 열 USB 카메라 번호 |
-| `video_path` | 문자열 | `""` | MP4 입력 시 필수 | 웹캠 대신 한 번 재생할 MP4 경로 |
-| `loop_video` | 불리언 | `false` | 선택 | MP4 종료 시 프레임 0부터 반복 |
 | `output_topic` | 문자열 | `/patient/bed_exit` | 선택 | 최종 Bool 결과 발행 토픽 |
+| `publisher_qos_depth` | 정수 | `10` | 선택 | ROS 퍼블리셔 QoS 큐 깊이 (`>= 1`) |
+| `camera_index` | 정수 | `0` | 카메라 번호 변경 시 | OpenCV가 열 USB 카메라 번호 |
+| `reconnect_interval` | 실수 | `1.0` | 선택 | 웹캠 미연결·끊김 시 재연결 시도 최소 간격(초) |
+| `video_path` | 문자열 | `""` | MP4 입력 시 필수 | 웹캠 대신 재생할 MP4 경로 |
+| `loop_video` | 불리언 | `false` | 선택 | MP4 종료 시 프레임 0부터 반복 |
 | `capture_fps` | 실수 | `30.0` | 선택 | 초당 프레임 처리 시도 횟수 |
+| `frame_rotate_ccw` | 정수 | `0` | 선택 | 입력 프레임 반시계 회전 각도 (`0`, `90`, `180`, `270`) |
+| `roi_already_rotated` | 불리언 | `false` | 선택 | `true`면 `frame_rotate_ccw` 적용 시 JSON ROI는 추가 회전하지 않음 |
 | `show` | 불리언 | GUI 환경 존재 여부 | 선택 | OpenCV 판정 프리뷰 표시 |
+| `preview_window_title` | 문자열 | `Part 5 Bed Exit (/patient/bed_exit)` | 선택 | OpenCV 프리뷰 창 제목 |
+
+### 다수결 투표·비동기 TTS 파라미터
+
+| 파라미터 | 형식 | 기본값 | 용도 |
+| --- | --- | --- | --- |
+| `voting_window` | 정수 | `5` | 다수결 슬라이딩 윈도우 길이 (`>= 1`) |
+| `voting_threshold` | 정수 | `3` | 이탈(`True`) 확정 최소 `True` 횟수 (`1..voting_window`) |
+| `prefill_safe_queue` | 불리언 | `false` | `true`면 시작·초기화 직후 윈도우를 `False`로 미리 채움 |
+| `tts_enabled` | 불리언 | `true` | 이탈(`True`) 시 비동기 반복 TTS 안내 활성화 |
+| `tts_message` | 문자열 | `주행 중인 침상에서 이탈하지 말아주세요.` | 반복 안내 문구 |
+| `tts_language` | 문자열 | `ko` | OS TTS 언어 코드 (`spd-say -l` / `espeak-ng -v`) |
+| `tts_repeat_interval` | 실수 | `1.0` | 1회 발화 종료 후 다음 반복까지 대기 시간(초, `>= 0.0`) |
+| `tts_command` | 문자열 | `""` | 사용자 지정 TTS 명령 (`{message}`/`{language}` 치환 지원) |
+| `tts_audio_file` | 문자열 | `""` | 사전 생성 오디오 파일 경로 (`""`이면 기본 문구용 내장 여성 한국어 음성 `config/tts_bed_exit_ko.mp3`를 `ffplay`로 우선 재생, 문구 변경 시 `spd-say`→`espeak-ng`→`espeak` 폴백) |
+
+> **비동기 반복 TTS 동작 보장**: 환자 이탈(`True`)이 확정되면 별도 데몬 스레드에서 TTS를
+> 재생해 ROS 타이머와 `/patient/bed_exit` 발행을 블로킹하지 않는다. 환자 상태가 정상(`False`)으로
+> 돌아오거나 카메라·추론·발행 예외가 발생하면 **이미 시작된 1회 발화는 끝까지 재생한 뒤**
+> 추가 반복만 멈춘다. 노드 종료(`Ctrl+C` / `destroy_node()`) 시에는 실행 중인 음성 프로세스를
+> 즉시 정리한다.
+
+### 내장 모델 하이퍼파라미터 오버라이드
+
+아래 값은 `method_config` JSON에 직접 넣거나 ROS 2 파라미터(`-p` / YAML)로 덮어쓸 수 있다.
+우선순위는 **`ROS 파라미터 > JSON 설정 > v1.3 기본값`**이며, 센티널 기본값(`""`, `-1.0`, `0`)을
+그대로 두면 JSON 또는 v1.3 기본값이 유지된다.
+
+| 파라미터 | 형식 | 센티널(미지정) | v1.3 기본값 | 용도 |
+| --- | --- | --- | --- | --- |
+| `weights` | 문자열 | `""` | `MODEL_FILES[method]` | 가중치 파일명(`model_dir` 기준) 또는 절대 경로 |
+| `device` | 문자열 | `""` | `cpu` | 추론 장치 (`cpu`, `cuda:0` 등) |
+| `yolo_confidence` | 실수 | `-1.0` | `0.5` | YOLO 사람 검출 최소 신뢰도 `[0.0, 1.0]` |
+| `yolo_imgsz` | 정수 | `0` | `640` | YOLO 입력 해상도 (`> 0`) |
+| `outside_fraction` | 실수 | `-1.0` | `0.05` | Detection·Segmentation ROI 밖 허용 비율 `[0.0, 1.0]` |
+| `mask_threshold` | 실수 | `-1.0` | `0.5` | Segmentation 마스크 이진화 임계치 `[0.0, 1.0]` |
+| `selector_init_overlap` | 실수 | `-1.0` | `0.5` | 최초 환자 선정 Bed ROI 최소 겹침 비율 `[0.0, 1.0]` |
+| `selector_min_iou` | 실수 | `-1.0` | `0.15` | 연속 프레임 환자 추적 최소 BBox IoU `[0.0, 1.0]` |
+| `selector_ambiguity_gap` | 실수 | `-1.0` | `0.15` | 1·2위 후보 간 최소 점수 차이 `[0.0, 1.0]` |
+| `pose_policy` | 문자열 | `""` | `any_body` | Pose 판정 정책 (`any_body` 또는 `torso`) |
+| `pose_point_conf` | 실수 | `-1.0` | `0.5` | Pose 관절 최소 신뢰도 `[0.0, 1.0]` |
+| `pose_tolerance_px` | 실수 | `-1.0` | `3.0` | Pose ROI 경계 허용 오차(px, `>= 0.0`) |
+| `mediapipe_num_poses` | 정수 | `0` | `4` | MediaPipe 최대 검출 인원수 (`>= 1`) |
+| `mediapipe_min_detection_conf` | 실수 | `-1.0` | `0.5` | MediaPipe 포즈 검출 최소 신뢰도 `[0.0, 1.0]` |
+| `mediapipe_min_presence_conf` | 실수 | `-1.0` | `0.5` | MediaPipe 포즈 존재 최소 신뢰도 `[0.0, 1.0]` |
+| `ensemble_methods` | 문자열 | `""` | 단일 모델 | 선택적 앙상블 내장 모델 목록 (예: `segmentation,yolo_pose,detection`) |
+| `ensemble_policy` | 문자열 | `""` | `majority` | 앙상블 결합 정책 (`majority`, `any`, `all`) |
+| `ensemble_min_votes` | 정수 | `0` | 정책 사용 | 앙상블 최소 이탈 득표수 직접 지정 (`1..모델수`) |
+| `ensemble_require_all_valid` | 불리언 | `false` | `false` | `true`면 멤버 중 하나라도 판정 불가 시 전체 판정 불가 |
+
+> **JSON 설정(`method_config`) 단일 파일 전달 & 선택적 다중 모델 앙상블**:
+> 위의 투표(`voting_window`, `voting_threshold`, `prefill_safe_queue`), TTS(`tts_*`),
+> 회전(`frame_rotate_ccw`), 모델 하이퍼파라미터, 앙상블 설정은 모두 `method_config` JSON 안에
+> 바로 적어 전달할 수 있다(우선순위: `ROS -p / YAML > method_config JSON > v1.3 기본값`).
+> 서로 다른 모델 또는 가중치를 앙상블하려면 JSON에 `"method": "ensemble"`과 `"ensemble"` 블록을
+> 추가하거나 `-p ensemble_methods:=segmentation,yolo_pose`를 지정한다.
+>
+> ```json
+> {
+>   "method": "ensemble",
+>   "model_dir": "../models",
+>   "device": "cuda:0",
+>   "voting_window": 5,
+>   "voting_threshold": 3,
+>   "tts_enabled": true,
+>   "roi": [[0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9]],
+>   "ensemble": {
+>     "policy": "majority",
+>     "models": [
+>       {"method": "segmentation", "weights": "yolo11n-seg.pt"},
+>       {"method": "segmentation", "weights": "ft2_best.pt"},
+>       {"method": "yolo_pose"}
+>     ]
+>   }
+> }
+> ```
+
+### YAML 파라미터 파일 및 런치 파일 실행
+
+모든 파라미터를 한 파일에서 관리하려면 템플릿을 복사해 `--params-file` 또는 런치 파일로 실행한다.
+
+```bash
+cp src/part5_bed_exit/config/bed_exit.params.template.yaml \
+  src/part5_bed_exit/config/bed_exit.params.local.yaml
+
+# --params-file 직접 실행
+ros2 run part5_bed_exit bed_exit --ros-args \
+  --params-file "$(pwd)/src/part5_bed_exit/config/bed_exit.params.local.yaml"
+
+# 또는 ROS 2 launch 실행
+ros2 launch part5_bed_exit bed_exit.launch.py \
+  params_file:="$(pwd)/src/part5_bed_exit/config/bed_exit.params.local.yaml"
+```
 
 입력 선택 규칙은 다음과 같다.
 
 - `video_path`가 비어 있으면 `camera_index`의 카메라를 사용한다.
 - `video_path`가 있으면 MP4를 사용하고 `camera_index`는 사용하지 않는다.
 - MP4는 기본적으로 끝에서 정지한다. `loop_video=true`면 프레임 0부터 반복한다.
-- 반복 경계에서는 5프레임 투표와 detector 추적 상태를 초기화한다.
+- 반복 경계에서는 다수결 투표와 detector 추적 상태, TTS 반복 활성 상태를 초기화한다.
 - `capture_fps`는 타이머 주기이며 실제 처리 속도는 카메라와 추론 속도에 제한된다.
 
 ## 판단 모듈 선택
@@ -547,19 +648,22 @@ ros2 topic echo /patient/bed_exit
 
 ## 실행 중 실패 정책
 
-| 실패 지점 | 노드 동작 | 발행 | 투표 이력 |
-| --- | --- | --- | --- |
-| `capture.read()` 예외 | 오류 기록 후 다음 프레임 대기 | 해당 프레임 미발행 | 초기화 |
-| 웹캠의 잘못된 반환 | 오류 기록 후 다음 프레임 대기 | 해당 프레임 미발행 | 초기화 |
-| MP4 종료 (`loop_video=false`) | 타이머 중단 | 추가 발행 없음 | 초기화 |
-| MP4 종료 (`loop_video=true`) | 프레임 0부터 재시작 | 재워밍업 후 계속 발행 | 초기화 |
-| MP4 되감기 실패 | 오류 기록 후 타이머 중단 | 추가 발행 없음 | 초기화 |
-| `judge()` 예외 | 프레임 건너뜀 | 해당 프레임 미발행 | 초기화 |
-| publisher 예외 | 다음 프레임부터 재시도 | 실패 결과 미발행 | 초기화 |
-| 프리뷰 예외 | `show`만 비활성화 | 이미 계산한 결과 유지 | 유지 |
+| 실패 지점 | 노드 동작 | 발행 | 투표 이력 | TTS 반복 |
+| --- | --- | --- | --- | --- |
+| 시작 시 웹캠 미연결 | 노드를 유지하고 `reconnect_interval`(기본 1.0초)마다 재연결 시도 | 미발행 | 초기화 | 현재 발화 종료 후 중단 |
+| `capture.read()` 예외 | 오류 기록 후 웹캠 핸들 해제(`release`) 및 쿨다운 재연결 대기 | 해당 프레임 미발행 | 초기화 | 현재 발화 종료 후 중단 |
+| 웹캠의 잘못된 반환 | 오류 기록 후 웹캠 핸들 해제(`release`) 및 쿨다운 재연결 대기 | 해당 프레임 미발행 | 초기화 | 현재 발화 종료 후 중단 |
+| MP4 종료 (`loop_video=false`) | 타이머 중단 | 추가 발행 없음 | 초기화 | 현재 발화 종료 후 중단 |
+| MP4 종료 (`loop_video=true`) | 프레임 0부터 재시작 | 재워밍업 후 계속 발행 | 초기화 | 현재 발화 종료 후 중단 |
+| MP4 되감기 실패 | 오류 기록 후 타이머 중단 | 추가 발행 없음 | 초기화 | 현재 발화 종료 후 중단 |
+| `judge()` 예외 | 프레임 건너뜀 | 해당 프레임 미발행 | 초기화 | 현재 발화 종료 후 중단 |
+| publisher 예외 | 다음 프레임부터 재시도 | 실패 결과 미발행 | 초기화 | 현재 발화 종료 후 중단 |
+| TTS 재생·명령 예외 | 오류 기록 후 TTS만 비활성화 | 이미 발행된 결과 유지 | 유지 | 비활성화 |
+| 프리뷰 예외 | `show`만 비활성화 | 이미 계산한 결과 유지 | 유지 | 유지 |
 
-설정 JSON 오류, 알 수 없는 모델, import 불가, 카메라 최초 열기 실패처럼 시작 구성이
-잘못된 경우에는 잘못된 상태로 운영하지 않도록 초기화를 실패시킨다.
+설정 JSON 오류, 알 수 없는 모델, import 불가, MP4 최초 열기 실패처럼 시작 구성이
+잘못된 경우에는 잘못된 상태로 운영하지 않도록 초기화를 실패시킨다. 단, 실제 USB 웹캠은
+시작 시 미연결이거나 실행 중 케이블이 뽑혀도 노드를 유지하고 `reconnect_interval`마다 자동 재연결한다.
 
 ## 시작 오류 확인
 
@@ -568,7 +672,7 @@ ros2 topic echo /patient/bed_exit
 | `Set method or method_config` | 판단 방법을 모두 생략함 | 내장 모델 설정 JSON 또는 외부 모듈 경로 지정 |
 | `Built-in methods require method_config` | 내장 이름만 지정함 | ROI가 포함된 `method_config` 추가 |
 | `method_config applies only to built-in method names` | 외부 모듈과 JSON을 함께 지정함 | 외부 모듈 실행에서 `method_config` 제거 |
-| `Cannot open video source` | 카메라 번호 또는 MP4 경로가 잘못됨 | 입력 장치·파일 경로 확인 |
+| `Cannot open video source` | 지정한 MP4 경로가 잘못되었거나 열 수 없음 | `video_path` 파일 경로 확인 |
 
 상세 연구·벤치마크 실행법은 [USAGE.md](USAGE.md)를 참고한다.
 
@@ -610,11 +714,18 @@ v1.3.2의 `test_v3_mp4_replay_resilience.py`는 연구용 MP4 ROS 노드에
 Part 5 검증은 결과 로그와 정량 요약을 함께 생성하는 래퍼를 사용한다.
 
 ```bash
+# v1.3 하위 호환 검증 (단위·통합·벤치마크)
 bash src/part5_bed_exit/test/80805b4_v1_3/run_validation.sh unit
 bash src/part5_bed_exit/test/80805b4_v1_3/run_validation.sh integration
 bash src/part5_bed_exit/test/80805b4_v1_3/run_validation.sh benchmark
+
+# v1.4 신규 기능 검증 (비동기 TTS·파라미터화·회전·앙상블)
+bash src/part5_bed_exit/test/1e0faac_v1_4/run_validation.sh unit
+bash src/part5_bed_exit/test/1e0faac_v1_4/run_validation.sh integration
 ```
 
-실험 결과는
-`results/80805b4_v1_3/YYYYMMDD_HHMMSS_PROFILE[_실험명]/`에 저장한다. 세부 테스트
-구성과 산출물 계약은 [v1.3 검증 문서](test/80805b4_v1_3/README.md)를 참고한다.
+실험 결과는 각각
+`results/80805b4_v1_3/YYYYMMDD_HHMMSS_PROFILE[_실험명]/`과
+`results/1e0faac_v1_4/YYYYMMDD_HHMMSS_PROFILE[_실험명]/`에 저장한다. 세부 테스트
+구성과 산출물 계약은 [v1.3 검증 문서](test/80805b4_v1_3/README.md) 및
+[v1.4 검증 문서](test/1e0faac_v1_4/README.md)를 참고한다.

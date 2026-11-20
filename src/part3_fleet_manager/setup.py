@@ -11,6 +11,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/config', ['config/fleet.yaml']),
         ('share/' + package_name + '/launch', ['launch/fleet_mock.launch.py']),
+        ('share/' + package_name + '/mock', ['resource/mock/obstacle_sample.jpg']),
     ],
     install_requires=['setuptools'],
     extras_require={'test': ['pytest']},

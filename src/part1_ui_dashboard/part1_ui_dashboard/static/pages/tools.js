@@ -1,11 +1,11 @@
 let runningScenario = 0;
-const mockObstacleKinds = {person:"사람", object:"물건", none:"없음", error:"오류", silent:"응답 없음"};
+const mockObstacleKinds = {medical_box:"의료용 상자", person:"사람", object:"물건", none:"없음", error:"오류", silent:"응답 없음"};
 const mockObstacleSelection = {};
 
 function toolsPanel() {
     if (!cfg.dev_tools)
         return;
-    openModal("tools", `<span class="eyebrow">시연 모드</span>${dialogHead("시험 도구")}<h3>시나리오 시작</h3><div class="scenario-list">${["두 로봇 동시 임무", "복도 양보", "교착", "복도 막힘", "CALL 세 건 연속"].map((v, i) => btn((i + 1) + ". " + v, "scenario", i + 1, "", !!runningScenario)).join("")}</div><h3>가짜 침상 감시</h3><div class="buttons">${[["off", "끄기"], ["normal", "정상 송신"], ["exit", "이탈 송신"]].map(([mode, text]) => btn(text, "bed-mode", mode, mode === S?.fake_bed_mode ? "selected" : "")).join("")}</div><h3>mock 로봇 제어</h3>${["robot_a", "robot_b"].map(id => `<div class="tool-unit"><b>${robotName(id)}</b><div class="buttons"><label>분류 결과<select id="obstacle-${id}">${Object.entries(mockObstacleKinds).map(([kind, name]) => `<option value="${kind}" ${kind === (mockObstacleSelection[id] || "none") ? "selected" : ""}>${name}</option>`).join("")}</select></label>${btn("분류 결과 적용", "obstacle", id)}</div><div class="buttons"><label>정지 시간(초)<input type="number" min="1" value="40" id="secs-${id}"></label>${btn("장애물 놓기", "stall", id)}${btn("다음 주행 실패", "fail", id)}${btn("연결 끊기 10초", "drop", id)}</div><div class="buttons"><label>배터리(%)<input type="number" min="0" max="100" value="${S?.robots[id]?.battery_pct ?? 80}" id="pct-${id}"></label>${btn("배터리 적용", "battery", id)}</div></div>`).join("")}`);
+    openModal("tools", `<span class="eyebrow">시연 모드</span>${dialogHead("시험 도구")}<h3>시나리오 시작</h3><div class="scenario-list">${["두 로봇 동시 임무", "복도 양보", "교착", "복도 막힘", "CALL 세 건 연속"].map((v, i) => btn((i + 1) + ". " + v, "scenario", i + 1, "", !!runningScenario)).join("")}</div><h3>가짜 침상 감시</h3><div class="buttons">${[["off", "끄기"], ["normal", "정상 송신"], ["exit", "이탈 송신"]].map(([mode, text]) => btn(text, "bed-mode", mode, mode === S?.fake_bed_mode ? "selected" : "")).join("")}</div><h3>mock 로봇 제어</h3>${["robot_a", "robot_b"].map(id => `<div class="tool-unit"><b>${robotName(id)}</b><div class="buttons"><label>분류 결과<select id="obstacle-${id}">${Object.entries(mockObstacleKinds).map(([kind, name]) => `<option value="${kind}" ${kind === (mockObstacleSelection[id] || (cfg.obstacle_mode === "report" ? "medical_box" : "none")) ? "selected" : ""}>${name}</option>`).join("")}</select></label>${btn(cfg.obstacle_mode === "report" ? "장애물 놓기 (5초 뒤 포기)" : "분류 결과 적용", "obstacle", id)}</div><div class="buttons"><label>정지 시간(초)<input type="number" min="1" value="40" id="secs-${id}"></label>${btn("장애물 놓기", "stall", id)}${btn("주행 중 YOLO 감지", "mock-yolo", id)}${btn("다음 주행 실패", "fail", id)}${btn("연결 끊기 10초", "drop", id)}</div><div class="buttons"><label>배터리(%)<input type="number" min="0" max="100" value="${S?.robots[id]?.battery_pct ?? 80}" id="pct-${id}"></label>${btn("배터리 적용", "battery", id)}</div></div>`).join("")}`);
 }
 const testInput = (kind, data, b) => send("test/" + kind, data, b);
 Object.assign(actions, { tools: toolsPanel, "bed-mode": async (mode, b) => {
@@ -18,6 +18,7 @@ Object.assign(actions, { tools: toolsPanel, "bed-mode": async (mode, b) => {
         const reply = await testInput("obstacle", {robot, kind}, b);
         if (reply && reply.ok !== false) mockObstacleSelection[robot] = kind;
     },
+    "mock-yolo": (robot, b) => testInput("yolo", { robot }, b),
     stall: (robot, b) => testInput("stall", { robot, seconds: Number($("secs-" + robot).value) }, b), fail: (robot, b) => testInput("fail_next", { robot }, b),
     drop: (robot, b) => testInput("drop_link", { robot, seconds: 10 }, b), battery: (robot, b) => testInput("battery", { robot, value: Number($("pct-" + robot).value) }, b) });
 

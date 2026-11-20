@@ -7,15 +7,16 @@ from ament_index_python.packages import get_package_share_path
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 from werkzeug.serving import make_server
 import yaml
 
 from part3_fleet_manager.core import schemas
-from part3_fleet_manager.core.config import read_config_yaml
+from part3_fleet_manager.core.config import read_config_yaml, zone_display_name
 from . import ui_api
-from .web import Feed, create_app
+from .web import Feed, Photos, create_app
 
 
 class UIServer(Node):
@@ -31,7 +32,11 @@ class UIServer(Node):
         self.map_yaml = self.declare_parameter("map_yaml", options["map_yaml"]).value or options["map_yaml"]
         self.host, self.port = options.get("host", "0.0.0.0"), options.get("port", 8090)
         self.feed = Feed(options.get("event_log_size", 500))
+        obstacle = cfg.get("obstacle") or {}
         self.geometry = {"zones": cfg["zones"], "polygon": cfg["corridor"]["polygon"],
+                         "crossroad": cfg["corridor"].get("crossroad"),
+                         "obstacle_mode": obstacle.get("mode", "inspect"),
+                         "none_text": obstacle.get("none_text", "의료용 상자는 보이지 않음"),
                          "start_zones": {robot: data["start_zone"] for robot, data in cfg["robots"].items()},
                          "bed_targets": cfg["safety"]["bed_exit_pause_targets"],
                          "event_limit": options.get("event_log_size", 500)}
@@ -41,7 +46,7 @@ class UIServer(Node):
         if not self.demo and self.mode == "auto":
             self.create_timer(1.0, self.detect_mock)
         self.testing = self.dev_tools and self.demo and self.mode != "live"
-        self.names = {z: data.get("name") or f"{z} 구역" for z, data in cfg["zones"].items()}
+        self.names = {z: zone_display_name(z, data.get("name")) for z, data in cfg["zones"].items()}
         self.robot_names = {robot: unit["label"] for robot, unit in cfg["robots"].items()}
         self.track = None
         map_path = Path(self.map_yaml).expanduser()
@@ -66,6 +71,14 @@ class UIServer(Node):
             self.create_timer(0.1, self.publish_fake_bed)
             self.mock_pub = self.create_publisher(String, "/mock/control", 10)
         self.triggers = {s: self.create_client(Trigger, s) for s in ("/robot/pause", "/robot/resume")}
+        # Obstacle photos for the card: latest JPEG and receipt time per robot, memory only (BRIEF 5.5).
+        self.photos = Photos()
+        topics = {"raw": obstacle.get("image_topic", "/{ns}/hospital_nav/obstacle_image"),
+                  "masked": obstacle.get("marked_image_topic", "/{ns}/obstacle_classifier/image/compressed")}
+        for robot, unit in cfg["robots"].items():
+            for kind, template in topics.items():
+                self.create_subscription(CompressedImage, template.format(ns=unit["ns"]),
+                                         partial(self.photo, robot, kind), 2)
         for topic, kind, parser in (
             ("/fleet/state", "state", schemas.parse_fleet_state),
             ("/fleet/decision_req", "card", schemas.parse_decision_req),
@@ -95,6 +108,16 @@ class UIServer(Node):
             self.feed.receive(kind, data)
         except ValueError as exc:
             self.get_logger().warning(str(exc), throttle_duration_sec=2.0)
+
+    def photo(self, robot, kind, msg):
+        # PART 04 YOLO sends a boxed JPEG with a default header. Abort photos
+        # and their PART 06 overlays preserve the camera header.
+        header = msg.header
+        if not header.frame_id and header.stamp.sec == 0 and header.stamp.nanosec == 0:
+            if kind == "raw":
+                self.photos.put(robot, "yolo", msg.data)
+            return
+        self.photos.put(robot, kind, msg.data)
 
     def publish_fake_bed(self):
         with self.bed_lock:
@@ -129,7 +152,8 @@ def main(args=None):
     rclpy.init(args=args)
     node = UIServer()
     app = create_app(node.feed, node.geometry, node.publish_request, node.trigger,
-                     meta=node.meta, image=node.image, dev_tools=node.testing, set_bed_mode=node.set_bed_mode, db_path=node.db_path)
+                     meta=node.meta, image=node.image, dev_tools=node.testing, set_bed_mode=node.set_bed_mode, db_path=node.db_path,
+                     photos=node.photos)
     server = make_server(node.host, node.port, app, threaded=True)
     server.timeout = 0.25
 

@@ -1,13 +1,37 @@
 """HTTP/SSE interface. The injected publisher and service client own ROS transport."""
 from collections import deque
-from threading import Condition
-from time import monotonic
+from threading import Condition, Lock
+from time import monotonic, time
 
 from flask import Flask, Response, jsonify, request
 
 from part3_fleet_manager.core import schemas
 from . import ui_api
 from .history import history_api
+
+
+PHOTO_KINDS = ("raw", "masked")
+PHOTO_GRACE_S = 5.0
+
+
+class Photos:
+    """Latest obstacle photo per robot and kind, in memory only (never written to bad.db).
+
+    raw = PART 04 /<ns>/hospital_nav/obstacle_image, masked = PART 06 /<ns>/obstacle_classifier/image/compressed.
+    """
+
+    def __init__(self, clock=time):
+        self.clock = clock
+        self._lock = Lock()
+        self._latest = {}
+
+    def put(self, robot, kind, data, at=None):
+        with self._lock:
+            self._latest[(robot, kind)] = (bytes(data), self.clock() if at is None else at)
+
+    def get(self, robot, kind):
+        with self._lock:
+            return self._latest.get((robot, kind))
 
 
 class Feed:
@@ -51,6 +75,22 @@ class Feed:
             self.recent.append((self.sequence, kind, data))
             self.changed.notify_all()
 
+    def recent_yolo(self, robot):
+        with self.changed:
+            if self.state is None:
+                return None
+            report = self.state.get("robots", {}).get(robot, {}).get("yolo")
+            if not report:
+                return None
+            now = self.state["stamp"] + (monotonic() - self.received)
+            return report if now < report["at"] + 30 else None
+
+    def obstacle_card(self, robot):
+        """The newest open obstacle card (BRIEF 5.5 report mode) for this robot, if any."""
+        with self.changed:
+            cards = [c for c in self.cards.values() if c.get("obstacle") and robot in c.get("robots", [])]
+        return max(cards, key=lambda c: c["created_at"], default=None)
+
     def stream(self):
         cursor = None
         while True:
@@ -72,7 +112,8 @@ class Feed:
                 yield f"event: {kind}\ndata: {schemas.dumps(data)}\n\n"
 
 
-def create_app(feed, geometry, publish, trigger, *, meta=None, image=None, dev_tools=False, set_bed_mode=None, db_path=None):
+def create_app(feed, geometry, publish, trigger, *, meta=None, image=None, dev_tools=False, set_bed_mode=None, db_path=None,
+               photos=None):
     app = Flask(__name__, static_folder="static")
     app.register_blueprint(history_api(db_path, geometry.get("names", {}), geometry.get("robot_names")))
     robots = tuple(geometry.get("robot_names", schemas.ROBOT_IDS))
@@ -96,6 +137,29 @@ def create_app(feed, geometry, publish, trigger, *, meta=None, image=None, dev_t
     def map_image():
         return Response(image, mimetype="image/x-portable-graymap") if image else ("", 404)
 
+    @app.get("/api/obstacle_image/<robot>")
+    def obstacle_image(robot):
+        """Return the photo for an open obstacle card or the specified recent YOLO report."""
+        kind = request.args.get("kind", "raw")
+        if robot in robots and photos is not None and kind == "yolo":
+            report = feed.recent_yolo(robot)
+            photo = photos.get(robot, kind)
+            if (not report or not photo or request.args.get("at", type=float) != report["at"]
+                    or abs(photo[1] - report["at"]) > PHOTO_GRACE_S):
+                return jsonify(message="이 감지에 해당하는 사진이 없습니다."), 404
+            return Response(photo[0], mimetype="image/jpeg", headers={"Cache-Control": "no-store"})
+        card = feed.obstacle_card(robot) if robot in robots and kind in PHOTO_KINDS else None
+        item = photos.get(robot, kind) if photos is not None and card else None
+        if item is None:
+            return jsonify(message="표시할 장애물 사진이 없습니다."), 404
+        data, received = item
+        reported = card["obstacle"].get("reported_at")
+        since = min(card["created_at"], reported) if isinstance(reported, (int, float)) else card["created_at"]
+        if received < since - PHOTO_GRACE_S:
+            return jsonify(message="이 카드보다 오래된 사진입니다."), 404
+        return Response(data, mimetype="image/jpeg",
+                        headers={"Cache-Control": "no-store", "X-Received-At": f"{received:.3f}"})
+
     @app.errorhandler(ConnectionError)
     def unavailable(error):
         return jsonify(message=str(error)), 503
@@ -110,10 +174,10 @@ def create_app(feed, geometry, publish, trigger, *, meta=None, image=None, dev_t
         if action == "bed" and form.get("mode") in ("off", "normal", "exit"):
             set_bed_mode(form["mode"])
             return jsonify(mode=form["mode"], message="가짜 침상 감시 설정을 적용했습니다.")
-        elif action in ("stall", "drop_link", "fail_next", "reject_next", "battery", "obstacle") and form.get("robot") in robots:
+        elif action in ("stall", "drop_link", "fail_next", "reject_next", "battery", "obstacle", "yolo") and form.get("robot") in robots:
             data = {"robot": form["robot"], "action": action}
             if action == "obstacle":
-                if form.get("kind") not in ("person", "object", "none", "error", "silent"):
+                if form.get("kind") not in ("medical_box", "person", "object", "none", "error", "silent"):
                     return jsonify(message="장애물 분류 결과를 선택하세요."), 400
                 data["kind"] = form["kind"]
             if action in ("stall", "drop_link", "battery"):

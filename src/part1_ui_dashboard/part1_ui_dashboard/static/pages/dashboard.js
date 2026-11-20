@@ -7,7 +7,7 @@ function confirmBox(r, id, m) {
     if (!m)
         return "";
     const key = m.mission_id + ":" + m.stop_index, final = m.stop_index === m.stops.length - 1;
-    return `<div class="confirm-box"><strong>${h(zn(m.stops[m.stop_index]))} 도착</strong><p>${h(m.items?.[m.stop_index] || m.patient?.name || m.patient?.chart_no || cfg.kinds[m.type])} · 다음 ${h(final ? "홈 복귀" : zn(m.stops[m.stop_index + 1]))}</p>
+    return `<div class="confirm-box"><strong>${h(zs(m.stops[m.stop_index], r.zone === m.stops[m.stop_index] ? r.slot : null))} 도착</strong><p>${h(m.items?.[m.stop_index] || m.patient?.name || m.patient?.chart_no || cfg.kinds[m.type])} · 다음 ${h(final ? "홈 복귀" : zn(m.stops[m.stop_index + 1]))}</p>
  <label><input type="checkbox" data-check="${key}" ${checked.has(key) ? "checked" : ""}> 확인했습니다</label><div class="buttons">${btn(final ? "수령 완료" : "확인 후 다음 이동", "confirm", id, "primary", !checked.has(key))}${btn("불일치", "mismatch", id)}</div></div>`;
 }
 document.addEventListener("change", e => { const key = e.target.dataset.check; if (key) {
@@ -23,6 +23,7 @@ function obstacleText(r) {
     if (r.obstacle_pending) return "장애물 분류 중…";
     const obs = r.obstacle;
     if (!obs) return "";
+    if (obs.text) return obs.text;  // report mode: the sentence already says what PART 06 saw
     if (obs.kind === "PERSON") return "앞에 사람 감지";
     if (obs.kind === "OBJECT") {
         const names = obs.labels.map(label => obs.detections.find(d => d.label === label)?.label_ko || label);
@@ -31,7 +32,7 @@ function obstacleText(r) {
     return obs.kind === "NONE" ? "카메라에 보이는 장애물 없음" : "장애물 분류 불가";
 }
 
-const locationText = r => r?.zone ? zn(r.zone) : ({CORRIDOR:"복도 안",ROOM_B:zn("B"),ROOM_E:zn("E"),TOP:"A, D 구역 쪽",BOTTOM:"C, F 구역 쪽"})[r?.region] || "위치 미수신";
+const locationText = r => r?.zone ? zs(r.zone, r.slot) : ({CORRIDOR:"복도 안",ROOM_B:zn("B"),ROOM_E:zn("E"),TOP:zn("A") + ", " + zn("D") + " 쪽",BOTTOM:zn("C") + ", " + zn("F") + " 쪽"})[r?.region] || "위치 미수신";
 const robotMark = r => `<span class="mark ${r.mark === "B" ? "square" : ""}">${h(r.mark)}</span>`;
 function destinationText(r, job) {
     if (!r.leg) return "—";
@@ -41,7 +42,7 @@ function destinationText(r, job) {
     else if (job?.type === "PATIENT_TRANSPORT") purpose = job.stop_index === 0 ? "환자 탑승" : "환자 인계";
     else if (job?.type === "MED_ROUND") purpose = "정류장 " + (job.stop_index + 1) + "번째";
     else if (job?.type === "CALL") purpose = "수령 확인";
-    return zn(r.leg.to) + " (" + purpose + ")";
+    return zs(r.leg.to, r.leg.slot) + " · " + purpose;
 }
 function robotCard(id, r) {
     const job = mById(r.mission_id), st = r.state, home = r.returning || st === "RETURNING";
@@ -64,6 +65,8 @@ function robotCard(id, r) {
     return `<div class="unit-title">${robotMark(r)}<div><h2>${h(r.label)}</h2><small>Robot ${h(mark)}</small></div>${pill(...displayState(id, r))}</div>
         <p>${h(job ? job.mission_id + "　" + cfg.kinds[job.type] + "　Level " + job.level : home ? (r.leg?.purpose === "도크 복귀" ? "도크 복귀" : "홈 구역 복귀") : r.leg ? "직접 이동" : "배정된 작업 없음")}</p>
         <div class="unit-facts">${fields.map(([key,value]) => `<span><small>${key}</small> ${h(value)}</span>`).join("")}</div>
+        ${r.via ? `<p class="via-note">교차로 경유${r.via.passed ? " · 통과" : ""}</p>` : ""}
+        ${r.yolo ? `<p data-yolo-until="${Number(r.yolo.at) + 30}">${h(r.yolo.text)} ${btn("감지 사진", "yolo-photo", id)}</p>` : ""}
         ${obstacleText(r) ? `<p>${h(obstacleText(r))}</p>` : ""}
         <div class="buttons">${controls}${job ? btn("작업 상세", "inspect", job.mission_id, "linkbtn") : ""}</div>`;
 }
@@ -79,7 +82,8 @@ function roadPanel() {
     return `<div class="road-line"><h2>복도</h2><strong>${h(passing.map(entry => robotName(entry.robot) + (stateColor(S.robots[entry.robot].state) === "red" ? " 정지" : entry.state === "OCCUPIED" ? " 통과 중" : " 진입 허가")).join(", ") || "통행 없음")}</strong>
         ${heading ? "<span>사용 방향　" + h(heading) + "</span>" : ""}<span>${waiting.length ? "대기　" + h(waiting.map(r => robotName(r) + ", " + locationText(S.robots[r])).join(", ")) : "대기 없음"}</span></div>
         ${waiting.length && track ? '<div class="checks"><b>출발 조건</b>' + labels.map((l,i) => `<span>${S.resume_checks[i] ? "☑" : "□"} ${l}</span>`).join("") + '</div>' : ""}
-        ${c.state === "UNKNOWN" ? btn("현장 확인 후 복도 비움", "clear", "", "danger") : ""}`;
+        ${Object.entries(S.resources).filter(([, res]) => res.state === "UNKNOWN")
+            .map(([key]) => btn("현장 확인 후 " + resLabel(key) + " 비움", "clear", key, "danger")).join("")}`;
 }
 
 function basis(e) {
@@ -88,9 +92,10 @@ function basis(e) {
     const d = e.detail;
     if (["ZONE_OCCUPIED_HOLD","PROXIMITY_STOP"].includes(e.type)) {
         const zone = e.type === "ZONE_OCCUPIED_HOLD";
-        openModal("basis", dialogHead(zone ? "목적지 점유 판단" : "로봇 근접 판단") +
+        const access = ["NEAR_START","INBOUND","OUTBOUND"].includes(d.rule);
+        openModal("basis", dialogHead(access ? "구역 출입 판단" : zone ? "목적지 점유 판단" : "로봇 근접 판단") +
             factList([["대기 로봇",robotName(e.robot)], ["상대 로봇",robotName(d.peer)],
-                ...(zone ? [["목적지",zn(d.destination)]] : []), ["판단 시각",tm(e.ts)]]) +
+                ...(zone ? [[access ? "구역" : "목적지",zn(access ? d.zone : d.destination)]] : []), ["판단 시각",tm(e.ts)]]) +
             '<p class="notice blue-surface">' + h(d.reason) + '</p>' + btn("판단 기록 보기","decision-log"));
         return;
     }
@@ -136,8 +141,19 @@ renderers.dashboard = () => {
     put("dash-jobs", '<div class="row"><h2>작업</h2><div class="buttons">' + controls + btn("전체 작업", "alljobs", "", "linkbtn") + '</div></div>' +
         '<table><thead><tr><th>작업</th><th>경로</th><th>응급도</th><th>로봇</th></tr></thead><tbody>' +
         jobs.map(m => `<tr><td>${btn(m.mission_id, "inspect", m.mission_id, "table-link")}<small>${h(cfg.kinds[m.type])}</small></td>
-        <td>${h(m.stops.join(" → "))}</td><td>Level ${m.level}</td><td>${h(m.robot ? robotName(m.robot) : "미배정")}</td></tr>`).join("") +
+        <td>${h(routeText(m))}</td><td>Level ${m.level}</td><td>${h(m.robot ? robotName(m.robot) : "미배정")}</td></tr>`).join("") +
         '</tbody></table>' + (jobs.length ? "" : empty("해당 작업 없음")));
     put("latest", cardTitle("최근 기록", btn("전체 기록","logs","","linkbtn")) +
         (E.length ? E.slice(-3).reverse().map(e => `<div class="timeline"><time>${tm(e.ts)}</time><b>${h(e.title)}</b><span>${h(e.title.replace(/[ ·]/g,"") === e.detail.reason.replace(/[ ·]/g,"") ? "" : e.detail.reason)}</span></div>`).join("") : empty("수신된 이벤트가 없습니다.")));
+};
+
+
+actions["yolo-photo"] = id => {
+    const sighting = S?.robots[id]?.yolo;
+    if (!sighting) return;
+    openModal("yolo-photo", dialogHead("주행 중 감지 사진") +
+        `<figure class="obstacle-photo"><img id="yolo-image" alt="주행 중 감지 사진"><figcaption>${h(sighting.text)}</figcaption></figure>`);
+    const image = $("yolo-image");
+    image.onerror = () => { image.hidden = true; image.nextElementSibling.textContent = "이 감지에 해당하는 사진이 없습니다."; };
+    image.src = `/api/obstacle_image/${encodeURIComponent(id)}?kind=yolo&at=${encodeURIComponent(sighting.at)}`;
 };

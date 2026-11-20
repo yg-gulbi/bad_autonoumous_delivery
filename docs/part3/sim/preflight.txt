@@ -1,0 +1,41 @@
+ROS_DOMAIN_ID=97
+ROS_DISCOVERY_SERVER=127.0.0.1:11888
+ROS_SUPER_CLIENT=True
+ROS_AUTOMATIC_DISCOVERY_RANGE=(미설정)
+RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+발견 서버 127.0.0.1:11888 · OK · UDP 포트 사용 중 (fast-discovery-server)
+구역 대조 (/home/kimjunseong852/bad_ws/src/part4_amr_nav/hospital_nav/goal_manager.py) · 자리 2개·교차로 (SLOTS) · OK
+로봇 두 대와 침상 감시를 10초 동안 관측합니다.
+
+침상형 이송 로봇 (/robot3) · OK
+  hospital_nav/status (STATE) OK · IDLE
+  STATE.battery              OK · 100%, 16.47 V, UNKNOWN
+  STATE.pose                 OK · (-0.111, 0.364)
+  STATE.docked               OK · 도크 위
+  참고 amcl_pose               (-0.111, 0.364)
+  참고 battery_state           미수신
+  참고 dock_status             도킹 중
+  참고 hazard_detection        사용 안 함
+  참고 navigate_to_pose        액션 서버 있음
+  명령 발행자 · 없음 (관제 실행 전 가능)
+  자리 번호(STATE.slot) · 있음 (2번 자리 사용)
+  /robot3/hospital_nav/obstacle_image · 구독자 0 · 경고 · 장애물 분류기 없음 — 상자 판별 없이 사진만 표시
+  /robot3/obstacle_classifier/result · 없음 — 판별 없이 사진만 표시
+
+약품 운송 로봇 (/robot2) · OK
+  hospital_nav/status (STATE) OK · IDLE
+  STATE.battery              OK · 100%, 16.47 V, UNKNOWN
+  STATE.pose                 OK · (-0.353, -5.075)
+  STATE.docked               OK · 도크 위
+  참고 amcl_pose               (-0.353, -5.075)
+  참고 battery_state           미수신
+  참고 dock_status             도킹 중
+  참고 hazard_detection        사용 안 함
+  참고 navigate_to_pose        액션 서버 있음
+  명령 발행자 · 없음 (관제 실행 전 가능)
+  자리 번호(STATE.slot) · 있음 (2번 자리 사용)
+  /robot2/hospital_nav/obstacle_image · 구독자 0 · 경고 · 장애물 분류기 없음 — 상자 판별 없이 사진만 표시
+  /robot2/obstacle_classifier/result · 없음 — 판별 없이 사진만 표시
+
+/patient/bed_exit · 10.4 Hz (104건, 마지막 값 정상)
+실제 실행 가능

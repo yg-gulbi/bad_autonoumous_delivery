@@ -11,12 +11,26 @@ from part3_fleet_manager.core.store import Store
 A, B = "robot_a", "robot_b"
 
 
+def stage2(cfg, path, room_mode):
+    # These stage 2 scenarios, including 26, use fixed patient and medication roles and the
+    # 3O obstacle inspection. Report mode, slots and DOOR rooms (4J) are in test_4j_*.py.
+    return Simulation(replace(cfg, corridor=replace(cfg.corridor, mode="SHARED_YIELD", room_mode=room_mode),
+                              obstacle=replace(cfg.obstacle, mode="inspect"),
+                              assignment=replace(cfg.assignment, mode="ROLE"), db_path=str(path)))
+
+
 @pytest.fixture
 def sim(cfg, tmp_path, request):
     cfg = replace(cfg, safety=replace(cfg.safety, use_hazard_topic=getattr(request, "param", False)))
-    # These stage 2 scenarios, including 26, use fixed patient and medication roles.
-    s = Simulation(replace(cfg, corridor=replace(cfg.corridor, mode="SHARED_YIELD"),
-                           assignment=replace(cfg.assignment, mode="ROLE"), db_path=str(tmp_path / "bad.db")))
+    s = stage2(cfg, tmp_path / "bad.db", "DOOR")
+    yield s
+    s.core.store.close()
+
+
+@pytest.fixture
+def room_sim(cfg, tmp_path):
+    """The 4I room rule: a robot standing in room B or E keeps it (deadlock and scenario 26 cases)."""
+    s = stage2(cfg, tmp_path / "bad.db", "ROOM")
     yield s
     s.core.store.close()
 
@@ -86,7 +100,7 @@ def test_28_call_confirmation_home_and_correlated_preemption(shared):
     assert [e["type"] for e in takeover.events if e["type"] in {"LEG_START", "MISSION_ASSIGNED"}] == [
         "LEG_START", "MISSION_ASSIGNED"]
     assert commands(takeover) == {A: "CANCEL"}
-    shared.pending.append(("status", json.dumps({"robot_id": "robot2", "type": "STATUS",
+    shared.pending.append(("status", json.dumps({"robot_id": shared.cfg.robots[A].ns, "type": "STATUS",
                           "event": "MISSION_CANCELED", "mission_id": "old"}), A))
     assert not shared.tick(.4).commands
     shared.event(A, "MISSION_CANCELED")
@@ -128,7 +142,7 @@ def test_29_home_cancel_terminal_evidence(shared, signal):
     if signal == "ARRIVED":
         shared.event(A, "ARRIVED")
     elif signal == "COMMAND_REJECTED":
-        shared.pending.append(("status", json.dumps({"type":"STATUS","robot_id":"robot2","mission_id":shared.frames[A]["mission_id"],
+        shared.pending.append(("status", json.dumps({"type":"STATUS","robot_id":shared.cfg.robots[A].ns,"mission_id":shared.frames[A]["mission_id"],
                                                       "event":signal,"command":"CANCEL","state":"COMPLETE"}), A))
     else:
         shared.frames[A]["state"] = signal
@@ -220,21 +234,21 @@ def test_10_bed_exit_and_20_bump_require_operator_resume(sim):
     sim.event(A, "PAUSED")
     assert sim.core.service("/robot/resume", .3)[0] is False
     assert not sim.tick(.3).commands and sim.state(A) == "SAFE_PAUSE"
-    sim.pending.append(("/patient/bed_exit", False, None))
-    assert not sim.tick(.4).commands
-    assert sim.core.service("/robot/resume", .5)[0]
-    assert commands(sim.tick(.5)) == {A: "RESUME"}
+    _, wire = bed_frames(sim, .4, 1)
+    assert not wire
+    assert sim.core.service("/robot/resume", 1.5)[0]
+    assert commands(sim.tick(1.5)) == {A: "RESUME"}
     sim.event(A, "RESUMED")
     sim.pending.append(("hazards", ["BACKUP_LIMIT"], A))
-    assert not sim.tick(.6).commands
+    assert not sim.tick(1.6).commands
     sim.pending.append(("hazards", ["BUMP", "BACKUP_LIMIT"], A))
-    out = sim.tick(.7)
+    out = sim.tick(1.7)
     assert commands(out) == {A: "PAUSE"} and any(e["type"] == "BUMP" for e in out.events)
     sim.event(A, "PAUSED")
-    sim.core.service("/robot/resume", .8)
-    assert not sim.tick(.8).commands and sim.state(A) == "SAFE_PAUSE"
+    sim.core.service("/robot/resume", 1.8)
+    assert not sim.tick(1.8).commands and sim.state(A) == "SAFE_PAUSE"
     sim.cmd("RESUME_ROBOT", robot=A)
-    assert commands(sim.tick(.9)) == {A: "RESUME"}
+    assert commands(sim.tick(1.9)) == {A: "RESUME"}
 
 
 def test_11_unanswered_move_is_fault_with_card(sim):
@@ -347,12 +361,12 @@ def test_25_bed_exit_preempts_give_way_rechecks_before_resume(sim):
     encounter(sim)
     sim.pending.append(("/patient/bed_exit", True, None))
     assert not sim.tick(2.1).commands and sim.state(A) == "SAFE_PAUSE"
-    sim.pending.append(("/patient/bed_exit", False, None))
-    assert not sim.tick(2.2).commands
+    _, wire = bed_frames(sim, 2.2, 1)
+    assert not wire
     sim.cmd("RESUME_ROBOT", robot=A)
-    assert not sim.tick(2.3).commands and sim.state(A) == "GIVE_WAY"
+    assert not sim.tick(3.3).commands and sim.state(A) == "GIVE_WAY"
     sim.frames[B]["pose"] = sim.pose("E")
-    assert commands(sim.tick(2.4)) == {A: "RESUME"}
+    assert commands(sim.tick(3.4)) == {A: "RESUME"}
     assert sim.state(A) == "MOVING"
 
 
@@ -364,7 +378,8 @@ def test_failure_while_giving_way_waits_for_operator(sim):
     assert not out.commands and sim.core.resources.snapshot()["CORRIDOR"]["give_way"] is None
 
 
-def test_15_26_concurrent_transport_round_and_queues(sim):
+def test_15_26_concurrent_transport_round_and_queues(room_sim):
+    sim = room_sim
     encounter(sim)
     sim.event(B, "ARRIVED")
     assert commands(sim.tick(2.1)) == {A: "RESUME"}
@@ -534,7 +549,8 @@ def test_two_robot_firmware_versions_have_independent_protocol_sessions(sim):
     assert next_moves[A].startswith("MOVE A 2 id=") and next_moves[B] == "MOVE F 3"
 
 
-def test_deadlock_db_measures_until_room_release_and_replays_metrics(sim):
+def test_deadlock_db_measures_until_room_release_and_replays_metrics(room_sim):
+    sim = room_sim
     sim.frames[A]["pose"] = sim.pose("B")
     sim.frames[B]["pose"] = sim.pose("E")
     sim.patient(pickup="E", level=2)
@@ -683,10 +699,10 @@ def test_35_new_mission_during_loss_and_recovery_with_exit(sim):
     events, wire = bed_frames(sim, 4, 2, value=True)
     assert not wire and {"BED_MONITOR_BACK", "BED_EXIT"} <= {e["type"] for e in events}
     assert not sim.core.service("/robot/resume", 6.1)[0]
-    sim.core.enqueue("/patient/bed_exit", False, 6.2)
-    assert not sim.tick(6.2).commands and sim.state(A) == "SAFE_PAUSE"
-    assert sim.core.service("/robot/resume", 6.3)[0]
-    assert commands(sim.tick(6.3))[A].startswith("MOVE ")
+    _, wire = bed_frames(sim, 6.2, 1)
+    assert not wire and sim.state(A) == "SAFE_PAUSE"
+    assert sim.core.service("/robot/resume", 7.3)[0]
+    assert commands(sim.tick(7.3))[A].startswith("MOVE ")
 
 
 @pytest.mark.parametrize("required", [True, False])

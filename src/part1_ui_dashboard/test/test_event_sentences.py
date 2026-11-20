@@ -42,7 +42,8 @@ def traffic(cfg):
         rm.clear_unknown("CORRIDOR","현장 담당자",14)
         yield from rm.events
 
-    rm = ResourceManager(cfg)
+    # Deadlocks need the 4I room rule (a robot standing in a room keeps it).
+    rm = ResourceManager(replace(cfg, corridor=replace(cfg.corridor, room_mode="ROOM")))
     dl = DeadlockManager(rm)
     reports = {A:RobotReport(cfg.zones["B"],True), B:RobotReport(cfg.zones["E"],True)}
     for robot, dest in [(A,"E"),(B,"B")]:
@@ -63,8 +64,9 @@ def test_41_actual_fleet_event_titles_reasons_and_journal(tmp_path,monkeypatch):
     cfg = replace(cfg, safety=replace(cfg.safety, use_hazard_topic=True), assignment=replace(cfg.assignment, mode="IDLE_BEST_BATTERY"), corridor=replace(cfg.corridor, mode="SHARED_YIELD"))
     events = list(traffic(cfg))
     with ExitStack() as cleanup:
-        def simulator():
-            sim = Simulation(replace(cfg,db_path=":memory:"))
+        def simulator(mode="inspect"):
+            # 4K turned the NONE retry off in fleet.yaml; this scenario still produces OBSTACLE_RETRY.
+            sim = Simulation(replace(cfg,db_path=":memory:",obstacle=replace(cfg.obstacle,mode=mode,retry_if_clear=True)))
             cleanup.callback(sim.core.store.close)
             return sim
 
@@ -111,7 +113,8 @@ def test_41_actual_fleet_event_titles_reasons_and_journal(tmp_path,monkeypatch):
         collect(sim,35)
         sim.cmd("RESUME_ALL")
         collect(sim,36)
-        sim.pending.append(("/patient/bed_exit",False,None))
+        for stamp in (36, 36.25, 36.5, 36.75, 37):
+            sim.core.enqueue("/patient/bed_exit", False, stamp)
         collect(sim,37)
         sim.cmd("RESUME_ROBOT",robot=A)
         collect(sim,37.1)
@@ -124,11 +127,50 @@ def test_41_actual_fleet_event_titles_reasons_and_journal(tmp_path,monkeypatch):
         sim.frames.clear()
         collect(sim,50)
 
+        # 4J report mode: Nav2 gives up, PART 04 sends a photo, PART 06 sees nothing, then a box.
+        sim = simulator("report")
+        sim.battery(A,80)
+        sim.call("box","C")
+        collect(sim,0)
+        collect(sim,1)
+        for verdict, ts in ((False, 2), ("medical_box", 10)):
+            sim.event(A,"MISSION_ACCEPTED")
+            sim.frames[A]["pose"] = sim.pose((-1.55,-1.7))
+            collect(sim,ts)
+            sim.event(A,"MISSION_FAILED",reason="Nav2: ABORTED")
+            sim.event(A,"OBSTACLE",lidar_m=0.42,image_topic="/robot3/hospital_nav/obstacle_image")
+            sim.core.enqueue("obstacle_result",'{"status":"ok","obstacle_present":%s,"detections":%s}' % (
+                "true" if verdict else "false",
+                '[{"label":"medical_box","confidence":0.93}]' if verdict else "[]"),ts+.5,robot=A)
+            collect(sim,ts+.5)
+            collect(sim,ts+4)
+            collect(sim,ts+4.1)
+
         sim = simulator()
         sim.battery(A,80)
         sim.call("unanswered","A")
         for ts in (0,3,6):
             collect(sim,ts)
+
+        # 4K: PAUSE resent while STATE stays MOVING, the unconfirmed-stop card, then an arrival known
+        # only from STATE because the STATUS ARRIVED was lost.
+        sim = simulator()
+        sim.battery(A,80)
+        sim.call("stop","C")
+        collect(sim,0)
+        collect(sim,1)
+        sim.event(A,"MISSION_ACCEPTED")
+        collect(sim,2)
+        sim.cmd("PAUSE_ROBOT",robot=A)
+        for i in range(13):  # PAUSE at 3, again at 4.5, 6 and 7.5, the card at 9
+            collect(sim,3+i/2)
+        sim.event(A,"PAUSED")
+        collect(sim,9.5)
+        sim.cmd("RESUME_ROBOT",robot=A)
+        sim.event(A,"RESUMED")
+        collect(sim,10)
+        sim.frames[A].update(state="COMPLETE",percent=100,pose=sim.pose("C"))
+        collect(sim,11)
 
         sim = simulator()
         sim.cmd("GO_ZONE", robot=A, zone="F")
@@ -166,3 +208,11 @@ def test_41_actual_fleet_event_titles_reasons_and_journal(tmp_path,monkeypatch):
                 assert not codes.search(card["title"] + card["reason"])
     finally:
         store.close()
+
+
+def test_yolo_sighting_has_its_own_history_title():
+    reason = "주행 중 장애물 감지 · medical_box 0.93 · 약 0.85 m · 계속 주행"
+    event = {"type": "OBSTACLE_REPORT", "robot": B, "detail": {"source": "yolo", "reason": reason}}
+    row = present_event(event, {}, {B: "약품 운송 로봇"})
+    assert row["title"] == "약품 운송 로봇 주행 중 장애물 감지"
+    assert row["detail"]["reason"] == reason

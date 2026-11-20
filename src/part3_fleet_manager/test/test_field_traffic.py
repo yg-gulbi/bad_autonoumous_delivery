@@ -9,8 +9,8 @@ from part3_fleet_manager.core.resource_manager import MotionRequest, ResourceMan
 A, B = "robot_a", "robot_b"
 
 
-def manager_for(cfg, mode):
-    return ResourceManager(replace(cfg, corridor=replace(cfg.corridor, mode=mode)))
+def manager_for(cfg, mode, room_mode="DOOR"):
+    return ResourceManager(replace(cfg, corridor=replace(cfg.corridor, mode=mode, room_mode=room_mode)))
 
 
 @pytest.mark.parametrize("origins,goals", [
@@ -25,9 +25,10 @@ def test_44_same_heading_shares_including_room_door(cfg, origins, goals):
     assert rm.snapshot()["CORRIDOR"]["holders"] == [A, B]
 
 
+@pytest.mark.parametrize("room_mode", ["DOOR", "ROOM"])
 @pytest.mark.parametrize("waiting_from,destination", [("F", "A"), ("E", "D"), ("B", "E")])
-def test_44_opposing_and_transverse_wait_through_clearance(cfg, waiting_from, destination):
-    rm = manager_for(cfg, "DIRECTIONAL")
+def test_44_opposing_and_transverse_wait_through_clearance(cfg, waiting_from, destination, room_mode):
+    rm = manager_for(cfg, "DIRECTIONAL", room_mode)
     reports = {A: RobotReport(cfg.zones[waiting_from], True), B: RobotReport(cfg.zones["D"], True)}
     occupying = rm.request(B, "C", 1, 0)
     assert rm.tick(1, reports).grants == [occupying]
@@ -41,7 +42,8 @@ def test_44_opposing_and_transverse_wait_through_clearance(cfg, waiting_from, de
     assert not rm.tick(3, reports).grants
     assert rm.snapshot()["CORRIDOR"]["holders"] == [B]
     if waiting_from in ("B", "E"):
-        assert rm.snapshot()["ROOM_" + waiting_from]["holders"] == [A]
+        # ROOM (4I): the room shelters its robot and stays held. DOOR (4J): no door claim while waiting.
+        assert rm.snapshot()["ROOM_" + waiting_from]["holders"] == ([A] if room_mode == "ROOM" else [])
     if destination == "E":
         assert not rm.snapshot()["ROOM_E"]["holders"]  # No partial reservation.
     reports[B] = RobotReport(cfg.zones["C"], True)
@@ -139,7 +141,7 @@ def test_last_tie_uses_config_order_for_dispatch_yield_and_deadlock(cfg):
     assert rm.tick(2, {A: RobotReport((-1.55, -2), True), B: RobotReport((-1.55, -3), True)}).commands == [
         MotionRequest(A, "PAUSE")]
 
-    rm = ResourceManager(cfg)
+    rm = ResourceManager(replace(cfg, corridor=replace(cfg.corridor, room_mode="ROOM")))
     deadlock = DeadlockManager(rm)
     for robot, goal in ((A, "E"), (B, "B")):
         rm.request(robot, goal, 1, 0)
@@ -201,7 +203,7 @@ def test_45_stationary_robot_bumper_stops_the_moving_neighbor(cfg):
     cfg = replace(cfg, corridor=replace(cfg.corridor, mode="DIRECTIONAL"), db_path=":memory:")
     sim = Simulation(cfg)
     try:
-        sim.frames[A]["pose"] = sim.pose("E")
+        sim.frames[A]["pose"] = sim.pose((-0.75, -2.30))  # inside E by the door, 0.75 m from B below
         sim.frames[B]["pose"] = sim.pose("D")
         sim.cmd("GO_ZONE", robot=B, zone="C")
         sim.tick(0)
