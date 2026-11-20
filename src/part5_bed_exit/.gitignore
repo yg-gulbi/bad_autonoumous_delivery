@@ -10,10 +10,6 @@
 !/research/data/test_images/
 !/research/data/test_images/**
 /research/results/
-/config/*.json
-!/config/*.template.json
-/config/*.yaml
-!/config/*.template.yaml
 /finetune/data/*
 !/finetune/data/.gitkeep
 /finetune/runs/*

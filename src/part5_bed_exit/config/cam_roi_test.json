@@ -1,0 +1,30 @@
+{
+  "method": "segmentation",
+  "model_dir": "src/part5_bed_exit/models",
+  "device": "cpu",
+  "roi": [
+    [
+      0.998435,
+      0.194154
+    ],
+    [
+      0.004695,
+      0.22547
+    ],
+    [
+      0.0,
+      0.824635
+    ],
+    [
+      0.99061,
+      0.995825
+    ]
+  ],
+  "roi_metadata": {
+    "camera_index": 2,
+    "frame_width": 640,
+    "frame_height": 480,
+    "created_at_utc": "2026-11-20T08:12:00.238198+00:00",
+    "source": "manual_camera_four_point_labeler"
+  }
+}
