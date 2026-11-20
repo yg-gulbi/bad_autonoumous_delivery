@@ -62,13 +62,32 @@ function robotCard(id, r) {
     const mark = r.mark;
     const fields = [["가는 곳", destinationText(r, job)], ["지금", locationText(r)],
         ["배터리", (r.battery_pct == null ? "미수신" : Math.round(r.battery_pct) + "%") + (r.battery_status === "CHARGING" ? " 충전 중" : "")], ["연결", "/" + r.ns]];
+    const stopWait = S.traffic?.mode === "SEGMENTS" ? S.traffic.stop_line_waits?.[id] : null;
     return `<div class="unit-title">${robotMark(r)}<div><h2>${h(r.label)}</h2><small>Robot ${h(mark)}</small></div>${pill(...displayState(id, r))}</div>
         <p>${h(job ? job.mission_id + "　" + cfg.kinds[job.type] + "　Level " + job.level : home ? (r.leg?.purpose === "도크 복귀" ? "도크 복귀" : "홈 구역 복귀") : r.leg ? "직접 이동" : "배정된 작업 없음")}</p>
         <div class="unit-facts">${fields.map(([key,value]) => `<span><small>${key}</small> ${h(value)}</span>`).join("")}</div>
+        ${r.canceling_exit ? '<p class="cancel-note">취소됨 · 복도를 빠져나온 뒤 정지</p>' : ""}
+        ${stopWait?.by ? `<p class="cancel-note">${h(stopWait.reason)}</p>` : ""}
         ${r.via ? `<p class="via-note">교차로 경유${r.via.passed ? " · 통과" : ""}</p>` : ""}
         ${r.yolo ? `<p data-yolo-until="${Number(r.yolo.at) + 30}">${h(r.yolo.text)} ${btn("감지 사진", "yolo-photo", id)}</p>` : ""}
         ${obstacleText(r) ? `<p>${h(obstacleText(r))}</p>` : ""}
         <div class="buttons">${controls}${job ? btn("작업 상세", "inspect", job.mission_id, "linkbtn") : ""}</div>`;
+}
+
+function segmentStrip() {
+    if (S.traffic?.mode !== "SEGMENTS" || !S.traffic.segments) return "";
+    const keys = ["CORRIDOR_TOP", "CROSSROAD", "CORRIDOR_BOTTOM", "DOOR_B", "DOOR_E"].filter(k => S.traffic.segments[k]);
+    if (!keys.length) return "";
+    return '<div class="seg-strip">' + keys.map(k => {
+        const seg = S.traffic.segments[k];
+        const unique = [...new Set((seg.holders || []).map(x => x.robot))];
+        const unknown = seg.state === "UNKNOWN" || seg.blocked;
+        const cls = unknown ? "unknown" : unique.length > 1 ? "both" : unique[0] === "robot_b" ? "b" : unique[0] ? "a" : "";
+        const granted = !unknown && seg.state === "GRANTED" ? " granted" : "";
+        const dir = seg.kind === "one_way" && seg.direction ? (seg.direction > 0 ? " →" : " ←") : "";
+        const who = unknown ? "확인 필요" : unique.length ? unique.map(r => S.robots[r]?.mark || r).join("+") + (seg.state === "GRANTED" ? " 예약" : " 점유") : "비어 있음";
+        return `<span class="seg-chip ${cls}${granted}"><b>${h(seg.label || resLabel(k))}${dir}</b> ${h(who)}</span>`;
+    }).join("") + '</div>';
 }
 
 function roadPanel() {
@@ -79,11 +98,16 @@ function roadPanel() {
     const labels = track?.kind === "follow" ? [c.follow_stop?.rule === "GAP" ? "재개 간격 확보" : "선행 로봇 재출발 또는 이탈", "뒤 로봇 연결", "별도 정지 없음", "출발 응답"] : track?.kind === "yield" ? ["우선 로봇 통과", "양보 로봇 연결", "별도 정지 없음", "양보 로봇 재출발"] :
         ["선행 로봇 완전 통과", "복도 비움 확인", "진입 허가", "출발 응답"];
     const passing = (c.holder_detail || []).filter(entry => !waiting.includes(entry.robot));
+    const unknownClear = S.traffic?.mode === "SEGMENTS"
+        ? Object.entries(S.traffic.segments || {}).filter(([, seg]) => seg.state === "UNKNOWN")
+            .map(([key]) => btn("현장 확인 후 " + resLabel(key) + " 비움", "clear", key, "danger")).join("")
+        : Object.entries(S.resources).filter(([, res]) => res.state === "UNKNOWN")
+            .map(([key]) => btn("현장 확인 후 " + resLabel(key) + " 비움", "clear", key, "danger")).join("");
     return `<div class="road-line"><h2>복도</h2><strong>${h(passing.map(entry => robotName(entry.robot) + (stateColor(S.robots[entry.robot].state) === "red" ? " 정지" : entry.state === "OCCUPIED" ? " 통과 중" : " 진입 허가")).join(", ") || "통행 없음")}</strong>
         ${heading ? "<span>사용 방향　" + h(heading) + "</span>" : ""}<span>${waiting.length ? "대기　" + h(waiting.map(r => robotName(r) + ", " + locationText(S.robots[r])).join(", ")) : "대기 없음"}</span></div>
+        ${segmentStrip()}
         ${waiting.length && track ? '<div class="checks"><b>출발 조건</b>' + labels.map((l,i) => `<span>${S.resume_checks[i] ? "☑" : "□"} ${l}</span>`).join("") + '</div>' : ""}
-        ${Object.entries(S.resources).filter(([, res]) => res.state === "UNKNOWN")
-            .map(([key]) => btn("현장 확인 후 " + resLabel(key) + " 비움", "clear", key, "danger")).join("")}`;
+        ${unknownClear}`;
 }
 
 function basis(e) {
@@ -99,13 +123,21 @@ function basis(e) {
             '<p class="notice blue-surface">' + h(d.reason) + '</p>' + btn("판단 기록 보기","decision-log"));
         return;
     }
-    openModal("basis", `<span class="eyebrow">복도</span>${dialogHead("통행 판단 상세")}<label>판단 당시 자원 상태</label><p class="tile">${h(resNames[d.state_before] || "상태 미수신")} · ${tm(e.ts)}</p><div>${(d.contenders || []).map(c => `<p><b class="${color(c.robot)}-text">${h(robotName(c.robot))}</b> · ${h(cfg.kinds[c.type] || "직접 이동")} · Level ${c.level} · ${tm(c.requested_at)}</p>`).join("")}</div>
- <p class="notice blue-surface"><b>${h(cfg.rules[d.rule] || e.title || "현장 상태 확인")}</b><br>${h(d.reason)}</p><p class="muted">동급이면 먼저 요청한 쪽, 허가된 통행은 회수하지 않음</p>${btn("판단 기록 보기", "decision-log")}`);
+    const dist = d.distance_m != null ? ` · 경계까지 ${Number(d.distance_m).toFixed(2)} m` : "";
+    const note = S?.traffic?.mode === "SEGMENTS"
+        ? "비어 있는 칸은 근접·출구 → 응급도 → 요청 시각 → 로봇 순, 미진입 칸은 높은 응급도가 선점"
+        : "동급이면 먼저 요청한 쪽, 허가된 통행은 회수하지 않음";
+    openModal("basis", `<span class="eyebrow">${h(S?.traffic?.mode === "SEGMENTS" ? "구간 예약" : "복도")}</span>${dialogHead("통행 판단 상세")}<label>판단 당시 자원 상태</label><p class="tile">${h(resNames[d.state_before] || "상태 미수신")} · ${tm(e.ts)}${h(dist)}</p><div>${(d.contenders || []).map(c => `<p><b class="${color(c.robot)}-text">${h(robotName(c.robot))}</b> · ${h(cfg.kinds[c.type] || "직접 이동")} · Level ${c.level} · ${tm(c.requested_at)}</p>`).join("")}</div>
+ <p class="notice blue-surface"><b>${h(cfg.rules[d.rule] || e.title || "현장 상태 확인")}</b><br>${h(d.reason)}</p><p class="muted">${h(note)}</p>${btn("판단 기록 보기", "decision-log")}`);
 }
 function basisEvent() {
     if (!S) return null;
     const top = situation(true)[0];
     if (top?.basis?.detail) return top.basis;
+    if (S.traffic?.mode === "SEGMENTS" && (Object.values(S.traffic.stop_line_waits || {}).some(w => w.by) || (S.traffic.last_preempt && S.stamp - S.traffic.last_preempt.ts <= 10))) {
+        const pre = E.findLast(e => e.type === "RESOURCE_PREEMPT");
+        if (pre) return pre;
+    }
     const follow = S.resources.CORRIDOR.follow_stop;
     if (follow) return E.findLast(e => e.type === "CORRIDOR_FOLLOW_STOP" && e.robot === follow.rear) || S.last_decision;
     if ([...cards.values()].some(c => c.kind === "DEADLOCK")) return E.findLast(e => e.type === "DEADLOCK_DETECTED") || S.last_decision;
@@ -124,7 +156,7 @@ initializers.dashboard = () => {
     $("page").innerHTML = `<div class="board"><section class="floor"><div class="row"><h2>병원 평면도</h2>
         <div class="buttons"><label class="map-switch"><input type="checkbox" role="switch" id="overlay"> 실제 맵</label>${btn("−","zoom","0.8")}${btn("＋","zoom","1.25")}</div></div>
         <canvas id="map" aria-label="병원 구역과 로봇 실시간 위치"></canvas><div id="road"></div>
-        <footer class="legend"><span>● A　침상형 이송 로봇</span><span>■ B　약품 운송 로봇</span><span>┄ 남은 경로</span><span>➜ 복도 사용 방향</span></footer></section>
+        <footer class="legend" id="map-legend"><span>● A　침상형 이송 로봇</span><span>■ B　약품 운송 로봇</span><span>┄ 남은 경로</span><span>➜ 복도 사용 방향</span></footer></section>
         <aside class="units"><div id="robot-blocks"></div><section id="dash-jobs"></section></aside></div><section id="latest"></section>`;
     installMap();
 };
@@ -135,6 +167,9 @@ renderers.dashboard = () => {
     for (const id of ids) put("unit-" + id, robotCard(id, S.robots[id]));
     paint();
     put("road", roadPanel());
+    put("map-legend", S.traffic?.mode === "SEGMENTS"
+        ? '<span><i class="seg-dot a"></i> ● A　침상형 이송 로봇</span><span><i class="seg-dot b"></i> ■ B　약품 운송 로봇</span><span>┄ 남은 경로</span><span>➜ 칸 방향</span>'
+        : '<span>● A　침상형 이송 로봇</span><span>■ B　약품 운송 로봇</span><span>┄ 남은 경로</span><span>➜ 복도 사용 방향</span>');
     const jobs = S.missions.filter(m => m.status === dashTab);
     const controls = ["ACTIVE","QUEUED"].map(t => btn((t === "ACTIVE" ? "진행 중 " : "배정 대기 ") +
         S.missions.filter(m => m.status === t).length, "dashTab", t, t === dashTab ? "selected" : "")).join("");

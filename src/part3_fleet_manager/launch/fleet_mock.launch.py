@@ -12,10 +12,15 @@ def launch_nodes(context):
     package = "part3_fleet_manager"
     path = LaunchConfiguration("config_file").perform(context)
     config = load_config(path)
-    manager = Node(package=package, executable="fleet_manager_node", output="screen", parameters=[{
+    manager_params = {
         "config_file": path, "bed_monitor_require_at_start": False,
         "db_path": ParameterValue(LaunchConfiguration("db_path"), value_type=str),
-        "assignment_mode": LaunchConfiguration("assignment_mode").perform(context) or config.assignment.mode}])
+        "assignment_mode": LaunchConfiguration("assignment_mode").perform(context) or config.assignment.mode,
+    }
+    traffic_mode = LaunchConfiguration("traffic_mode").perform(context)
+    if traffic_mode:
+        manager_params["traffic_mode"] = traffic_mode
+    manager = Node(package=package, executable="fleet_manager_node", output="screen", parameters=[manager_params])
     mocks = []
     for robot, unit in config.robots.items():
         params = {"config_file": path}
@@ -49,6 +54,7 @@ def generate_launch_description():
         DeclareLaunchArgument("robot_a_r1", default_value="", description="Override R1 support on robot_a"),
         DeclareLaunchArgument("robot_b_r1", default_value="", description="Override R1 support on robot_b"),
         DeclareLaunchArgument("assignment_mode", default_value="", description="IDLE_BEST_BATTERY or ROLE"),
+        DeclareLaunchArgument("traffic_mode", default_value="", description="LEGACY or SEGMENTS (empty uses fleet.yaml)"),
         DeclareLaunchArgument("robot_a_battery", default_value="", description="Robot A initial battery (%)"),
         DeclareLaunchArgument("robot_b_battery", default_value="", description="Robot B initial battery (%)"),
         DeclareLaunchArgument("robot_a_slots", default_value="", description="false: robot_a runs PART 04 before 4J"),

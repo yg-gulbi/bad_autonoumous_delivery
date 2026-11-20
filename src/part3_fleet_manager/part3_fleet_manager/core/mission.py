@@ -50,6 +50,8 @@ class Robot:
     state: str = "IDLE"
     target_override: str | None = None
     canceling: bool = False
+    exiting_corridor: bool = False
+    return_after_cancel_id: str | None = None
     replacing: bool = False
     fault_stop: bool = False
     resume_due: bool = False
@@ -61,9 +63,10 @@ class Robot:
 
 
 class MissionManager:
-    def __init__(self, config, resources, deadlock, decisions, safety, links, next_id):
+    def __init__(self, config, resources, deadlock, decisions, safety, links, next_id, *, traffic=None):
         self.config, self.resources, self.deadlock = config, resources, deadlock
         self.decisions, self.safety, self.links = decisions, safety, links
+        self.traffic = traffic
         self.next_id = next_id
         self.robots = {r: Robot(cfg.start_zone) for r, cfg in config.robots.items()}
         self.unassigned: list[Mission] = []
@@ -106,7 +109,7 @@ class MissionManager:
         r = self.robots[robot]
         started = r.state in ("SENDING", "MOVING") or (r.state == "HOLD" and robot in self.resources.pending)
         return (r.returning and self.config.mission.return_interruptible and not r.canceling and not r.replacing
-                and started and robot not in self.deadlock.yielding
+                and not r.target_override and started and robot not in self.deadlock.yielding
                 and self.resources.robot_state(robot, r.state) != "GIVE_WAY")
 
     def _assign(self, now):
@@ -180,6 +183,57 @@ class MissionManager:
             r.state = "HOLD"
             self.ready[robot] = None
 
+    def _at_home_slot(self, robot):
+        home = self.config.robots[robot].start_zone
+        pose = self.links[robot].pose
+        if pose is None:
+            return self.robots[robot].zone == home
+        best = min(((dist(pose, point), zone, idx) for zone in self.config.zones
+                    for idx, point in enumerate(self.config.slots.get(zone) or (self.config.zones[zone],), 1)),
+                   default=None)
+        return bool(best and best[0] <= 0.15 and best[1] == home)
+
+    def _maybe_return_after_cancel(self, robot, now):
+        r = self.robots[robot]
+        job_id = r.return_after_cancel_id
+        r.return_after_cancel_id = None
+        if not self.config.effective_return_after_cancel:
+            return
+        if r.queue or r.job is not None or r.canceling or self._at_home_slot(robot):
+            return
+        home = self.config.robots[robot].start_zone
+        r.job = Mission(f"H-{job_id or 'CANCEL'}", robot, "RETURN_HOME", self.config.mission.return_level,
+                        [{"zone": home}], None, now, status="ACTIVE", started_at=now)
+        r.state = "HOLD"
+        self.ready[robot] = None
+
+    def check_corridor_exits(self, now):
+        """Complete post-cancel corridor exits and trigger slot replan if needed (SEGMENTS)."""
+        if not self.traffic:
+            return
+        for robot, r in self.robots.items():
+            link = self.links[robot]
+            if r.exiting_corridor and self.traffic.exiting_cleared(robot):
+                self.traffic.finish_corridor_exit(robot, now)
+                r.exiting_corridor = False
+                if link.move and link.state not in DONE and not link.cancel_wait:
+                    link.cancel()
+                else:
+                    r.canceling = link.cancel_wait = False
+                    r.state = "IDLE"
+                    link.forget()
+                    if r.queue:
+                        self.ready[robot] = None
+                    else:
+                        self._maybe_return_after_cancel(robot, now)
+            elif (r.job and not r.canceling and not r.replacing and r.state == "MOVING"
+                  and self.traffic.needs_slot_replan(robot)):
+                if link.state not in DONE:
+                    r.replacing = True
+                    link.cancel()
+                else:
+                    self._replan(robot, now)
+
     def plan(self, now):
         self._assign(now)
         for robot, r in self.robots.items():
@@ -190,8 +244,17 @@ class MissionManager:
                 self.complete(robot, now, canceled=True)
             elif r.state == "MOVING":
                 # Reserve the selected robot even while SENDING. Cancel only its accepted home leg.
-                r.canceling = True
-                self.links[robot].cancel(home=True)
+                if (self.traffic and self.traffic.mode == "SEGMENTS"
+                        and self.traffic.cancel_policy(robot, r.state, self.links[robot], now) == "EXIT_CORRIDOR"
+                        and self.traffic.start_corridor_exit(robot, now)):
+                    r.job, r.target_override = None, None
+                    r.canceling = r.exiting_corridor = True
+                    r.replacing = r.fault_stop = False
+                    r.resume_due = (self.links[robot].state in {"PAUSED", "STOPPING_PAUSE"}
+                                    or bool(self.safety.causes[robot]))
+                else:
+                    r.canceling = True
+                    self.links[robot].cancel(home=True)
         for robot in self.ready:
             r = self.robots[robot]
             if r.canceling:
@@ -259,16 +322,19 @@ class MissionManager:
         if r.canceling:
             if r.returning and event == "MISSION_FAILED":
                 return  # Wait for the terminal STATE or cancel reply.
-            if r.returning and event == "ARRIVED":
+            if (r.returning or r.exiting_corridor) and event == "ARRIVED":
                 r.zone = data["destination"]
                 r.slot = data.get("slot") if data.get("slot") in (1, 2) else None
-                self._from_state(robot, data, now, r.slot)
-                self.record("ARRIVE", now, f"{self.resources.zone_label(r.zone, r.slot)} 도착", robot=robot,
-                            destination=r.zone, return_home=True, slot=r.slot)
+                if r.returning:
+                    self._from_state(robot, data, now, r.slot)
+                    self.record("ARRIVE", now, f"{self.resources.zone_label(r.zone, r.slot)} 도착", robot=robot,
+                                destination=r.zone, return_home=True, slot=r.slot)
             if r.returning and event == "CANCEL_CONFIRMED" and data.get("at_home"):
                 r.zone = leg.destination if leg else self.config.robots[robot].start_zone
             if event in {"CANCEL_CONFIRMED", "ARRIVED", "MISSION_FAILED", "MISSION_CANCELED"}:
-                r.canceling = link.cancel_wait = False
+                if r.exiting_corridor and self.traffic:
+                    self.traffic.finish_corridor_exit(robot, now)
+                r.canceling = r.exiting_corridor = link.cancel_wait = False
                 link.forget()
                 if r.returning:
                     if r.queue or event == "ARRIVED" or data.get("at_home"):
@@ -276,6 +342,10 @@ class MissionManager:
                     else:
                         # The replacement was withdrawn while CANCEL was in flight.
                         self._replan(robot, now)
+                else:
+                    r.state = "IDLE"
+                    if not r.queue:
+                        self._maybe_return_after_cancel(robot, now)
                 if r.queue:
                     self.ready[robot] = None
             return
@@ -362,22 +432,39 @@ class MissionManager:
                     return
             if not r.job or r.job.id != mission_id:
                 continue
-            corridor = self.resources.resources[g.CORRIDOR]
-            holding = corridor.holders.get(robot)
-            pose = self.links[robot].pose
-            inside = pose is not None and self.config.corridor.region_of(pose) == g.CORRIDOR
-            uncertain = holding and (corridor.uncertain or not self.links[robot].online(now))
-            within_margin = holding and holding.state == "OCCUPIED" and (
-                pose is None or not self.resources.planner.is_clear(g.CORRIDOR, pose, self.config.resources.clear_margin_m))
-            if r.state != "FAULT" and (inside or uncertain or within_margin):
-                raise ValueError("E-423: 복도 통과 후 취소하세요.")
             link = self.links[robot]
+            if self.traffic is not None:
+                policy = self.traffic.cancel_policy(robot, r.state, link, now)
+                if policy == "EXIT_CORRIDOR" and self.traffic.start_corridor_exit(robot, now):
+                    self.decisions.resolve(robot, now, except_id=selected_card)
+                    self._cancel_job(r.job, now, "운영자 임무 취소", by)
+                    r.return_after_cancel_id = r.job.id
+                    r.job, r.target_override = None, None
+                    r.canceling = r.exiting_corridor = True
+                    r.state = "MOVING"
+                    r.replacing = r.fault_stop = False
+                    r.resume_due = link.state in {"PAUSED", "STOPPING_PAUSE"} or bool(self.safety.causes[robot])
+                    return
+            else:
+                corridor = self.resources.resources[g.CORRIDOR]
+                holding = corridor.holders.get(robot)
+                pose = link.pose
+                inside = pose is not None and self.config.corridor.region_of(pose) == g.CORRIDOR
+                uncertain = holding and (corridor.uncertain or not link.online(now))
+                within_margin = holding and holding.state == "OCCUPIED" and (
+                    pose is None or not self.resources.planner.is_clear(g.CORRIDOR, pose, self.config.resources.clear_margin_m))
+                if r.state != "FAULT" and (inside or uncertain or within_margin):
+                    raise ValueError("E-423: 복도 통과 후 취소하세요.")
+            canceled_id = r.job.id
             if link.move and (link.state not in DONE or (link.move.attempts and not link.move.remote_id
                                                         and r.state != "FAULT")):
                 r.canceling = True
                 link.cancel()
+            r.return_after_cancel_id = canceled_id
             # The clinical mission ends now. Confirm the old motion stopped before the next dispatch.
             self.complete(robot, now, canceled=True, selected_card=selected_card, by=by)
+            if not r.canceling:
+                self._maybe_return_after_cancel(robot, now)
             return
         raise ValueError("E-409: 취소할 임무가 없습니다.")
 
@@ -445,9 +532,11 @@ class MissionManager:
         if not stop or link.state == "PAUSED" or link.state in DONE:
             # The robot reported a stop (or ended its move), or no stop is needed any more.
             self.decisions.resolve(robot, now, {"STOP_UNCONFIRMED"})
-        if (local_stop and r.job) or corridor_command == "RESUME":
+        if (local_stop and (r.job or r.exiting_corridor)) or corridor_command == "RESUME":
             r.resume_due = True
-        resume = r.resume_due and (r.state == "MOVING" or (not r.job and link.state == "PAUSED")) and not stop and not stalled
+        resume = ((r.resume_due or (r.exiting_corridor and link.state == "PAUSED"))
+                  and (r.state == "MOVING" or (not r.job and link.state == "PAUSED"))
+                  and not stop and not stalled)
         if resume and link.state == "PAUSED" and hold_restart and hold_restart(robot, now):
             stop, resume = True, False
         if r.state == "FAULT" and not link.cancel_wait and not stop:

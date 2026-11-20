@@ -9,6 +9,7 @@ from part1_ui_dashboard.web import Feed, create_app
 from part3_fleet_manager.core.config import load_config
 from part3_fleet_manager.core.deadlock import DeadlockManager
 from part3_fleet_manager.core.resource_manager import ResourceManager, RobotReport
+from part3_fleet_manager.core.segments import SegmentManager
 from part3_fleet_manager.core.store import Store
 
 A, B = "robot_a", "robot_b"
@@ -53,6 +54,15 @@ def traffic(cfg):
         dl.tick(ts)
     dl.arrived(dl.yielding[B].detour,23)
     yield from rm.events
+
+    # 4O segment preemption event
+    sm = SegmentManager(replace(cfg, traffic=replace(cfg.traffic, mode="SEGMENTS")))
+    seg_reports = {A: RobotReport(cfg.zones["C"], True, departed=True), B: RobotReport(cfg.zones["E"], True)}
+    sm.request(A, "A", 2, 0, mission_id="M-PRE-A")
+    sm.tick(1, seg_reports)
+    sm.request(B, "B", 3, 2, mission_id="M-PRE-B")
+    sm.tick(3, seg_reports)
+    yield from sm.events
 
 
 def test_41_actual_fleet_event_titles_reasons_and_journal(tmp_path,monkeypatch):

@@ -11,9 +11,11 @@ BED = "/patient/bed_exit"
 A = "robot_a"
 
 
-@pytest.fixture
-def sim(cfg, tmp_path):
-    fleet = Simulation(replace(cfg, db_path=str(tmp_path / "4m.db")))
+@pytest.fixture(params=["LEGACY", "SEGMENTS"])
+def sim(cfg, tmp_path, request):
+    sc = replace(cfg, db_path=str(tmp_path / f"4m-{request.param}.db"),
+                 traffic=replace(cfg.traffic, mode=request.param))
+    fleet = Simulation(sc)
     yield fleet
     fleet.core.store.close()
 

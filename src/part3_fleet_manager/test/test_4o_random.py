@@ -1,0 +1,329 @@
+"""Stage 4O · 7C: Random event stress test (50 seeds default, SEGMENTS_RANDOM_SEEDS=300 for full run)."""
+import os
+import random
+
+import pytest
+
+from kinematic_mock import KinematicSim
+from part3_fleet_manager.core.robot_protocol import DONE
+
+A, B = "robot_a", "robot_b"
+ZONES = ("A", "B", "C", "D", "E", "F")
+DEFAULT_SEEDS = int(os.environ.get("SEGMENTS_RANDOM_SEEDS", "50"))
+SIM_DURATION_S = 600.0
+DRAIN_LIMIT_S = 480.0
+DT = 0.2
+
+
+def _travel_dir(bot, smap) -> int:
+    if bot.state != "MOVING" or not bot.path:
+        return 0
+    dp = smap.projection(bot.path[0]) - smap.projection(bot.pose)
+    if abs(dp) < 1e-4:
+        return 0
+    return 1 if dp > 0 else -1
+
+
+def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> dict:
+    rng = random.Random(seed)
+    sim = KinematicSim(cfg, mode="SEGMENTS", speed_mps=0.2)
+    log: list[str] = []
+    submitted_refs: list[str] = []
+    stats = {"missions": 0, "cancels": 0, "requeues": 0, "pauses": 0, "drops": 0, "preempts": 0, "safety_cards": 0}
+
+    # Pre-schedule random events across the 10-minute window.
+    next_event_t = rng.uniform(0.5, 4.0)
+    paused_until: dict[str, float] = {}
+    both_wait_s = 0.0
+    max_both_wait_s = 0.0
+    preempt_wait_since: dict[str, float] = {}
+    max_preempt_wait_s = 0.0
+    confirm_at: dict[str, float] = {}
+    card_answered: set[str] = set()
+
+    def fail(msg: str):
+        tail = "\n  ".join(log[-40:])
+        raise AssertionError(f"[seed={seed} t={sim.now:.1f}s] {msg}\nRecent events ({len(log)} total):\n  {tail}")
+
+    def check_invariants(phase: str):
+        nonlocal both_wait_s, max_both_wait_s, max_preempt_wait_s
+        sm = sim.core.resources
+        smap = sm.map
+        now = sim.now
+
+        # Invariant 1 & 2: narrow segment exclusivity, direction consistency, and held-before-entry.
+        for name in smap.narrow_names:
+            seg = sm.segments[name]
+            # 1a. Holder-level invariants
+            if seg.kind == "single" and len(seg.holders) > 1:
+                fail(f"Inv1(holder): single segment {name} has multiple holders {list(seg.holders)}")
+            if seg.kind == "one_way":
+                dirs = {h.direction for h in seg.holders.values() if h.direction}
+                if len(dirs) > 1:
+                    fail(f"Inv1(holder): one_way segment {name} has opposite holder directions {seg.holders}")
+            # 1b & 2. Physical pose invariants
+            inside_robots = []
+            for r, bot in sim.robots.items():
+                if seg.spec.contains(bot.pose):
+                    inside_robots.append(r)
+                    if r not in seg.holders:
+                        fail(f"Inv2: {r} physically inside unheld narrow segment {name} at {bot.pose} (state={bot.state}, holders={list(seg.holders)})")
+            if seg.kind == "single" and len(inside_robots) > 1:
+                fail(f"Inv1(phys): single segment {name} contains {inside_robots}")
+            if seg.kind == "one_way" and len(inside_robots) > 1:
+                phys_dirs = set()
+                for r in inside_robots:
+                    h = seg.holders.get(r)
+                    d = (h.direction if h and h.direction else 0) or _travel_dir(sim.robots[r], smap)
+                    if d:
+                        phys_dirs.add(d)
+                if len(phys_dirs) > 1:
+                    fail(f"Inv1(phys): one_way segment {name} has opposite robots {inside_robots}")
+
+        # Also check single slots never have > 1 holder.
+        for (_, _), sname in smap.slot_names.items():
+            seg = sm.segments[sname]
+            if len(seg.holders) > 1:
+                fail(f"Inv1(slot): single slot {sname} has multiple holders {list(seg.holders)}")
+
+        # Invariant 3: both robots not simultaneously stuck in traffic wait > 30 s (excluding safety pause & link drop).
+        any_safety = any(bool(sim.core.safety.causes[r]) for r in sim.robots)
+        any_offline = any((not sim.core.link_ok[r]) or (now < sim.robots[r].drop_until) for r in sim.robots)
+        if not any_safety and not any_offline:
+            waiting = []
+            for r, bot in sim.robots.items():
+                unit = sim.core.mission.robots[r]
+                vis = sim.core.visible_state(r, unit)
+                is_wait = (
+                    (vis == "HOLD" or sm.is_stop_line_paused(r) or r in sm.pending)
+                    and bot.state in ("IDLE", "COMPLETE", "CANCELED", "PAUSED")
+                    and (unit.job is not None or unit.exiting_corridor or r in sm.pending or r in sm.stop_lines)
+                )
+                if is_wait:
+                    waiting.append(r)
+            if len(waiting) == len(sim.robots):
+                both_wait_s += DT
+                max_both_wait_s = max(max_both_wait_s, both_wait_s)
+                if both_wait_s > 30.0:
+                    reasons = {r: sim.core.wait_reason(r) for r in sim.robots}
+                    poses = {r: (round(sim.robots[r].pose[0], 2), round(sim.robots[r].pose[1], 2)) for r in sim.robots}
+                    holders = {k: list(v.holders) for k, v in sm.segments.items() if v.holders}
+                    fail(f"Inv3({phase}): both robots stuck in traffic wait for {both_wait_s:.1f}s > 30s; reasons={reasons} poses={poses} holders={holders}")
+            else:
+                both_wait_s = 0.0
+
+        # Invariant 4: when preemption conditions hold, high Level does not wait > decision_window_s + 2.0 s.
+        limit_s = cfg.resources.decision_window_s + 2.0
+        for r in sim.robots:
+            leg = sm.pending.get(r)
+            if leg is not None and sm.eligible(r) and not any_safety and not any_offline:
+                c = sm._build_contender(r, leg, is_reacquire=False)
+                if c is not None:
+                    ok, preemptions, _ = sm._evaluate(c, now)
+                    if ok and preemptions:
+                        start = preempt_wait_since.setdefault(r, now)
+                        waited = now - start
+                        max_preempt_wait_s = max(max_preempt_wait_s, waited)
+                        if waited > limit_s + 1e-6:
+                            fail(f"Inv4({phase}): {r} waited {waited:.2f}s > {limit_s:.2f}s despite preemptable {preemptions}")
+                        continue
+            preempt_wait_since.pop(r, None)
+
+    def handle_operator_routine():
+        now = sim.now
+        # Auto-confirm WAIT_CONFIRM after a brief random 0.4~1.6 s pause during active window, or immediately in drain.
+        for r, unit in sim.core.mission.robots.items():
+            if unit.state == "WAIT_CONFIRM" and unit.job:
+                due = confirm_at.setdefault(r, now + (rng.uniform(0.4, 1.6) if now < duration_s else 0.0))
+                if now >= due:
+                    confirm_at.pop(r, None)
+                    sim.confirm(r, unit.job.id)
+                    log.append(f"t={now:.1f} CONFIRM {r} {unit.job.id}")
+            else:
+                confirm_at.pop(r, None)
+        # Auto-resume expired random manual pauses.
+        for r in list(paused_until):
+            if now >= paused_until[r]:
+                paused_until.pop(r)
+                if sim.core.safety.causes[r]:
+                    sim.resume(r)
+                    log.append(f"t={now:.1f} RESUME {r}")
+        # If a boundary drop ever caused UNKNOWN while robot is back online, operator confirms clear.
+        sm = sim.core.resources
+        for name, seg in sm.segments.items():
+            if seg.state == "UNKNOWN" and all(sim.core.link_ok[r] for r in seg.uncertain):
+                sim.cmd("RESOURCE_CLEAR_CONFIRM", resource=name)
+                log.append(f"t={now:.1f} CLEAR_UNKNOWN {name}")
+        # Operator retries any robot waiting in FAULT after a head-on retreat back to previous zone.
+        for r, unit in sim.core.mission.robots.items():
+            if unit.state == "FAULT" and unit.job and not unit.canceling and not unit.replacing and not sim.core.safety.causes[r]:
+                sim.cmd("RETRY", robot=r)
+                log.append(f"t={now:.1f} RETRY {r} {unit.job.id}")
+        # Operator resolves open safety-net cards (PROXIMITY / HEAD_ON / DEADLOCK) after 1.0 s reaction time.
+        for card_id, card in list(sim.core.decisions.cards.items()):
+            if card_id in card_answered or now - card["created_at"] < 1.0:
+                continue
+            if any(sim.core.safety.causes.get(r) for r in card.get("robots", ())):
+                continue
+            opts = [o["id"] for o in card["options"]]
+            choice = None
+            if card.get("recommended") in opts:
+                choice = card["recommended"]
+            elif card.get("context") == "PROXIMITY":
+                r = card["robots"][0]
+                wait = sim.core.collision.near.get(r)
+                peer = wait.peer if wait else None
+                for cand in ("self_first", "peer_first", "return", "retry"):
+                    if cand not in opts:
+                        continue
+                    if cand == "self_first" and (not peer or not sim.core.collision.can_go_first(r, peer, sim.core.mission, now)):
+                        continue
+                    if cand == "peer_first" and (not peer or not sim.core.collision.can_go_first(peer, r, sim.core.mission, now)):
+                        continue
+                    if cand == "return" and not (sim.core.mission.robots[r].job or sim.core.mission.robots[r].exiting_corridor):
+                        continue
+                    choice = cand
+                    break
+            if choice is None and opts:
+                choice = opts[0]
+            if choice:
+                card_answered.add(card_id)
+                stats["safety_cards"] += 1
+                sim.choose(card_id, choice)
+                log.append(f"t={now:.1f} CARD_CHOOSE {card.get('context') or card['kind']} {card['robots']} -> {choice}")
+
+    def inject_random_event():
+        now = sim.now
+        # Choose event type weighted toward rich traffic mixing.
+        active_missions = [
+            (r, u.job) for r, u in sim.core.mission.robots.items()
+            if u.job is not None and u.job.kind != "RETURN_HOME"
+        ]
+        queued_missions = [
+            (r, j) for r, u in sim.core.mission.robots.items() for j in u.queue
+        ] + [(None, j) for j in sim.core.mission.unassigned]
+
+        roll = rng.random()
+        if roll < 0.56 and len(active_missions) + len(queued_missions) < 6:
+            # New random mission (kind, level, zones)
+            kind = rng.choice(("PATIENT", "MED", "CALL"))
+            lvl = rng.choice((1, 2, 3))
+            if kind == "PATIENT":
+                z1, z2 = rng.sample(ZONES, 2)
+                ref = sim.submit_patient(z1, z2, level=lvl)
+                log.append(f"t={now:.1f} NEW PATIENT L{lvl} {z1}->{z2} ({ref})")
+            elif kind == "MED":
+                stops = rng.sample(ZONES, rng.choice((2, 3)))
+                ref = sim.submit_med(stops, level=lvl)
+                log.append(f"t={now:.1f} NEW MED L{lvl} {'->'.join(stops)} ({ref})")
+            else:
+                z = rng.choice(ZONES)
+                ref = sim.submit_call(z, level=lvl)
+                log.append(f"t={now:.1f} NEW CALL L{lvl} {z} ({ref})")
+            submitted_refs.append(ref)
+            stats["missions"] += 1
+        elif roll < 0.78 and active_missions:
+            # Cancel an active mission at any time (including mid-corridor!), sometimes re-submitting with higher Level!
+            r, job = rng.choice(active_missions)
+            sim.cancel(job.id)
+            stats["cancels"] += 1
+            in_narrow = sim.core.resources.holds_occupied_narrow(r)
+            log.append(f"t={now:.1f} CANCEL {job.id} ({r}, in_narrow={in_narrow})")
+            if rng.random() < 0.50:
+                new_lvl = min(3, job.level + 1)
+                if job.kind == "PATIENT_TRANSPORT":
+                    z1, z2 = rng.sample(ZONES, 2)
+                    ref = sim.submit_patient(z1, z2, level=new_lvl)
+                    log.append(f"t={now:.1f} REQUEUE PATIENT L{new_lvl} {z1}->{z2} ({ref})")
+                elif job.kind == "MED_ROUND":
+                    stops = rng.sample(ZONES, 2)
+                    ref = sim.submit_med(stops, level=new_lvl)
+                    log.append(f"t={now:.1f} REQUEUE MED L{new_lvl} {'->'.join(stops)} ({ref})")
+                else:
+                    z = rng.choice(ZONES)
+                    ref = sim.submit_call(z, level=new_lvl)
+                    log.append(f"t={now:.1f} REQUEUE CALL L{new_lvl} {z} ({ref})")
+                submitted_refs.append(ref)
+                stats["requeues"] += 1
+        elif roll < 0.90:
+            # Pause a robot for 2~6 s, then resume.
+            r = rng.choice((A, B))
+            if r not in paused_until and not sim.core.safety.causes[r]:
+                dur = rng.uniform(2.0, 6.0)
+                sim.pause(r)
+                paused_until[r] = now + dur
+                stats["pauses"] += 1
+                log.append(f"t={now:.1f} PAUSE {r} for {dur:.1f}s")
+        else:
+            # 2 s link drop.
+            r = rng.choice((A, B))
+            if now >= sim.robots[r].drop_until:
+                sim.drop_link(r, 2.0)
+                stats["drops"] += 1
+                log.append(f"t={now:.1f} DROP_LINK {r} 2.0s")
+
+    try:
+        # Phase 1: 10 simulated minutes of mixed random events.
+        while sim.now < duration_s - 1e-9:
+            if sim.now >= next_event_t:
+                inject_random_event()
+                next_event_t = sim.now + rng.uniform(4.0, 16.0)
+            handle_operator_routine()
+            out = sim.step(DT)
+            stats["preempts"] += sum(1 for e in out.events if e["type"] == "RESOURCE_PREEMPT")
+            check_invariants("active")
+
+        # Phase 2: Resume any active manual pause and drain all missions back to home.
+        for r in list(paused_until):
+            paused_until.pop(r)
+            if sim.core.safety.causes[r]:
+                sim.resume(r)
+                log.append(f"t={sim.now:.1f} DRAIN_RESUME {r}")
+
+        drain_end = sim.now + DRAIN_LIMIT_S
+        while sim.now < drain_end - 1e-9:
+            handle_operator_routine()
+            out = sim.step(DT)
+            stats["preempts"] += sum(1 for e in out.events if e["type"] == "RESOURCE_PREEMPT")
+            check_invariants("drain")
+            # Stop draining early once everything is completely settled at home.
+            all_idle_home = all(
+                sim.core.mission.robots[r].state == "IDLE"
+                and sim.core.mission.robots[r].job is None
+                and not sim.core.mission.robots[r].queue
+                and not sim.core.mission.robots[r].exiting_corridor
+                and sim.core.mission.robots[r].zone == cfg.robots[r].start_zone
+                and sim.robots[r].state in DONE
+                for r in sim.robots
+            )
+            if all_idle_home and not sim.core.mission.unassigned and not sim.core.decisions.cards:
+                break
+
+        # Invariant 5: all missions DONE/CANCELED, both robots IDLE at home, no open cards!
+        snap = sim.core.snapshot(sim.now)
+        for m in snap["missions"]:
+            if m["status"] not in ("DONE", "CANCELED"):
+                fail(f"Inv5: mission {m['mission_id']} not terminal (status={m['status']})")
+        if sim.core.mission.unassigned:
+            fail(f"Inv5: unassigned missions left: {[j.id for j in sim.core.mission.unassigned]}")
+        for r in sim.robots:
+            unit = sim.core.mission.robots[r]
+            home = cfg.robots[r].start_zone
+            if unit.state != "IDLE" or unit.zone != home or unit.job is not None:
+                fail(f"Inv5: {r} not IDLE at home {home} (state={unit.state}, zone={unit.zone}, pose={sim.robots[r].pose}, wait={sim.core.wait_reason(r)})")
+        if sim.core.decisions.cards:
+            fail(f"Inv5: open decision cards remain: {list(sim.core.decisions.cards.values())}")
+        for name in sim.core.resources.map.narrow_names:
+            if sim.core.resources.segments[name].holders:
+                fail(f"Inv5: narrow segment {name} still held by {sim.core.resources.segments[name].holders}")
+
+        stats["max_both_wait_s"] = round(max_both_wait_s, 2)
+        stats["max_preempt_wait_s"] = round(max_preempt_wait_s, 2)
+        return stats
+    finally:
+        sim.close()
+
+
+@pytest.mark.parametrize("seed", range(DEFAULT_SEEDS))
+def test_random_segments_invariants(cfg, seed):
+    run_random_seed(cfg, seed)

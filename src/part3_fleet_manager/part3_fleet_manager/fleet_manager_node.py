@@ -10,7 +10,7 @@ from rclpy.node import Node
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 
-from .core.config import CORRIDOR_MODES, load_config
+from .core.config import CORRIDOR_MODES, TRAFFIC_MODES, load_config
 from .core.fleet_core import FleetCore
 from .core.schemas import dumps
 from .robot_link import RobotLink
@@ -32,7 +32,12 @@ class FleetManagerNode(Node):
         corridor_mode = self.declare_parameter("corridor_mode", config.corridor.mode).value
         if corridor_mode not in CORRIDOR_MODES:
             raise ValueError(f"corridor_mode must be one of {CORRIDOR_MODES}")
-        config = replace(config, corridor=replace(config.corridor, mode=corridor_mode))
+        traffic_mode = self.declare_parameter("traffic_mode", "").value or config.traffic.mode
+        if traffic_mode not in TRAFFIC_MODES:
+            raise ValueError(f"traffic_mode must be one of {TRAFFIC_MODES}")
+        config = replace(config, corridor=replace(config.corridor, mode=corridor_mode),
+                         traffic=replace(config.traffic, mode=traffic_mode))
+        self.get_logger().info(f"교통 판단 모드 · {config.traffic.mode}")
         monitor = config.safety.bed_monitor
         required = self.declare_parameter("bed_monitor_require_at_start", monitor.require_at_start).value
         config = replace(config, assignment=replace(config.assignment, mode=mode),

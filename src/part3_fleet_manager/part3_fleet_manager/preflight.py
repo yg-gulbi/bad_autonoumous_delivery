@@ -21,7 +21,7 @@ from std_msgs.msg import Bool, String
 
 from .core.config import ConfigError, load_config
 from .preflight_checks import (classifier_line, compare_points, discovery_ports, find_goal_file, goal_points,
-                               slot_line, state_rows)
+                               slot_line, state_rows, traffic_mode_line)
 from .robot_link import AMCL_QOS, DockStatus, HazardDetectionVector
 
 ENVIRONMENT = ("ROS_DOMAIN_ID", "ROS_DISCOVERY_SERVER", "ROS_SUPER_CLIENT", "ROS_AUTOMATIC_DISCOVERY_RANGE",
@@ -175,6 +175,7 @@ def main(args=None):
     except ConfigError as exc:
         print(f"설정 오류 · {exc}\n실제 실행 안 됨")
         return 1
+    print(traffic_mode_line(config))
     for warning in config.exit_warnings():
         print("경고 · " + warning)
     goals = Path(options.goals_file).expanduser() if options.goals_file else find_goal_file(options.config_file)

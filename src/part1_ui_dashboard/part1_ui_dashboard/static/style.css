@@ -29,6 +29,15 @@
   --header-edge: #4A545E;
   --veil: rgba(27,32,38,.55);
   --shadow: rgba(0,0,0,.32);
+  --seg-a: rgba(29,86,201,.26);
+  --seg-a-stroke: #1D56C9;
+  --seg-b: rgba(124,58,237,.26);
+  --seg-b-stroke: #7C3AED;
+  --seg-both: rgba(194,122,0,.26);
+  --seg-both-stroke: #C27A00;
+  --seg-unknown: rgba(180,35,27,.28);
+  --seg-free-stroke: #BCC5CE;
+  --violet: #6D28D9;
   --font: "IBM Plex Sans KR","Noto Sans KR","Noto Sans CJK KR",sans-serif;
   --map-label: 12px;
   --body: 14px;
@@ -965,4 +974,77 @@ button:disabled {
 
 .via-note {
   color: var(--muted);
+}
+
+.blue-text {
+  color: var(--primary);
+}
+
+.violet-text {
+  color: var(--violet);
+}
+
+.seg-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s);
+  margin-top: var(--s);
+}
+
+.seg-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--u);
+  padding: 2px var(--s);
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  background: var(--white);
+  font-size: var(--small);
+}
+
+.seg-chip.a {
+  background: var(--seg-a);
+  border-color: var(--seg-a-stroke);
+}
+
+.seg-chip.b {
+  background: var(--seg-b);
+  border-color: var(--seg-b-stroke);
+}
+
+.seg-chip.both {
+  background: var(--seg-both);
+  border-color: var(--seg-both-stroke);
+}
+
+.seg-chip.unknown {
+  background: var(--risk-bg);
+  border-color: var(--danger);
+  color: var(--risk-ink);
+}
+
+.seg-chip.granted {
+  border-style: dashed;
+}
+
+.seg-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.seg-dot.a {
+  background: var(--seg-a-stroke);
+}
+
+.seg-dot.b {
+  background: var(--seg-b-stroke);
+}
+
+.cancel-note {
+  color: var(--wait-accent);
+  font-size: var(--small);
+  font-weight: 600;
 }

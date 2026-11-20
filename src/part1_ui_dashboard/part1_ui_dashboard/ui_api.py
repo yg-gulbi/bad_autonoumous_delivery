@@ -70,13 +70,13 @@ def mission(form):
     return schemas.parse_mission_req(schemas.dumps(data))
 
 
-def command(form, *, robots=None):
+def command(form, *, robots=None, resources=None):
     cmd = form.get("cmd")
     if not isinstance(cmd, str) or cmd not in schemas.COMMAND_FIELDS:
         raise ValueError("관제 명령을 확인하세요.")
     data = {key: form.get(key) for key in schemas.COMMAND_FIELDS[cmd]}
     data.update(v=1, cmd=cmd, cmd_id=request_id(), by=_operator(form))
-    return schemas.parse_operator_cmd(schemas.dumps(data), robots=robots)
+    return schemas.parse_operator_cmd(schemas.dumps(data), robots=robots, resources=resources)
 
 
 def decision(form):
@@ -96,6 +96,7 @@ EVENTS = {
     "LEG_START": "{robot} 구간 출발", "ARRIVE": "{robot} · {zone} 도착", "CONFIRM_STEP": "{zone} 확인 결과",
     "MISSION_DONE": "{robot} 임무 완료", "MISSION_CANCELED": "임무 취소", "RESOURCE_REQUEST": "{robot} 통행 요청",
     "RESOURCE_GRANT": "{robot} {resource} 진입 허가", "RESOURCE_HOLD": "{robot} 진입 전 대기",
+    "RESOURCE_PREEMPT": "{robot} {resource} 선점",
     "RESOURCE_ENTER": "{robot} {resource} 진입 확인", "RESOURCE_RELEASE": "{robot} {resource} 통과 완료",
     "RESOURCE_UNKNOWN": "{resource} 점유 확인 불가", "RESOURCE_CLEAR_CONFIRM": "{resource} 현장 확인",
     "DEADLOCK_DETECTED": "교착 감지", "YIELD_START": "{robot} 교착 양보 시작", "YIELD_DONE": "{robot} 교착 양보 완료",
@@ -115,11 +116,35 @@ EVENTS = {
 }
 RULES = {"GAP": "앞 로봇과 간격 유지", "FOLLOW": "앞 로봇 정지", "ONLY": "단독 요청", "LEVEL": "높은 응급도 우선", "REQUEST_TIME": "먼저 요청한 쪽",
          "SUBMIT_ORDER": "먼저 접수한 쪽", "ENTRY_ORDER": "복도에 나중에 들어온 쪽이 양보",
+         "INSIDE": "칸 안·정지선 안 우선", "ORDER": "설정에 적힌 로봇 순서", "PREEMPT": "응급도 선점",
          "ROBOT_ID": "동점 로봇 식별자 순", "CAPACITY": "자원 정원 도달", "DIRECTION": "복도 반대 방향 통행 중", "NO_PREEMPT": "이미 허가된 로봇은 회수하지 않음",
          "BLOCKED": "막힘 해제 대기", "UNKNOWN": "점유 확인 대기", "CROSSROAD": "교차로는 한 대씩"}
 
 
 DEFAULT_ROBOT_NAMES = {"robot_a": "침상형 이송 로봇", "robot_b": "약품 운송 로봇"}
+_SEGMENT_LABELS = {
+    "CORRIDOR_TOP": "복도 위쪽",
+    "CORRIDOR_BOTTOM": "복도 아래쪽",
+    "CROSSROAD": "교차로",
+    "HALL_TOP": "위쪽 홀",
+    "HALL_BOTTOM": "아래쪽 홀",
+}
+
+
+def resource_label(name, names, segment_labels=None):
+    if name == "CORRIDOR":
+        return "복도"
+    if name in ("ROOM_B", "ROOM_E"):
+        return names.get(name[-1], name[-1] + " 구역") + " 출입"
+    if segment_labels and name in segment_labels:
+        return segment_labels[name]
+    if name in _SEGMENT_LABELS:
+        return _SEGMENT_LABELS[name]
+    if name in ("DOOR_B", "DOOR_E"):
+        return names.get(name[-1], name[-1] + " 구역") + " 문"
+    if len(name) == 2 and name[0] in "ABCDEF" and name[1] in "12":
+        return f"{names.get(name[0], name[0] + ' 구역')} {name[1]}번 자리"
+    return names.get(name[-1], name[-1] + " 구역") + " 출입"
 
 
 def legacy_names(text, robots, names=None):
@@ -134,7 +159,7 @@ def legacy_names(text, robots, names=None):
     return text.replace("공용도로", "복도").replace("통로", "복도")
 
 
-def present_event(event, names, robots=None, card=None):
+def present_event(event, names, robots=None, card=None, segment_labels=None):
     robots = robots or DEFAULT_ROBOT_NAMES
     d = dict(event["detail"])
     kind, reason = event["type"], d.get("reason") or ""
@@ -142,8 +167,8 @@ def present_event(event, names, robots=None, card=None):
     if d.get("slot") == 2 and d.get("destination") in names:
         zone += " 2번 자리"
     robot = robots.get(event.get("robot"), "")
-    resources = ["복도" if n == "CORRIDOR" else names.get(n[-1], n[-1] + " 구역") + " 출입"
-                 for n in d.get("resources", [])]
+    res_keys = [d["segment"]] if kind == "RESOURCE_PREEMPT" and d.get("segment") else d.get("resources", [])
+    resources = [resource_label(n, names, segment_labels) for n in res_keys]
     title = EVENTS.get(kind, "관제 기록").format(robot=robot, zone=zone, resource=" · ".join(resources) or "구간",
                                                kind=KINDS.get(d.get("mission_type"), "이송")).strip()
     if kind == "OBSTACLE_REPORT" and d.get("source") == "yolo":

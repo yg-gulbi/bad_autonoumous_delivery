@@ -166,13 +166,8 @@ class ObstacleReports:
         """Same sharing as a 30 s stall: other robots get no new grant into this region."""
         core = self.core
         pose = core.links[robot].pose
-        region = core.config.corridor.region_of(pose) if pose is not None else None
+        region = core.traffic.block_robot(robot, pose, now)
         core.blocks[robot] = region
-        resource = core.resources.resources.get(region)
-        if resource is not None:
-            if not resource.stall_blockers:
-                resource.blocked_since = now
-            resource.stall_blockers.add(robot)
         stall = core.stalls[robot]
         stall.short = stall.long = True  # moving again reports UNBLOCKED, as for a long stall
         stall.obstacle = view

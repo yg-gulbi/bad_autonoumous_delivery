@@ -6,7 +6,19 @@ const robotName = r => S?.robots[r]?.label || cfg.robot_names?.[r] || "관제";
 const zn = z => cfg.names[z] || "구역 미확인";
 const zs = (z, slot) => zn(z) + (slot === 2 ? " 2번 자리" : "");
 const resNames = { FREE: "비어 있음", GRANTED: "허가", OCCUPIED: "점유 중", UNKNOWN: "점유 불명" };
-const resLabel = key => key === "CORRIDOR" ? "복도" : zn(key.slice(-1)) + " 출입";
+function resLabel(key) {
+    if (key === "CORRIDOR") return "복도";
+    if (key === "ROOM_B" || key === "ROOM_E") return zn(key.slice(-1)) + " 출입";
+    if (cfg.segment_labels?.[key]) return cfg.segment_labels[key];
+    if (key === "CORRIDOR_TOP") return "복도 위쪽";
+    if (key === "CORRIDOR_BOTTOM") return "복도 아래쪽";
+    if (key === "CROSSROAD") return "교차로";
+    if (key === "DOOR_B" || key === "DOOR_E") return zn(key.slice(-1)) + " 문";
+    if (key === "HALL_TOP") return "위쪽 홀";
+    if (key === "HALL_BOTTOM") return "아래쪽 홀";
+    if (/^[A-F][12]$/.test(key)) return zn(key[0]) + " " + key[1] + "번 자리";
+    return zn(key.slice(-1)) + " 출입";
+}
 const routeText = m => m.stops.map(zn).join(" → ");
 function tm(t) {
     if (t == null) return "미수신";
@@ -23,10 +35,15 @@ function displayState(id, robot) {
     const state = robot.state, road = S?.resources.CORRIDOR;
     // 4K (D-32): a stop cause is a request until the robot's STATE reports standing still.
     if (state === "SAFE_PAUSE") return stopConfirmed(robot) ? ["정지 확인", "red"] : ["정지 요청 중(확인 전)", "amber"];
+    if (robot.canceling_exit) return ["복도 이탈 후 정지", "amber"];
     if (state === "HOLD" && robot.proximity) return [robot.proximity.head_on ? "마주 봄" : "가까움 정지", "amber"];
     if (state === "HOLD" && robot.zone_wait) {
         const access = {NEAR_START:"출발 대기", INBOUND:"도착 로봇 대기", OUTBOUND:"출구 양보"};
         return [access[robot.zone_wait.rule] || (robot.zone_wait.exit ? "출구 막힘 대기" : "목적지 대기"), "amber"];
+    }
+    if (S?.traffic?.mode === "SEGMENTS") {
+        const sw = S.traffic.stop_line_waits?.[id];
+        if (sw?.by) return [sw.paused ? "정지선 대기" : "정지선 이동", "amber"];
     }
     if (state === "HOLD" && road?.follow_stop?.rear === id) return ["후행 대기", "amber"];
     if (["MOVING","SENDING","RETURNING"].includes(state)) {
@@ -195,7 +212,26 @@ function situation(fresh) {
         if (res.state === "UNKNOWN") add(1, resLabel(key) + " 점유 불명", "현장에서 점유 상태를 확인하세요.", true);
         if (res.blocked) add(1, "이동 경로 막힘", res.blocked_robots.map(robotName).join(" · "), true);
     }
+    const stopWaits = S.traffic?.mode === "SEGMENTS" ? (S.traffic.stop_line_waits || {}) : {};
+    if (S.traffic?.mode === "SEGMENTS") {
+        let hasPreempt = false;
+        for (const [id, sw] of Object.entries(stopWaits)) {
+            if (!sw.by) continue;
+            hasPreempt = true;
+            add(2, sw.reason, sw.paused ? robotName(id) + " 정지선 대기 · " + (sw.segment_label || resLabel(sw.segment)) + " 비면 재개" : robotName(id) + " 정지선까지 이동 후 대기", true);
+        }
+        const lp = S.traffic.last_preempt;
+        if (!hasPreempt && lp && S.stamp - lp.ts <= 10) {
+            add(1, lp.reason, robotName(lp.by) + " 우선 통행 중", true);
+        }
+        for (const [segKey, seg] of Object.entries(S.traffic.segments || {})) {
+            if (seg.state === "UNKNOWN" && /^[A-F][12]$/.test(segKey)) {
+                add(1, resLabel(segKey) + " 점유 불명", "현장에서 점유 상태를 확인하세요.", true);
+            }
+        }
+    }
     for (const [id,r] of units) {
+        if (r.canceling_exit) add(1, "취소됨 · 복도를 빠져나온 뒤 정지", r.label + " 복도 구간 이탈 중", false);
         if (r.proximity) add(2, r.proximity.reason, r.label + " 정지 중",
             {type:"PROXIMITY_STOP", ts:r.proximity.since, robot:id, detail:r.proximity});
         if (r.zone_wait) {
@@ -205,7 +241,7 @@ function situation(fresh) {
                 ? peer.label + "을 다른 구역으로 보내면 출발합니다" : "목적지가 비면 자동으로 출발합니다."),
                 {type:"ZONE_OCCUPIED_HOLD", ts:r.zone_wait.since, robot:id, detail:{...r.zone_wait, destination:r.zone_wait.zone}});
         }
-        if (!r.proximity && !r.zone_wait && id !== follow?.rear && ["HOLD", "GIVE_WAY", "YIELDING"].includes(r.state))
+        if (!r.proximity && !r.zone_wait && !stopWaits[id]?.by && id !== follow?.rear && ["HOLD", "GIVE_WAY", "YIELDING"].includes(r.state))
             add(1, cfg.states[r.state], r.wait_reason || r.label, true);
         if (r.state === "MOVING" && r.stall_s > 0 && !Object.values(S.resources).some(res => res.blocked_robots?.includes(id)))
             add(1, "일시 정체", r.label + " · " + Math.floor(r.stall_s) + "초 동안 이동 없음", true);

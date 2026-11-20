@@ -6,10 +6,69 @@ from math import dist
 
 from .resource_manager import Leg
 from .robot_protocol import DONE, Move
-from .zone_traffic import ZoneTraffic
+from .zone_traffic import AccessWait, Departure, IN_MOTION, ZoneTraffic
 
 ZONE_CARD_S = 30
 PROXIMITY_CARD_S = 10
+
+
+class _NearStartGuard:
+    """Common pre-departure 0.9 m moving-peer check and departure log (no ZoneTraffic radius rules)."""
+
+    def __init__(self, rm, links, parked_slot):
+        self.rm, self.links, self.parked_slot = rm, links, parked_slot
+        self.departures = {}
+        self.waits = {}
+
+    def sent(self, robot, now):
+        leg = self.rm.active.get(robot)
+        if leg is None:
+            return
+        previous = self.departures.get(robot)
+        if previous and previous.leg is leg:
+            return
+        slot = self.parked_slot(robot)
+        self.departures[robot] = Departure(leg, slot[0] if slot else None, now)
+
+    def reconcile(self, now):
+        for robot, departure in list(self.departures.items()):
+            if self.rm.active.get(robot) is not departure.leg:
+                del self.departures[robot]
+        for robot, wait in list(self.waits.items()):
+            if wait.leg is not (self.rm.active.get(robot) or self.rm.pending.get(robot)):
+                self._set(wait.leg, None, now)
+
+    def before_departure(self, leg, now):
+        robot = leg.robot
+        pose = self.links[robot].pose
+        slot = self.parked_slot(robot)
+        block = None
+        for peer, link in self.links.items():
+            if peer == robot or pose is None or link.pose is None:
+                continue
+            starting = link.move and link.move.attempts and not link.move.remote_id and not link.move.finished
+            if ((link.state in IN_MOTION or starting or link.control_sent == "RESUME")
+                    and dist(pose, link.pose) < self.rm.config.safety.proximity_resume_m):
+                block = peer, slot[0] if slot else leg.destination, "NEAR_START", "가까이 움직이는 로봇 대기"
+                break
+        self._set(leg, block, now)
+        return block is not None
+
+    def _set(self, leg, block, now):
+        robot = leg.robot
+        old = self.waits.get(robot)
+        if old and block and old.leg is leg and (old.peer, old.zone, old.rule) == block[:3]:
+            return
+        if old:
+            del self.waits[robot]
+            self.rm.record("ZONE_OCCUPIED_CLEAR", now, f"{old.reason} 해제", robot=robot,
+                           mission_id=old.leg.mission_id, destination=old.leg.destination, zone=old.zone,
+                           peer=old.peer, rule=old.rule)
+        if block:
+            peer, zone, rule, reason = block
+            self.waits[robot] = AccessWait(leg, peer, zone, rule, reason, now)
+            self.rm.record("ZONE_OCCUPIED_HOLD", now, reason, robot=robot, mission_id=leg.mission_id,
+                           destination=leg.destination, zone=zone, peer=peer, rule=rule)
 
 
 @dataclass
@@ -30,12 +89,14 @@ class FirstToMove:
 
 
 class CollisionControl:
-    def __init__(self, resources, links, decisions):
+    def __init__(self, resources, links, decisions, *, enable_zone_traffic=True):
         self.rm, self.links, self.decisions = resources, links, decisions
+        self.enable_zone_traffic = enable_zone_traffic
         self.exit_pass = {}  # robot -> (leg, peer) for this departure only
         self.zone = {}
         self.contacts = {}  # held robot -> peer -> continuous stop
-        self.access = ZoneTraffic(resources, links, self.parked_slot)
+        self.access = (ZoneTraffic(resources, links, self.parked_slot) if enable_zone_traffic
+                       else _NearStartGuard(resources, links, self.parked_slot))
         self.distances = {}
         self.head_on = {}  # pair -> robot recommended to retreat
         self.retreats = {}  # awaiting cancellation and the new return leg
@@ -138,6 +199,14 @@ class CollisionControl:
 
     def reconcile_zones(self, now):
         self.access.reconcile(now)
+        if not self.enable_zone_traffic:
+            for robot, leg in self.rm.active.items():
+                move = self.links[robot].move
+                if move and not move.attempts:
+                    self.access.before_departure(leg, now)
+                    if move.zone != "DOCK":
+                        move.slot = self.rm.slot_of(leg)
+            return
         for robot, (leg, _) in list(self.exit_pass.items()):
             if leg is not (self.rm.active.get(robot) or self.rm.pending.get(robot)):
                 del self.exit_pass[robot]
@@ -188,7 +257,12 @@ class CollisionControl:
         policy = self.rm.config.safety
         for parked in (a, b):
             link = self.links[parked]
-            if (parked not in self.rm.active and link.online(now)
+            stopped_at_slot = (
+                parked not in self.rm.active
+                or (not self.enable_zone_traffic
+                    and getattr(self.rm, "is_stop_line_paused", lambda _: False)(parked))
+            )
+            if (stopped_at_slot and link.online(now)
                     and link.state in DONE | {"PAUSED"} and self.parked_slot(parked)):
                 return min(policy.proximity_stop_m, policy.slot_stop_m)
         return policy.proximity_stop_m
@@ -205,7 +279,18 @@ class CollisionControl:
                 and all(t2 - t1 <= 0.500001 and d2 >= d1
                         for (t1, d1), (t2, d2) in pairwise(history)))
 
-    def _face_to_face(self, pair, mover, now):
+    def _face_to_face(self, pair, mover, now, distance=None):
+        other = next(r for r in pair if r != mover)
+        if (not self.enable_zone_traffic and hasattr(self.rm, "pending")
+                and other in self.rm.pending and mover not in self.rm.pending
+                and any(mover in self.rm.segments[n].holders for n in self.rm.needed(other))):
+            # `other` is parked/waiting for a segment held by `mover`; backing `mover` up would only ping-pong.
+            self.head_on[pair] = other
+            for robot in pair:
+                self._close(robot, "PROXIMITY", now)
+            if distance is not None:
+                self._hold_near(other, mover, distance, now)
+            return
         departed = self.access.departures
         candidates = [r for r in self.links if r in pair and r in departed]
         wire_order = tuple(self.links)
@@ -250,13 +335,15 @@ class CollisionControl:
                 link = self.links[robot]
                 if first.move is not link.move or first.move.finished:
                     del self.priority[pair]
+                    if not self.enable_zone_traffic and first.move.finished:
+                        self.head_on.pop(pair, None)
                     if peer in self.rm.active:
                         self._hold_near(peer, robot, distance, now)
                 elif (not self.links[peer].online(now) or self.links[peer].state not in DONE | {"PAUSED"}
                       or distance < first.distance):
                     del self.priority[pair]
                     if distance < first.distance:
-                        self._face_to_face(pair, robot, now)
+                        self._face_to_face(pair, robot, now, distance)
                     self._hold_near(robot, peer, distance, now)
                     if peer in self.rm.active:
                         self._hold_near(peer, robot, distance, now)
@@ -284,10 +371,12 @@ class CollisionControl:
         # An unacknowledged MOVE on the yielding robot can still start it.
         peer_still = (other.state in DONE | {"PAUSED"} and
                       not (other.move and other.move.attempts and not other.move.remote_id and not other.move.finished))
+        exiting = (not self.enable_zone_traffic) and getattr(unit, "exiting_corridor", False)
         return bool(peer_still and other.online(now) and link.online(now) and link.move and not link.move.finished
                     and (link.state == "PAUSED" or (link.state in DONE and not link.move.attempts))
-                    and unit.job and not (unit.fault_stop or unit.canceling or unit.replacing or mission.safety.causes[robot])
+                    and (unit.job or exiting) and not (unit.fault_stop or (unit.canceling and not exiting) or unit.replacing or mission.safety.causes[robot])
                     and robot not in self.zone and robot not in self.access.waits and not self.yielding_priority(robot) and not self.rm.following(robot)
+                    and not getattr(self.rm, "is_stop_line_paused", lambda _: False)(robot)
                     and not self.rm.reports[robot].stalled
                     and self.rm.robot_state(robot, unit.state) != "GIVE_WAY"
                     and not (self.contacts.get(robot, {}).keys() - {peer}))
@@ -296,7 +385,8 @@ class CollisionControl:
         for context, waits in (("ZONE", self.zone), ("PROXIMITY", self.near)):
             for robot, wait in waits.items():
                 unit = robots[robot]
-                if now < wait.next_card or unit.fault_stop or unit.replacing or unit.canceling:
+                exiting = (not self.enable_zone_traffic) and getattr(unit, "exiting_corridor", False)
+                if now < wait.next_card or unit.fault_stop or unit.replacing or (unit.canceling and not exiting):
                     continue
                 card_context = "EXIT" if wait.exit_zone else context
                 options = {"retry": "다시 확인", "return": "되돌아가기", "hold": "보류"}
@@ -316,6 +406,72 @@ class CollisionControl:
                     options["peer_first"] = f"{self.rm.robot_label(wait.peer)} 먼저 보내기"
                 self.decisions.open("BLOCKED", robot, unit.job.journal_id if unit.job else None, wait.reason, now,
                                     context=card_context, options=options)
+
+    def _retreat_zone(self, robot, peer, preferred, config, *, exclude=None):
+        """Pick a retreat zone whose first waypoint moves away from `peer`, never picking the blocked destination."""
+        pose = self.links[robot].pose
+        peer_pose = self.links[peer].pose
+        if pose is None or peer_pose is None:
+            return preferred
+        from .route_planner import waypoints
+        px, py = peer_pose[0] - pose[0], peer_pose[1] - pose[1]
+
+        peer_held = ({n for n, seg in self.rm.segments.items() if not seg.spec.is_shared and peer in seg.holders}
+                     if hasattr(self.rm, "segments") else set())
+
+        def score(z):
+            pts = waypoints(config, pose, z)
+            wp = next((p for p in pts if dist(pose, p) > 1e-4), config.zones[z])
+            wx, wy = wp[0] - pose[0], wp[1] - pose[1]
+            norm = (wx * wx + wy * wy) ** 0.5 or 1.0
+            dot = (wx * px + wy * py) / norm  # negative = moving directly away from peer
+            blocked = 0
+            if peer_held and hasattr(self.rm, "map"):
+                path_z = set(self.rm.map.path(pose, z, 1))
+                if path_z & peer_held:
+                    blocked = 1
+            return blocked, 0 if dot <= 0.0 else 1, 1 if z == exclude else 0, dot, -dist(config.zones[z], peer_pose)
+
+        if (preferred in config.zones and preferred != exclude
+                and dist(pose, config.zones[preferred]) >= 0.5 and score(preferred)[:2] == (0, 0)):
+            return preferred
+        candidates = [z for z in config.zones if z != exclude and dist(pose, config.zones[z]) >= 0.5]
+        unblocked_away = [z for z in candidates if score(z)[:2] == (0, 0)]
+        unblocked = [z for z in candidates if score(z)[0] == 0]
+        if not unblocked and exclude in config.zones and dist(pose, config.zones[exclude]) >= 0.5 and score(exclude)[0] == 0:
+            return exclude
+        away = [z for z in candidates if score(z)[1] == 0]
+        if unblocked_away:
+            return min(unblocked_away, key=score)
+        if unblocked:
+            return preferred if preferred in unblocked else min(unblocked, key=score)
+        if not away and preferred in candidates:
+            return preferred
+        return min(away or candidates or list(config.zones), key=score)
+
+    def _yield_unstarted_peer(self, peer, robot, retreat_zone, mission, now):
+        """Release a proximity-stopped peer's unentered reservations ONLY if they conflict with `retreat_zone` (SEGMENTS)."""
+        if self.enable_zone_traffic:
+            return
+        peer_unit = mission.robots[peer]
+        peer_link = self.links[peer]
+        if not peer_unit.job or peer not in self.contacts or self.rm.holds_occupied_narrow(peer):
+            return
+        pose = self.links[robot].pose
+        if pose is not None and retreat_zone in mission.config.zones:
+            retreat_path = set(self.rm.map.path(pose, retreat_zone, 1))
+            peer_held = {n for n, seg in self.rm.segments.items() if not seg.spec.is_shared and peer in seg.holders}
+            if not (retreat_path & peer_held):
+                return
+        if peer_unit.state == "SENDING" and (not peer_link.move or not peer_link.move.attempts):
+            mission.finish_leg(peer, now)
+            peer_link.forget()
+            peer_unit.state = "HOLD"
+            mission.ready[peer] = None
+        elif peer_unit.state == "MOVING" and peer_link.state == "PAUSED" and not peer_unit.canceling and not peer_unit.replacing:
+            mission.finish_leg(peer, now)
+            peer_unit.replacing = True
+            peer_link.cancel()
 
     def choose(self, card, choice, now, mission, by):
         robot = card["robots"][0]
@@ -349,8 +505,29 @@ class CollisionControl:
             self.rm.record("FAULT", now, "운영자가 충돌 방지 대기 중 임무를 보류했습니다.",
                            robot=robot, mission_id=unit.job.journal_id, by=by)
         elif choice == "return":
+            wait.next_card = now + PROXIMITY_CARD_S
             if not unit.job:
-                raise ValueError("E-409: 돌아갈 구간 기록이 없습니다.")
+                if not getattr(unit, "exiting_corridor", False) or self.enable_zone_traffic:
+                    raise ValueError("E-409: 돌아갈 구간 기록이 없습니다.")
+                if mission.traffic:
+                    mission.traffic.finish_corridor_exit(robot, now)
+                unit.exiting_corridor = unit.canceling = False
+                departure = self.access.departures.get(robot)
+                home = mission.config.robots[robot].start_zone
+                preferred = (departure.origin if departure and departure.origin else unit.zone) or home
+                back_zone = self._retreat_zone(robot, wait.peer, preferred, mission.config)
+                from .mission import Mission
+                unit.job = Mission(f"H-RETREAT-{int(now * 10)}", robot, "RETURN_HOME",
+                                   mission.config.mission.return_level,
+                                   [{"zone": home}], None, now, status="ACTIVE", started_at=now)
+                unit.target_override = back_zone
+                unit.state = "FAULT"
+                mission.retry(robot, now, back=False)
+                if card.get("head_on"):
+                    pair = frozenset((robot, wait.peer))
+                    self.retreats[pair] = robot, unit.job, unit.target_override
+                    self._yield_unstarted_peer(wait.peer, robot, unit.target_override, mission, now)
+                return
             unit.state = "FAULT"
             mission.retry(robot, now, back=True)
             if card.get("head_on"):
@@ -358,4 +535,10 @@ class CollisionControl:
                 departure = self.access.departures.get(robot)
                 if departure and departure.origin:
                     unit.target_override = departure.origin
+                if not self.enable_zone_traffic:
+                    cur_dest = unit.job.stops[unit.job.index]["zone"] if unit.job else None
+                    unit.target_override = self._retreat_zone(
+                        robot, wait.peer, unit.target_override or unit.zone, mission.config, exclude=cur_dest
+                    )
+                    self._yield_unstarted_peer(wait.peer, robot, unit.target_override, mission, now)
                 self.retreats[pair] = robot, unit.job, unit.target_override

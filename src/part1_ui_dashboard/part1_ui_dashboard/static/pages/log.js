@@ -1,4 +1,4 @@
-const decisions = new Set(["RESOURCE_GRANT","RESOURCE_HOLD","CORRIDOR_YIELD_START","CORRIDOR_FOLLOW_STOP","ZONE_OCCUPIED_HOLD","PROXIMITY_STOP"]);
+const decisions = new Set(["RESOURCE_GRANT","RESOURCE_HOLD","RESOURCE_PREEMPT","CORRIDOR_YIELD_START","CORRIDOR_FOLLOW_STOP","ZONE_OCCUPIED_HOLD","PROXIMITY_STOP"]);
 let logTab = "events", eventPage = 1, cardPage = 1;
 function logQuery() {
     const {robot,type,mid,q,group,from,to} = logFilter;

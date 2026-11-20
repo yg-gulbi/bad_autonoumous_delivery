@@ -149,6 +149,15 @@ def compare_points(config, part4):
     return warnings
 
 
+def traffic_mode_line(config):
+    """One-line summary of the active traffic engine mode for preflight output."""
+    if config.traffic.mode == "SEGMENTS":
+        count = len(config.traffic.segments)
+        extra = f"정지선 {config.traffic.stop_margin_m:g} m" + (f", 칸 {count}개" if count else "")
+        return f"교통 판단 모드 · SEGMENTS ({extra})"
+    return f"교통 판단 모드 · LEGACY (복도 {config.corridor.mode})"
+
+
 def slot_line(seen):
     """STATE "slot" decides whether MOVE may carry slot 2 (D-30)."""
     if seen is None:

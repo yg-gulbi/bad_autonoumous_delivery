@@ -141,7 +141,7 @@ def parse_mission_req(text: str) -> dict:
     return data
 
 
-def parse_operator_cmd(text: str, *, robots=None) -> dict:
+def parse_operator_cmd(text: str, *, robots=None, resources=None) -> dict:
     data, ref = _read(text, "cmd_id")
     _texts(data, ("cmd_id", "by", "cmd"), ref)
     command = data["cmd"]
@@ -151,7 +151,8 @@ def parse_operator_cmd(text: str, *, robots=None) -> dict:
     if robots is None and "robot" in fields:
         robots = ROBOT_IDS
     choices_by_field = {
-        "robot": robots, "zone": ZONE_REGIONS, "result": ("OK", "MISMATCH"), "resource": RESOURCES,
+        "robot": robots, "zone": ZONE_REGIONS, "result": ("OK", "MISMATCH"),
+        "resource": RESOURCES if resources is None else resources,
     }
     for field in fields:
         if field in choices_by_field:
@@ -224,6 +225,8 @@ def parse_fleet_state(text: str) -> dict:
                     _choice(wait.get("zone"), ZONE_REGIONS, path+"zone_wait.zone")
         if "returning" in robot:
             _fields(robot, {"returning": bool}, path=path)
+        if "canceling_exit" in robot:
+            _fields(robot, {"canceling_exit": bool}, path=path)
         if "state_since" in robot:
             _fields(robot, {"state_since": NUMBER}, path=path)
         if "route" in robot:
@@ -333,6 +336,34 @@ def parse_fleet_state(text: str) -> dict:
         _fields(monitor, {"state": str, "last_rx": (*NUMBER, NULL), "rate_hz": NUMBER,
                           "since": NUMBER, "bypass": bool}, path="bed_exit.monitor.")
         _choice(monitor["state"], ("NEVER", "OK", "WARN", "LOST"), "bed_exit.monitor.state", None)
+    if "traffic" in data:
+        traffic = data["traffic"]
+        if not isinstance(traffic, dict):
+            raise SchemaError("traffic: 객체가 필요합니다")
+        _fields(traffic, {"mode": str, "segments": dict, "stop_line_waits": dict}, path="traffic.")
+        _choice(traffic["mode"], ("LEGACY", "SEGMENTS"), "traffic.mode")
+        for seg_name, seg in traffic["segments"].items():
+            sp = f"traffic.segments.{seg_name}."
+            if not isinstance(seg, dict):
+                raise SchemaError(f"traffic.segments.{seg_name}: 객체가 필요합니다")
+            _fields(seg, {"kind": str, "label": str, "state": str, "direction": int, "holders": list}, path=sp)
+            _choice(seg["kind"], ("shared", "one_way", "single"), sp + "kind")
+            _choice(seg["state"], ("FREE", "GRANTED", "OCCUPIED", "UNKNOWN"), sp + "state")
+            if seg["direction"] not in (-1, 0, 1):
+                raise SchemaError(f"{sp}direction: 방향값을 확인하세요")
+            for holder in seg["holders"]:
+                if not isinstance(holder, dict):
+                    raise SchemaError(f"{sp}holders: 객체가 필요합니다")
+                _fields(holder, {"robot": str, "state": str, "direction": int}, path=sp + "holders.")
+                _choice(holder["state"], ("GRANTED", "OCCUPIED", "UNKNOWN"), sp + "holders.state")
+                if holder["direction"] not in (-1, 0, 1):
+                    raise SchemaError(f"{sp}holders.direction: 방향값을 확인하세요")
+        for robot_id, wait in traffic["stop_line_waits"].items():
+            wp = f"traffic.stop_line_waits.{robot_id}."
+            if not isinstance(wait, dict):
+                raise SchemaError(f"traffic.stop_line_waits.{robot_id}: 객체가 필요합니다")
+            _fields(wait, {"segment": str, "by": str, "since": NUMBER, "paused": bool, "reason": str}, path=wp)
+
     _fields(data["kpi"], {
         "hold_count": int, "deadlock_count": int, "deadlock_resolve_s_avg": (*NUMBER, NULL),
         "pause_count": int,
@@ -374,6 +405,6 @@ def parse_event(text: str) -> dict:
     data, _ = _read(text)
     _texts(data, ("type",), None)
     _fields(data, {"ts": NUMBER, "robot": (str, NULL), "mission_id": (str, NULL), "detail": dict})
-    if data["type"] in ("RESOURCE_GRANT", "RESOURCE_HOLD", "CORRIDOR_YIELD_START", "CORRIDOR_FOLLOW_STOP") and "rule" in data["detail"]:
+    if data["type"] in ("RESOURCE_GRANT", "RESOURCE_HOLD", "RESOURCE_PREEMPT", "CORRIDOR_YIELD_START", "CORRIDOR_FOLLOW_STOP") and "rule" in data["detail"]:
         _decision_detail(data["detail"])
     return data

@@ -9,7 +9,7 @@ def generate_launch_description():
     fleet = get_package_share_path("part3_fleet_manager")
     ui = get_package_share_path("part1_ui_dashboard")
     defaults = {"fleet_yaml": str(fleet / "config/fleet.yaml"), "ui_config": str(ui / "config/ui.yaml"),
-                "map_yaml": "", "db_path": "", "mock_speed": "", "assignment_mode": "",
+                "map_yaml": "", "db_path": "", "mock_speed": "", "assignment_mode": "", "traffic_mode": "",
                 "robot_a_r1": "", "robot_b_r1": "", "robot_a_battery": "", "robot_b_battery": ""}
     args = {k: LaunchConfiguration(k) for k in defaults}
     fleet_args = {k: args[k] for k in defaults if k not in ("fleet_yaml", "ui_config", "map_yaml")}

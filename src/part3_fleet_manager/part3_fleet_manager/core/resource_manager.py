@@ -19,6 +19,7 @@ class RobotReport:
     departed: bool = False
     via: bool | None = None      # this move goes through the crossroad (from NAVIGATING)
     via_passed: bool = False     # VIA_PASSED received for this move
+    proximity_stopped: bool = False
 
     @property
     def stopped(self):

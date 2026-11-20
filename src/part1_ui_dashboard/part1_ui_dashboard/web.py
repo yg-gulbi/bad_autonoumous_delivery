@@ -117,8 +117,10 @@ def create_app(feed, geometry, publish, trigger, *, meta=None, image=None, dev_t
     app = Flask(__name__, static_folder="static")
     app.register_blueprint(history_api(db_path, geometry.get("names", {}), geometry.get("robot_names")))
     robots = tuple(geometry.get("robot_names", schemas.ROBOT_IDS))
+    seg_resources = tuple(geometry.get("segment_labels", ()))
+    allowed_resources = tuple(dict.fromkeys((*schemas.RESOURCES, *seg_resources))) if seg_resources else None
     routes = {"mission": ("/ui/mission_req", ui_api.mission, "req_id"),
-              "command": ("/ui/operator_cmd", lambda form: ui_api.command(form, robots=robots), "cmd_id"),
+              "command": ("/ui/operator_cmd", lambda form: ui_api.command(form, robots=robots, resources=allowed_resources), "cmd_id"),
               "decision": ("/ui/decision", ui_api.decision, "card_id")}
 
     @app.get("/")

@@ -135,8 +135,8 @@ class DeadlockManager:
         """Update the wait graph and open continuously confirmed deadlocks."""
         for item in self._awaiting_release.copy():
             room, robot, detected_at = item
-            resource = self.manager.resources[room]
-            if resource.state != "UNKNOWN" and robot not in resource.holders:
+            resource = self.manager.resources.get(room)
+            if resource is None or (resource.state != "UNKNOWN" and robot not in resource.holders):
                 self._resolved(now - detected_at)
                 self._awaiting_release.remove(item)
 

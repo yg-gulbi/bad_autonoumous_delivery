@@ -107,9 +107,57 @@ mission:
   return_home: true
   return_interruptible: true
   return_level: 1               # 완료한 임무의 응급도를 홈 복귀에 상속하지 않음
+  # return_after_cancel: null   # 미설정 시 LEGACY=false, SEGMENTS=true (D-43)
   manual_level: 1               # GO_ZONE에는 UI가 level을 보내지 않음
   retry_after_return: false     # 이전 구역으로 되돌아간 뒤 원래 구간은 운영자가 재시도
   confirm_at_stops: true
+
+traffic:                        # 단계 4O 칸 기반 교통 판단 (기본값은 LEGACY 유지)
+  mode: LEGACY                  # LEGACY | SEGMENTS
+  stop_margin_m: 0.8            # 선점 가능 거리이자 정지선. 실측 정지거리가 나오면 줄입니다
+  segments:
+    HALL_TOP:        {kind: shared,  region: TOP,    label: "위쪽 홀"}
+    HALL_BOTTOM:     {kind: shared,  region: BOTTOM, label: "아래쪽 홀"}
+    ROOM_B:          {kind: shared,  region: ROOM_B, label: "102호 병실(B)"}
+    ROOM_E:          {kind: shared,  region: ROOM_E, label: "101호 병실(E)"}
+    CORRIDOR_TOP:    {kind: one_way, label: "복도 위쪽",   polygon: [[-1.89, -0.51], [-1.00, -0.58], [-1.074, -1.618], [-1.965, -1.533]]}
+    CROSSROAD:       {kind: single,  label: "교차로",      circle: {x: -1.500, y: -2.180, r: 0.6}}
+    CORRIDOR_BOTTOM: {kind: one_way, label: "복도 아래쪽", polygon: [[-2.054, -2.730], [-1.159, -2.815], [-1.26, -4.23], [-2.16, -4.17]]}
+    DOOR_B:          {kind: single,  room: ROOM_B, label: "102호 병실(B) 문", polygon: [[-1.965, -1.533], [-2.054, -2.730], [-2.253, -2.711], [-2.164, -1.514]]}
+    DOOR_E:          {kind: single,  room: ROOM_E, label: "101호 병실(E) 문", polygon: [[-1.074, -1.618], [-0.875, -1.637], [-0.960, -2.834], [-1.159, -2.815]]}
+    A1:              {kind: single,  zone: A, slot: 1, label: "응급실(A) 1번 자리",        circle: {x: -2.383, y:  1.027, r: 0.6}}
+    A2:              {kind: single,  zone: A, slot: 2, label: "응급실(A) 2번 자리",        circle: {x: -2.458, y:  0.282, r: 0.6}}
+    B1:              {kind: single,  zone: B, slot: 1, label: "102호 병실(B) 1번 자리",    circle: {x: -2.500, y: -1.250, r: 0.6}}
+    B2:              {kind: single,  zone: B, slot: 2, label: "102호 병실(B) 2번 자리",    circle: {x: -2.600, y: -2.800, r: 0.6}}
+    C1:              {kind: single,  zone: C, slot: 1, label: "수술실(C) 1번 자리",        circle: {x: -2.758, y: -5.123, r: 0.6}}
+    C2:              {kind: single,  zone: C, slot: 2, label: "수술실(C) 2번 자리",        circle: {x: -2.738, y: -4.573, r: 0.6}}
+    D1:              {kind: single,  zone: D, slot: 1, label: "간호 스테이션(D) 1번 자리", circle: {x: -1.000, y:  0.800, r: 0.6}}
+    D2:              {kind: single,  zone: D, slot: 2, label: "간호 스테이션(D) 2번 자리", circle: {x: -0.750, y: -0.150, r: 0.6}}
+    E1:              {kind: single,  zone: E, slot: 1, label: "101호 병실(E) 1번 자리",    circle: {x: -0.400, y: -1.400, r: 0.6}}
+    E2:              {kind: single,  zone: E, slot: 2, label: "101호 병실(E) 2번 자리",    circle: {x: -0.500, y: -2.950, r: 0.6}}
+    F1:              {kind: single,  zone: F, slot: 1, label: "조제실(F) 1번 자리",        circle: {x: -1.400, y: -5.400, r: 0.6}}
+    F2:              {kind: single,  zone: F, slot: 2, label: "조제실(F) 2번 자리",        circle: {x: -1.350, y: -4.700, r: 0.6}}
+  links:
+    - [A1, A2]
+    - [A2, HALL_TOP]
+    - [D1, HALL_TOP]
+    - [D2, HALL_TOP]
+    - [HALL_TOP, CORRIDOR_TOP]
+    - [CORRIDOR_TOP, CROSSROAD]
+    - [CROSSROAD, CORRIDOR_BOTTOM]
+    - [CORRIDOR_BOTTOM, HALL_BOTTOM]
+    - [HALL_BOTTOM, C2]
+    - [C2, C1]
+    - [HALL_BOTTOM, F2]
+    - [F2, F1]
+    - [CROSSROAD, DOOR_B]
+    - [DOOR_B, ROOM_B]
+    - [ROOM_B, B1]
+    - [ROOM_B, B2]
+    - [CROSSROAD, DOOR_E]
+    - [DOOR_E, ROOM_E]
+    - [ROOM_E, E1]
+    - [ROOM_E, E2]
 
 publish:
   fleet_state_hz: 5.0

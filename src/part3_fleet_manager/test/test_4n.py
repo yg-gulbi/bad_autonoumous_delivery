@@ -8,9 +8,11 @@ from fleet_simulation import Simulation
 A, B = "robot_a", "robot_b"
 
 
-@pytest.fixture
-def sim(cfg, tmp_path):
-    sim = Simulation(replace(cfg, db_path=str(tmp_path / "fleet.db")), slots=True)
+@pytest.fixture(params=["LEGACY", "SEGMENTS"])
+def sim(cfg, tmp_path, request):
+    sc = replace(cfg, db_path=str(tmp_path / f"fleet-{request.param}.db"),
+                 traffic=replace(cfg.traffic, mode=request.param))
+    sim = Simulation(sc, slots=True)
     yield sim
     sim.core.store.close()
 
@@ -28,6 +30,8 @@ def count(sim, kind):
 
 
 def test_150226_wait_at_exit_until_moving_robot_is_clear(sim):
+    if sim.cfg.traffic.mode == "SEGMENTS":
+        pytest.skip("LEGACY 전용 ZoneTraffic 문구·시점 (SEGMENTS 검증은 test_4o_1120_replay.py에서 수행)")
     # B is waiting outside the lower mouth. A clears the corridor, passing the parked B.
     at(sim, B, sim.cfg.slot_point("F", 2))
     sim.cmd("GO_ZONE", robot=A, zone="C")
@@ -51,6 +55,8 @@ def test_150226_wait_at_exit_until_moving_robot_is_clear(sim):
 
 
 def test_150338_wait_for_c2_arrival_then_for_its_exit(sim):
+    if sim.cfg.traffic.mode == "SEGMENTS":
+        pytest.skip("LEGACY 전용 ZoneTraffic 문구·EXIT 카드 (SEGMENTS 검증은 test_4o_1120_replay.py에서 수행)")
     at(sim, B, "C")
     sim.patient("bed", "C", "F")
     sim.tick(0)
@@ -85,6 +91,8 @@ def test_150338_wait_for_c2_arrival_then_for_its_exit(sim):
 
 
 def test_arrival_pauses_outside_the_radius_when_departure_was_first(sim):
+    if sim.cfg.traffic.mode == "SEGMENTS":
+        pytest.skip("LEGACY 전용 ZoneTraffic 2.0 m 반경 규칙 (SEGMENTS에서는 비활성)")
     at(sim, B, "C")
     sim.cmd("GO_ZONE", robot=B, zone="F")  # actually leaves C before the arrival
     assert wire(sim.tick(0))[B].startswith("MOVE F ")
@@ -196,6 +204,8 @@ def test_gap_in_observations_or_flat_latest_reading_does_not_waive_stop(sim, las
 
 
 def test_outbound_arrival_at_neighbouring_zone_is_not_proof_of_clearance(sim):
+    if sim.cfg.traffic.mode == "SEGMENTS":
+        pytest.skip("LEGACY 전용 ZoneTraffic 2.0 m 반경 규칙 (SEGMENTS에서는 비활성)")
     at(sim, B, "C")
     sim.cmd("GO_ZONE", robot=B, zone="F")
     assert wire(sim.tick(0))[B].startswith("MOVE F ")
@@ -215,6 +225,8 @@ def test_outbound_arrival_at_neighbouring_zone_is_not_proof_of_clearance(sim):
 
 
 def test_simultaneous_swap_in_overlapping_radii_has_one_wire_departure(sim):
+    if sim.cfg.traffic.mode == "SEGMENTS":
+        pytest.skip("LEGACY 전용 ZoneTraffic 2.0 m 반경·INBOUND 문구 (SEGMENTS에서는 출구 칸 1순위 규칙으로 대체)")
     # D and A are in the same hall. Both starts are inside the other's 2 m radius.
     at(sim, B, "A")
     sim.cmd("GO_ZONE", robot=A, zone="A")
@@ -242,6 +254,8 @@ def test_stop_in_progress_is_not_permission_to_depart(sim, peer_state):
 
 
 def test_arrival_status_before_parked_pose_keeps_outgoing_robot_in_place(sim):
+    if sim.cfg.traffic.mode == "SEGMENTS":
+        pytest.skip("LEGACY 전용 ZoneTraffic 문구·출구 막힘 대기 (SEGMENTS에서는 slot 칸으로 대체)")
     at(sim, B, "C")
     sim.patient("bed", "C", "F")
     sim.tick(0)

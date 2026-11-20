@@ -8,17 +8,16 @@ from threading import Lock
 
 from . import geometry as g
 from . import obstacle, schemas
-from .collision import CollisionControl
 from .deadlock import DeadlockManager
-from .decisions import Decisions
 from .mission import MissionManager
 from .obstacle_report import ObstacleReports
 from .route_planner import uses_crossroad, waypoints
-from .resource_manager import MotionRequest, ResourceManager, RobotReport
+from .resource_manager import MotionRequest, RobotReport
 from .robot_protocol import DONE, PREPARING, RobotProtocol
 from .safety import Safety
 from .stall import Stall
 from .store import Store
+from .traffic import create_traffic
 
 
 @dataclass
@@ -38,14 +37,15 @@ class FleetCore:
     def __init__(self, config, store=None):
         self.config = config
         self.store = store if store is not None else Store(config.db_path)
-        self.resources = ResourceManager(config)
-        self.deadlock = DeadlockManager(self.resources)
-        self.decisions = Decisions(self.resources.record)
-        self.safety = Safety(config, self._safety_event, self.decisions)
         self.links = {r: RobotProtocol(c.ns, config.robot_link) for r, c in config.robots.items()}
+        self.traffic = create_traffic(config, self.links)
+        self.resources = self.traffic.resources
+        self.decisions = self.traffic.decisions
+        self.collision = self.traffic.collision
+        self.deadlock = DeadlockManager(self.resources)
+        self.safety = Safety(config, self._safety_event, self.decisions)
         self.mission = MissionManager(config, self.resources, self.deadlock, self.decisions,
-                                      self.safety, self.links, self.store.next_id)
-        self.collision = CollisionControl(self.resources, self.links, self.decisions)
+                                      self.safety, self.links, self.store.next_id, traffic=self.traffic)
         self.stalls = {r: Stall(config.stall) for r in config.robots}
         self.inspect_inflight = {}
         self.blocks = {}
@@ -132,7 +132,8 @@ class FleetCore:
             return
         robot = card["robots"][0]
         r = self.mission.robots[robot]
-        if (not r.job and card.get("context") != "PROXIMITY") or r.canceling:
+        if (not r.job and card.get("context") != "PROXIMITY") or (
+                r.canceling and not (r.exiting_corridor and card.get("context") == "PROXIMITY")):
             raise ValueError("E-409: 현재 임무에서 실행할 수 없습니다.")
         if self.safety.causes[robot] and choice not in ("cancel", "hold"):
             raise ValueError("E-409: 안전 정지 중입니다.")
@@ -199,11 +200,7 @@ class FleetCore:
         if robot not in self.blocks:
             return
         name = self.blocks.pop(robot)
-        if name in self.resources.resources:
-            res = self.resources.resources[name]
-            res.stall_blockers.discard(robot)
-            if not res.stall_blockers:
-                res.blocked_since = None
+        self.traffic.unblock_robot(robot, name)
         self.resources.record("UNBLOCKED", now, "막힘이 해제됐습니다.", robot=robot, region=name)
         if close_card:
             for card in list(self.decisions.cards.values()):
@@ -244,9 +241,11 @@ class FleetCore:
 
     def _stall_tick(self, robot, now, terminal, accepted, results, out):
         r, link = self.mission.robots[robot], self.links[robot]
+        stop_line = getattr(self.resources, "is_stop_line_paused", lambda _: False)(robot)
         if (not r.job or link.state in PREPARING or (r.state != "MOVING" and not accepted)
                 or not self.link_ok[robot] or self.safety.causes[robot]
                 or robot in self.collision.contacts or robot in self.collision.access.waits
+                or stop_line
                 or self.resources.following(robot) or self.resources.robot_state(robot, r.state) == "GIVE_WAY" or terminal):
             self._inspect(robot, now, results, out, moving=False)
             if terminal or not r.job:
@@ -276,13 +275,8 @@ class FleetCore:
                 reason += " · " + obstacle.description(stall.obstacle, link.pose, self.config.obstacle)
             self.resources.record(signal, now, reason, robot=robot, mission_id=r.job.journal_id, stall_s=stall.seconds)
             if signal == "STALL_LONG":
-                region = self.config.corridor.region_of(link.pose)
+                region = self.traffic.block_robot(robot, link.pose, now)
                 self.blocks[robot] = region
-                if region in self.resources.resources:
-                    res = self.resources.resources[region]
-                    if not res.stall_blockers:
-                        res.blocked_since = now
-                    res.stall_blockers.add(robot)
                 self.resources.record("BLOCKED", now, reason, robot=robot, mission_id=r.job.journal_id, region=region)
                 self.decisions.open("BLOCKED", robot, r.job.journal_id, reason, now,
                                     obstacle_kind=stall.obstacle["kind"] if stall.obstacle else None)
@@ -291,8 +285,10 @@ class FleetCore:
         batch, self.inputs = self.inputs, deque()
         ui, safety, messages = [], [], []
         results = {robot: [] for robot in self.links}
+        allowed_resources = (tuple(dict.fromkeys((*g.RESOURCES, *self.resources.segments)))
+                             if self.traffic.mode == "SEGMENTS" else g.RESOURCES)
         parsers = {"/ui/mission_req": schemas.parse_mission_req, "/ui/decision": schemas.parse_decision,
-                   "/ui/operator_cmd": lambda s: schemas.parse_operator_cmd(s, robots=self.links)}
+                   "/ui/operator_cmd": lambda s: schemas.parse_operator_cmd(s, robots=self.links, resources=allowed_resources)}
         for topic, payload, stamp, robot in batch:
             if topic in parsers:
                 try:
@@ -407,12 +403,16 @@ class FleetCore:
                                          nav_paused=link.state in {"PAUSED", "STOPPING_PAUSE", "FAILED"},
                                          departed=bool(link.move and link.move.attempts),
                                          via=link.move.via if link.move else None,
-                                         via_passed=bool(link.move and link.move.via_passed))
-        self.resources.observe(now, reports)
+                                         via_passed=bool(link.move and link.move.via_passed),
+                                         proximity_stopped=self.collision.yielding_priority(robot))
+        self.traffic.observe(now, reports, self.mission.robots)
         for data in clears:
             self._ui("/ui/operator_cmd", data, now, out)
-        self.collision.reconcile_zones(now)
-        arbitration = self.resources.arbitrate(now, self.collision.zone_held)
+        self.mission.check_corridor_exits(now)
+        if self.mission.ready:
+            self.mission.plan(now)
+        self.traffic.reconcile(now)
+        arbitration = self.traffic.arbitrate(now)
         for leg in arbitration.grants:
             self.mission.granted(leg)
         self.deadlock.observe(now)
@@ -421,20 +421,14 @@ class FleetCore:
             self._ui("/ui/decision", data, now, out)
 
         self.deadlock.expire(now)
-        self.collision.reconcile_zones(now)
+        self.traffic.reconcile(now)
         self.collision.arm_retreat(self.mission, now)
         motions = {request.robot: request.command for request in arbitration.commands}
         for robot in self.links:
-            link = self.links[robot]
-            move = link.move
-            access = self.collision.access.waits.get(robot)
             # Check the physical start again for every outgoing MOVE, including retries whose
             # first command may have been lost and grants issued to both robots in this tick.
-            if (robot in self.resources.active and move and not move.finished and not move.remote_id
-                    and link.state in DONE and not (access and access.rule == "OUTBOUND")):
-                self.collision.access.before_departure(self.resources.active[robot], now)
-            traffic_stop = (robot in self.collision.access.waits or robot in self.collision.contacts or robot in self.collision.zone
-                            or self.collision.yielding_priority(robot))
+            self.traffic.before_wire_move(robot, now)
+            traffic_stop = self.traffic.traffic_stop(robot)
             command = self.mission.wire_step(robot, now, motions.get(robot), traffic_stop=traffic_stop,
                                              stalled=robot in self.blocks or self.stalls[robot].short,
                                              hold_restart=self.collision.hold_restart)
@@ -489,7 +483,11 @@ class FleetCore:
 
     def wait_reason(self, robot):
         wait = self.collision.near.get(robot) or self.collision.zone.get(robot) or self.collision.access.waits.get(robot)
-        return wait.reason if wait else self.resources.wait_reasons.get(robot)
+        if wait:
+            return wait.reason
+        if self.mission.robots[robot].exiting_corridor:
+            return "취소됨 · 복도를 빠져나온 뒤 정지"
+        return self.resources.wait_reasons.get(robot)
 
     def mission_row(self, job):
         reason = self.wait_reason(job.robot) if job.status == "ACTIVE" else None
@@ -549,6 +547,7 @@ class FleetCore:
                 "battery_pct": link.battery, "battery_status": link.battery_status, "docked": link.docked, "mission_id": r.job.journal_id if r.job else None,
                 "leg": leg_info,
                 "returning": r.returning,
+                "canceling_exit": r.exiting_corridor,
                 "slot": r.slot if region == g.ZONE_REGIONS[r.zone] else None,
                 "via": {"point": "교차로", "passed": via_done} if crossing else None,
                 "yolo": sighting if sighting and now < sighting["at"] + 30 else None,
@@ -571,6 +570,7 @@ class FleetCore:
         if self.deadlock.card:
             cards.append(self.deadlock.card["card_id"])
         return {"v": 1, "stamp": now, "robots": robots, "resources": self.resources.snapshot(),
+                "traffic": self.traffic.traffic_snapshot(),
                 "missions": missions + list(reversed(self.history.values())), "last_decision": self.resources.last_decision, "open_cards": cards,
                 "bed_exit": {"value": self.safety.bed_exit, "since": self.safety.since,
                              "monitor": self.safety.monitor.snapshot(now)},

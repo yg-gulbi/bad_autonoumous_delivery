@@ -73,6 +73,7 @@ class RobotProtocol:
         # whether more than control_retries resends went unanswered (operator card).
         self.pause_sends = 0
         self.pause_sent_at = None
+        self.resume_sent_at = None
         self.stop_unconfirmed = False
         self.retired = set()
         self.slots = False  # STATE has carried a "slot" key at least once (4J PART 04)
@@ -91,6 +92,7 @@ class RobotProtocol:
             self.retired.add(self.move.remote_id)
         self.move = None
         self.control_sent = None
+        self.resume_sent_at = None
 
     def cancel(self, *, home=False):
         self.home_cancel = home
@@ -103,6 +105,7 @@ class RobotProtocol:
         else:
             self.cancel_id = self.remote_id
         self.control_sent = None
+        self.resume_sent_at = None
 
     def go(self, leg_id, zone, level, slot=None):
         if self.state in {"PAUSED", "STOPPING_PAUSE", "STOPPING_CANCELED"} and not self.cancel_wait:
@@ -350,26 +353,44 @@ class RobotProtocol:
         if ((state == "PAUSED" and self.control_sent == "PAUSE")
                 or (state == "MOVING" and self.control_sent == "RESUME")):
             self.control_sent = None
+            self.resume_sent_at = None
 
     def step(self, now, *, stop=False, resume=False):
         """Produce at most one wire command and an optional acceptance failure."""
         if not self.online(now):
             return None, None
         if self.cancel_wait:
-            if self.control_sent != "CANCEL" and self.state != "STOPPING_CANCELED":
+            cancel_retry = (
+                self.control_sent == "CANCEL"
+                and self.cancel_sent_at is not None
+                and self.state_at > self.cancel_sent_at
+                and now - self.cancel_sent_at >= self.policy.accept_timeout_s
+            )
+            if (self.control_sent != "CANCEL" or cancel_retry) and self.state != "STOPPING_CANCELED":
                 self.control_sent = "CANCEL"
                 self.cancel_sent_at = now
                 return "CANCEL", None
             return None, None
         move = self.move
         if stop:
+            if self.control_sent == "RESUME":
+                self.control_sent = None
+                self.resume_sent_at = None
             return self._pause(now), None
         self.pause_sends, self.stop_unconfirmed = 0, False
-        if resume and self.state == "PAUSED" and self.control_sent != "RESUME":
+        resume_retry = (
+            self.control_sent == "RESUME"
+            and self.resume_sent_at is not None
+            and self.state_at > self.resume_sent_at
+            and now - self.resume_sent_at >= self.policy.accept_timeout_s
+        )
+        if resume and self.state == "PAUSED" and (self.control_sent != "RESUME" or resume_retry):
             self.control_sent = "RESUME"
+            self.resume_sent_at = now
             return "RESUME", None
         if self.state == "MOVING" and self.control_sent == "RESUME":
             self.control_sent = None
+            self.resume_sent_at = None
         if not move or move.remote_id or move.finished:
             return None, None
         if move.sent_at is not None and now - move.sent_at < self.policy.accept_timeout_s:

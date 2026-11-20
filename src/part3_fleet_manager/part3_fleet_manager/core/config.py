@@ -7,6 +7,7 @@ from os import PathLike
 from os.path import expanduser
 
 import yaml
+from shapely.geometry import Polygon
 
 from . import geometry
 from .schemas import MISSION_TYPES
@@ -15,6 +16,8 @@ from .schemas import MISSION_TYPES
 CORRIDOR_MODES = ("DIRECTIONAL", "SHARED_YIELD", "EXCLUSIVE")
 ROOM_MODES = ("DOOR", "ROOM")
 OBSTACLE_MODES = ("report", "inspect")
+TRAFFIC_MODES = ("LEGACY", "SEGMENTS")
+SEGMENT_KINDS = ("shared", "one_way", "single")
 
 
 def zone_display_name(zone, name):
@@ -163,6 +166,28 @@ class MissionCfg:
     return_home: bool = True
     return_interruptible: bool = True
     return_level: int = 1
+    return_after_cancel: bool | None = None
+
+
+@dataclass(frozen=True)
+class SegmentSpec:
+    name: str
+    kind: str
+    label: str
+    polygon: tuple[geometry.Point, ...] = ()
+    circle: tuple[float, float, float] | None = None
+    region: str | None = None
+    zone: str | None = None
+    slot: int | None = None
+    room: str | None = None
+
+
+@dataclass(frozen=True)
+class TrafficCfg:
+    mode: str = "LEGACY"
+    stop_margin_m: float = 0.8
+    segments: Mapping[str, SegmentSpec] = field(default_factory=dict)
+    links: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -209,6 +234,13 @@ class FleetConfig:
     slots: Mapping[str, tuple[geometry.Point, ...]] = field(default_factory=dict)
 
     exit_blocked_zones: frozenset[str] = frozenset()
+    traffic: TrafficCfg = field(default_factory=TrafficCfg)
+
+    @property
+    def effective_return_after_cancel(self) -> bool:
+        if self.mission.return_after_cancel is not None:
+            return self.mission.return_after_cancel
+        return self.traffic.mode == "SEGMENTS"
 
     def slot_point(self, zone: str, slot: int | None = 1) -> geometry.Point:
         """Slot 1 is the zone point; slot 2 exists only where fleet.yaml gives slot2."""
@@ -373,6 +405,82 @@ def _load_robot_link(data: Mapping) -> RobotLinkCfg:
     )
 
 
+def _load_traffic(data: Mapping | None, zones: Mapping) -> TrafficCfg:
+    if data is None:
+        return TrafficCfg()
+    raw = _mapping(data, "traffic")
+    mode = _text(raw.get("mode", TrafficCfg.mode), "traffic.mode", TRAFFIC_MODES)
+    stop_margin = _number(raw.get("stop_margin_m", TrafficCfg.stop_margin_m), "traffic.stop_margin_m", positive=True)
+    raw_segments = raw.get("segments", {})
+    if raw_segments is None:
+        raw_segments = {}
+    seg_map = _mapping(raw_segments, "traffic.segments")
+    segments = {}
+    for name, spec_raw in seg_map.items():
+        _text(name, "traffic.segments.<id>")
+        path = f"traffic.segments.{name}"
+        spec = _mapping(spec_raw, path)
+        kind = _text(spec.get("kind"), f"{path}.kind", SEGMENT_KINDS)
+        label = _text(spec.get("label", name), f"{path}.label")
+        polygon = ()
+        if spec.get("polygon") is not None:
+            pts_raw = _value(spec, "polygon", path, list)
+            if len(pts_raw) < 3:
+                raise ConfigError(f"{path}.polygon: 꼭짓점이 3개 이상 필요합니다")
+            pts = []
+            for i, pair in enumerate(pts_raw):
+                p_path = f"{path}.polygon[{i}]"
+                if not isinstance(pair, list) or len(pair) != 2:
+                    raise ConfigError(f"{p_path}: [x, y] 좌표가 필요합니다")
+                pts.append((_number(pair[0], f"{p_path}.x"), _number(pair[1], f"{p_path}.y")))
+            poly = Polygon(pts)
+            if not poly.is_valid or poly.area <= 0:
+                raise ConfigError(f"{path}.polygon: 유효한 다각형이 필요합니다")
+            polygon = tuple(pts)
+        circle = None
+        if spec.get("circle") is not None:
+            c = _mapping(spec["circle"], f"{path}.circle")
+            circle = (
+                _number(c.get("x"), f"{path}.circle.x"),
+                _number(c.get("y"), f"{path}.circle.y"),
+                _number(c.get("r"), f"{path}.circle.r", positive=True),
+            )
+        if polygon and circle:
+            raise ConfigError(f"{path}: polygon과 circle 중 하나만 지정하세요")
+        if kind != "shared" and not polygon and circle is None:
+            raise ConfigError(f"{path}: {kind} 칸에는 polygon 또는 circle이 필요합니다")
+        region = _text(spec["region"], f"{path}.region", geometry.REGIONS) if spec.get("region") is not None else None
+        zone = _text(spec["zone"], f"{path}.zone", zones) if spec.get("zone") is not None else None
+        slot = None
+        if spec.get("slot") is not None:
+            slot = _value(spec, "slot", path, int)
+            if slot not in (1, 2):
+                raise ConfigError(f"{path}.slot: 1 또는 2가 필요합니다")
+        room = _text(spec["room"], f"{path}.room", geometry.ROOMS) if spec.get("room") is not None else None
+        segments[name] = SegmentSpec(
+            name=name, kind=kind, label=label, polygon=polygon, circle=circle,
+            region=region, zone=zone, slot=slot, room=room,
+        )
+    raw_links = raw.get("links", [])
+    if raw_links is None:
+        raw_links = []
+    if not isinstance(raw_links, list):
+        raise ConfigError("traffic.links: 목록이 필요합니다")
+    links = []
+    for i, pair in enumerate(raw_links):
+        l_path = f"traffic.links[{i}]"
+        if not isinstance(pair, list) or len(pair) != 2:
+            raise ConfigError(f"{l_path}: [칸1, 칸2] 쌍이 필요합니다")
+        a = _text(pair[0], f"{l_path}[0]")
+        b = _text(pair[1], f"{l_path}[1]")
+        if a == b:
+            raise ConfigError(f"{l_path}: 같은 칸을 연결할 수 없습니다")
+        if segments and (a not in segments or b not in segments):
+            raise ConfigError(f"{l_path}: 정의되지 않은 칸이 포함됐습니다 ({a}, {b})")
+        links.append((a, b))
+    return TrafficCfg(mode=mode, stop_margin_m=stop_margin, segments=segments, links=tuple(links))
+
+
 def config_from_dict(data: Mapping) -> FleetConfig:
     """Validate a decoded YAML mapping and its cross-references."""
     sections = ("robots", "type_to_robot", "robot_link", "zones", "corridor", "resources",
@@ -473,6 +581,10 @@ def config_from_dict(data: Mapping) -> FleetConfig:
     return_level = _value(mission, "return_level", "mission", int)
     if not 1 <= return_level <= 3:
         raise ConfigError("mission.return_level: 1~3 정수가 필요합니다")
+    return_after_cancel = mission.get("return_after_cancel")
+    if return_after_cancel is not None and type(return_after_cancel) is not bool:
+        raise ConfigError("mission.return_after_cancel: bool 값이 필요합니다")
+    traffic = _load_traffic(root.get("traffic"), zones)
     values = {**asdict(ObstacleCfg()), **_mapping(root.get("obstacle", {}), "obstacle")}
     threshold = _number(values["min_confidence"], "obstacle.min_confidence", minimum=0)
     if threshold > 1:
@@ -530,6 +642,7 @@ def config_from_dict(data: Mapping) -> FleetConfig:
             return_home=_value(mission, "return_home", "mission", bool),
             return_interruptible=_value(mission, "return_interruptible", "mission", bool),
             return_level=return_level,
+            return_after_cancel=return_after_cancel,
             manual_level=manual_level,
             retry_after_return=retry_after_return,
             confirm_at_stops=_value(cfg["mission"], "confirm_at_stops", "mission", bool),
@@ -538,6 +651,7 @@ def config_from_dict(data: Mapping) -> FleetConfig:
         publish=PublishCfg(finished_mission_limit=limit, **_numbers(cfg["publish"], "publish", ("fleet_state_hz", "tick_hz"),
                                       positive=True)),
         db_path=expanduser(_text(cfg["db"].get("path"), "db.path")),
+        traffic=traffic,
     )
 
 

@@ -17,6 +17,8 @@ def start(context):
     manager = {"config_file": fleet, "db_path": db}
     if value("corridor_mode"):
         manager["corridor_mode"] = value("corridor_mode")
+    if value("traffic_mode"):
+        manager["traffic_mode"] = value("traffic_mode")
     required = value("bed_monitor_require_at_start")
     if required:
         if required.lower() not in ("true", "false"):
@@ -38,6 +40,7 @@ def generate_launch_description():
         DeclareLaunchArgument("map_yaml", default_value="", description="PART 04 common occupancy map"),
         DeclareLaunchArgument("db_path", default_value=str(Path.home() / ".bad/bad_real.db")),
         DeclareLaunchArgument("corridor_mode", default_value="", description="Default from fleet.yaml"),
+        DeclareLaunchArgument("traffic_mode", default_value="", description="LEGACY or SEGMENTS (empty uses fleet.yaml)"),
         DeclareLaunchArgument("bed_monitor_require_at_start", default_value="", description="Default from fleet.yaml"),
         DeclareLaunchArgument("ui_config", default_value=str(ui)),
         OpaqueFunction(function=start),
