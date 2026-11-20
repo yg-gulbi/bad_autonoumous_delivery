@@ -1,0 +1,236 @@
+[
+  {
+    "scenario": "a",
+    "trial": 1,
+    "status": "PASS",
+    "first_robot": "robot_a",
+    "second_robot": "robot_b",
+    "arrived_ok": true,
+    "max_corridor_holders": 1,
+    "direction_wait_ok": true,
+    "waited_outside_corridor": true,
+    "hold_observations": [
+      [
+        "BOTTOM",
+        "경쟁 요청을 모으는 동안 대기합니다."
+      ],
+      [
+        "BOTTOM",
+        "침상형 이송 로봇 복도 반대 방향 통행 중 → 약품 운송 로봇 복도 밖 대기"
+      ]
+    ],
+    "direction_hold_events": 1,
+    "proximity_stops": 0,
+    "cards": [],
+    "samples": 761,
+    "moving_samples": 674,
+    "wall_duration_s": 76.0,
+    "sim_duration_s": 58.73,
+    "avg_rtf": 0.773,
+    "min_gt_moving": {
+      "dist_m": 1.0033,
+      "wall_ts": 1795139257.371,
+      "wall_iso": "2026-11-20 10:47:37.371",
+      "sim_ts": 399.84,
+      "r3_xy": [
+        -2.1,
+        -4.684
+      ],
+      "r2_xy": [
+        -1.398,
+        -5.4
+      ],
+      "r3_v": 0.312,
+      "r2_v": 0.0
+    },
+    "min_amcl_moving": {
+      "dist_m": 1.0519,
+      "wall_ts": 1795139259.372,
+      "wall_iso": "2026-11-20 10:47:39.371",
+      "sim_ts": 401.481,
+      "r3_xy": [
+        -2.414,
+        -4.954
+      ],
+      "r2_xy": [
+        -1.391,
+        -5.397
+      ],
+      "r3_v": 0.236,
+      "r2_v": 0.068
+    },
+    "min_gt_all": {
+      "dist_m": 1.0033,
+      "wall_ts": 1795139257.371,
+      "wall_iso": "2026-11-20 10:47:37.371",
+      "sim_ts": 399.84,
+      "r3_xy": [
+        -2.1,
+        -4.684
+      ],
+      "r2_xy": [
+        -1.398,
+        -5.4
+      ],
+      "r3_v": 0.312,
+      "r2_v": 0.0
+    },
+    "gt_ge_045": true
+  },
+  {
+    "scenario": "a",
+    "trial": 2,
+    "status": "PASS",
+    "first_robot": "robot_b",
+    "second_robot": "robot_a",
+    "arrived_ok": true,
+    "max_corridor_holders": 1,
+    "direction_wait_ok": true,
+    "waited_outside_corridor": true,
+    "hold_observations": [
+      [
+        "TOP",
+        "경쟁 요청을 모으는 동안 대기합니다."
+      ],
+      [
+        "TOP",
+        "약품 운송 로봇 복도 반대 방향 통행 중 → 침상형 이송 로봇 복도 밖 대기"
+      ]
+    ],
+    "direction_hold_events": 1,
+    "proximity_stops": 0,
+    "cards": [],
+    "samples": 746,
+    "moving_samples": 658,
+    "wall_duration_s": 74.5,
+    "sim_duration_s": 56.32,
+    "avg_rtf": 0.756,
+    "min_gt_moving": {
+      "dist_m": 0.8118,
+      "wall_ts": 1795139359.5,
+      "wall_iso": "2026-11-20 10:49:19.500",
+      "sim_ts": 475.761,
+      "r3_xy": [
+        -0.998,
+        0.8
+      ],
+      "r2_xy": [
+        -1.659,
+        0.33
+      ],
+      "r3_v": 0.0,
+      "r2_v": 0.242
+    },
+    "min_amcl_moving": {
+      "dist_m": 0.8566,
+      "wall_ts": 1795139360.0,
+      "wall_iso": "2026-11-20 10:49:19.999",
+      "sim_ts": 476.169,
+      "r3_xy": [
+        -0.982,
+        0.792
+      ],
+      "r2_xy": [
+        -1.721,
+        0.416
+      ],
+      "r3_v": 0.106,
+      "r2_v": 0.279
+    },
+    "min_gt_all": {
+      "dist_m": 0.8118,
+      "wall_ts": 1795139359.5,
+      "wall_iso": "2026-11-20 10:49:19.500",
+      "sim_ts": 475.761,
+      "r3_xy": [
+        -0.998,
+        0.8
+      ],
+      "r2_xy": [
+        -1.659,
+        0.33
+      ],
+      "r3_v": 0.0,
+      "r2_v": 0.242
+    },
+    "gt_ge_045": true
+  },
+  {
+    "scenario": "a",
+    "trial": 3,
+    "status": "PASS",
+    "first_robot": "robot_a",
+    "second_robot": "robot_b",
+    "arrived_ok": true,
+    "max_corridor_holders": 1,
+    "direction_wait_ok": true,
+    "waited_outside_corridor": true,
+    "hold_observations": [
+      [
+        "BOTTOM",
+        "경쟁 요청을 모으는 동안 대기합니다."
+      ],
+      [
+        "BOTTOM",
+        "침상형 이송 로봇 복도 반대 방향 통행 중 → 약품 운송 로봇 복도 밖 대기"
+      ]
+    ],
+    "direction_hold_events": 1,
+    "proximity_stops": 0,
+    "cards": [],
+    "samples": 788,
+    "moving_samples": 701,
+    "wall_duration_s": 78.7,
+    "sim_duration_s": 58.91,
+    "avg_rtf": 0.749,
+    "min_gt_moving": {
+      "dist_m": 0.9461,
+      "wall_ts": 1795139454.373,
+      "wall_iso": "2026-11-20 10:50:54.373",
+      "sim_ts": 548.697,
+      "r3_xy": [
+        -2.089,
+        -4.754
+      ],
+      "r2_xy": [
+        -1.398,
+        -5.4
+      ],
+      "r3_v": 0.289,
+      "r2_v": 0.0
+    },
+    "min_amcl_moving": {
+      "dist_m": 1.0261,
+      "wall_ts": 1795139454.473,
+      "wall_iso": "2026-11-20 10:50:54.472",
+      "sim_ts": 548.769,
+      "r3_xy": [
+        -2.102,
+        -4.767
+      ],
+      "r2_xy": [
+        -1.398,
+        -5.4
+      ],
+      "r3_v": 0.26,
+      "r2_v": 0.0
+    },
+    "min_gt_all": {
+      "dist_m": 0.9461,
+      "wall_ts": 1795139454.373,
+      "wall_iso": "2026-11-20 10:50:54.373",
+      "sim_ts": 548.697,
+      "r3_xy": [
+        -2.089,
+        -4.754
+      ],
+      "r2_xy": [
+        -1.398,
+        -5.4
+      ],
+      "r3_v": 0.289,
+      "r2_v": 0.0
+    },
+    "gt_ge_045": true
+  }
+]

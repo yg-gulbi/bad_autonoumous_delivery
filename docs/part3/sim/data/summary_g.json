@@ -1,0 +1,398 @@
+[
+  {
+    "scenario": "g_af",
+    "trial": 1,
+    "status": "PASS",
+    "b_route": "A->F",
+    "b_arrived": true,
+    "proximity_stop_occurred": false,
+    "proximity_stops": [],
+    "blocked_card_opened": false,
+    "cards": [],
+    "dc_deadlock_test": null,
+    "samples": 389,
+    "moving_samples": 325,
+    "wall_duration_s": 38.8,
+    "sim_duration_s": 32.32,
+    "avg_rtf": 0.833,
+    "min_gt_moving": {
+      "dist_m": 0.7561,
+      "wall_ts": 1795142551.237,
+      "wall_iso": "2026-11-20 11:42:31.237",
+      "sim_ts": 3013.17,
+      "r3_xy": [
+        -1.018,
+        0.682
+      ],
+      "r2_xy": [
+        -1.658,
+        0.279
+      ],
+      "r3_v": 0.0,
+      "r2_v": 0.231
+    },
+    "min_amcl_moving": {
+      "dist_m": 0.7457,
+      "wall_ts": 1795142551.237,
+      "wall_iso": "2026-11-20 11:42:31.237",
+      "sim_ts": 3013.17,
+      "r3_xy": [
+        -1.018,
+        0.682
+      ],
+      "r2_xy": [
+        -1.658,
+        0.279
+      ],
+      "r3_v": 0.0,
+      "r2_v": 0.231
+    },
+    "min_gt_all": {
+      "dist_m": 0.7561,
+      "wall_ts": 1795142551.237,
+      "wall_iso": "2026-11-20 11:42:31.237",
+      "sim_ts": 3013.17,
+      "r3_xy": [
+        -1.018,
+        0.682
+      ],
+      "r2_xy": [
+        -1.658,
+        0.279
+      ],
+      "r3_v": 0.0,
+      "r2_v": 0.231
+    },
+    "gt_ge_045": true
+  },
+  {
+    "scenario": "g_af",
+    "trial": 2,
+    "status": "PASS",
+    "b_route": "A->F",
+    "b_arrived": true,
+    "proximity_stop_occurred": false,
+    "proximity_stops": [],
+    "blocked_card_opened": false,
+    "cards": [],
+    "dc_deadlock_test": null,
+    "samples": 393,
+    "moving_samples": 330,
+    "wall_duration_s": 39.2,
+    "sim_duration_s": 32.32,
+    "avg_rtf": 0.824,
+    "min_gt_moving": {
+      "dist_m": 0.8201,
+      "wall_ts": 1795142610.404,
+      "wall_iso": "2026-11-20 11:43:30.404",
+      "sim_ts": 3062.07,
+      "r3_xy": [
+        -0.998,
+        0.8
+      ],
+      "r2_xy": [
+        -1.667,
+        0.325
+      ],
+      "r3_v": 0.0,
+      "r2_v": 0.3
+    },
+    "min_amcl_moving": {
+      "dist_m": 0.8987,
+      "wall_ts": 1795142610.804,
+      "wall_iso": "2026-11-20 11:43:30.804",
+      "sim_ts": 3062.394,
+      "r3_xy": [
+        -0.998,
+        0.8
+      ],
+      "r2_xy": [
+        -1.619,
+        0.257
+      ],
+      "r3_v": 0.0,
+      "r2_v": 0.294
+    },
+    "min_gt_all": {
+      "dist_m": 0.8201,
+      "wall_ts": 1795142610.404,
+      "wall_iso": "2026-11-20 11:43:30.404",
+      "sim_ts": 3062.07,
+      "r3_xy": [
+        -0.998,
+        0.8
+      ],
+      "r2_xy": [
+        -1.667,
+        0.325
+      ],
+      "r3_v": 0.0,
+      "r2_v": 0.3
+    },
+    "gt_ge_045": true
+  },
+  {
+    "scenario": "g_af",
+    "trial": 3,
+    "status": "PASS",
+    "b_route": "A->F",
+    "b_arrived": true,
+    "proximity_stop_occurred": false,
+    "proximity_stops": [],
+    "blocked_card_opened": false,
+    "cards": [],
+    "dc_deadlock_test": null,
+    "samples": 390,
+    "moving_samples": 325,
+    "wall_duration_s": 38.9,
+    "sim_duration_s": 32.28,
+    "avg_rtf": 0.83,
+    "min_gt_moving": {
+      "dist_m": 0.8259,
+      "wall_ts": 1795142670.876,
+      "wall_iso": "2026-11-20 11:44:30.875",
+      "sim_ts": 3111.99,
+      "r3_xy": [
+        -0.998,
+        0.8
+      ],
+      "r2_xy": [
+        -1.684,
+        0.34
+      ],
+      "r3_v": 0.0,
+      "r2_v": 0.222
+    },
+    "min_amcl_moving": {
+      "dist_m": 0.8982,
+      "wall_ts": 1795142670.376,
+      "wall_iso": "2026-11-20 11:44:30.375",
+      "sim_ts": 3111.576,
+      "r3_xy": [
+        -0.998,
+        0.8
+      ],
+      "r2_xy": [
+        -1.745,
+        0.426
+      ],
+      "r3_v": 0.0,
+      "r2_v": 0.284
+    },
+    "min_gt_all": {
+      "dist_m": 0.8259,
+      "wall_ts": 1795142670.876,
+      "wall_iso": "2026-11-20 11:44:30.875",
+      "sim_ts": 3111.99,
+      "r3_xy": [
+        -0.998,
+        0.8
+      ],
+      "r2_xy": [
+        -1.684,
+        0.34
+      ],
+      "r3_v": 0.0,
+      "r2_v": 0.222
+    },
+    "gt_ge_045": true
+  },
+  {
+    "scenario": "g_fa",
+    "trial": 1,
+    "status": "PASS",
+    "b_route": "F->A",
+    "b_arrived": true,
+    "proximity_stop_occurred": false,
+    "proximity_stops": [],
+    "blocked_card_opened": false,
+    "cards": [],
+    "dc_deadlock_test": null,
+    "samples": 410,
+    "moving_samples": 328,
+    "wall_duration_s": 40.9,
+    "sim_duration_s": 33.88,
+    "avg_rtf": 0.828,
+    "min_gt_moving": {
+      "dist_m": 0.8245,
+      "wall_ts": 1795142755.212,
+      "wall_iso": "2026-11-20 11:45:55.212",
+      "sim_ts": 3181.857,
+      "r3_xy": [
+        -0.998,
+        0.8
+      ],
+      "r2_xy": [
+        -1.672,
+        0.325
+      ],
+      "r3_v": 0.0,
+      "r2_v": 0.289
+    },
+    "min_amcl_moving": {
+      "dist_m": 0.8969,
+      "wall_ts": 1795142755.812,
+      "wall_iso": "2026-11-20 11:45:55.812",
+      "sim_ts": 3182.37,
+      "r3_xy": [
+        -0.998,
+        0.8
+      ],
+      "r2_xy": [
+        -1.749,
+        0.429
+      ],
+      "r3_v": 0.0,
+      "r2_v": 0.25
+    },
+    "min_gt_all": {
+      "dist_m": 0.8245,
+      "wall_ts": 1795142755.212,
+      "wall_iso": "2026-11-20 11:45:55.212",
+      "sim_ts": 3181.857,
+      "r3_xy": [
+        -0.998,
+        0.8
+      ],
+      "r2_xy": [
+        -1.672,
+        0.325
+      ],
+      "r3_v": 0.0,
+      "r2_v": 0.289
+    },
+    "gt_ge_045": true
+  },
+  {
+    "scenario": "g_fa",
+    "trial": 2,
+    "status": "PASS",
+    "b_route": "F->A",
+    "b_arrived": true,
+    "proximity_stop_occurred": false,
+    "proximity_stops": [],
+    "blocked_card_opened": false,
+    "cards": [],
+    "dc_deadlock_test": null,
+    "samples": 410,
+    "moving_samples": 329,
+    "wall_duration_s": 40.9,
+    "sim_duration_s": 33.8,
+    "avg_rtf": 0.826,
+    "min_gt_moving": {
+      "dist_m": 0.8801,
+      "wall_ts": 1795142817.735,
+      "wall_iso": "2026-11-20 11:46:57.734",
+      "sim_ts": 3233.442,
+      "r3_xy": [
+        -0.998,
+        0.8
+      ],
+      "r2_xy": [
+        -1.752,
+        0.346
+      ],
+      "r3_v": 0.0,
+      "r2_v": 0.291
+    },
+    "min_amcl_moving": {
+      "dist_m": 0.9936,
+      "wall_ts": 1795142818.235,
+      "wall_iso": "2026-11-20 11:46:58.235",
+      "sim_ts": 3233.865,
+      "r3_xy": [
+        -0.998,
+        0.8
+      ],
+      "r2_xy": [
+        -1.808,
+        0.435
+      ],
+      "r3_v": 0.0,
+      "r2_v": 0.249
+    },
+    "min_gt_all": {
+      "dist_m": 0.8801,
+      "wall_ts": 1795142817.735,
+      "wall_iso": "2026-11-20 11:46:57.734",
+      "sim_ts": 3233.442,
+      "r3_xy": [
+        -0.998,
+        0.8
+      ],
+      "r2_xy": [
+        -1.752,
+        0.346
+      ],
+      "r3_v": 0.0,
+      "r2_v": 0.291
+    },
+    "gt_ge_045": true
+  },
+  {
+    "scenario": "g_fa",
+    "trial": 3,
+    "status": "PASS",
+    "b_route": "F->A",
+    "b_arrived": true,
+    "proximity_stop_occurred": false,
+    "proximity_stops": [],
+    "blocked_card_opened": false,
+    "cards": [],
+    "dc_deadlock_test": null,
+    "samples": 413,
+    "moving_samples": 332,
+    "wall_duration_s": 41.2,
+    "sim_duration_s": 34.42,
+    "avg_rtf": 0.836,
+    "min_gt_moving": {
+      "dist_m": 0.7496,
+      "wall_ts": 1795142878.808,
+      "wall_iso": "2026-11-20 11:47:58.807",
+      "sim_ts": 3283.791,
+      "r3_xy": [
+        -0.998,
+        0.8
+      ],
+      "r2_xy": [
+        -1.621,
+        0.383
+      ],
+      "r3_v": 0.0,
+      "r2_v": 0.26
+    },
+    "min_amcl_moving": {
+      "dist_m": 0.9031,
+      "wall_ts": 1795142879.508,
+      "wall_iso": "2026-11-20 11:47:59.508",
+      "sim_ts": 3284.409,
+      "r3_xy": [
+        -0.998,
+        0.8
+      ],
+      "r2_xy": [
+        -1.712,
+        0.512
+      ],
+      "r3_v": 0.0,
+      "r2_v": 0.252
+    },
+    "min_gt_all": {
+      "dist_m": 0.7496,
+      "wall_ts": 1795142878.808,
+      "wall_iso": "2026-11-20 11:47:58.807",
+      "sim_ts": 3283.791,
+      "r3_xy": [
+        -0.998,
+        0.8
+      ],
+      "r2_xy": [
+        -1.621,
+        0.383
+      ],
+      "r3_v": 0.0,
+      "r2_v": 0.26
+    },
+    "gt_ge_045": true
+  }
+]
