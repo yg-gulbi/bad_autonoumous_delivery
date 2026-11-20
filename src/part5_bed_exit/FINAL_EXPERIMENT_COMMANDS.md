@@ -1,12 +1,13 @@
 # Part 5 최종 실험 · 구동 명령어 정리
 
-모든 명령은 워크스페이스 루트(`bad_autonoumous_delivery`)에서 실행합니다.
+모든 명령은 워크스페이스 루트(`cd ~/rokey_ws/bad_autonoumous_delivery`)로 이동한 뒤 실행합니다.
 
 ---
 
 ## 1. 환경 설정 및 빌드
 
 ```bash
+cd ~/rokey_ws/bad_autonoumous_delivery
 source /opt/ros/jazzy/setup.bash
 colcon build --packages-select part5_bed_exit --symlink-install
 source install/setup.bash
@@ -118,7 +119,7 @@ ros2 bag record -o "src/part5_bed_exit/results/bags/run_$(date +%Y%m%d_%H%M%S)" 
 unset ROS_DISCOVERY_SERVER ROS_SUPER_CLIENT
 export ROS_DOMAIN_ID=0
 
-(sleep 5 && exec ros2 bag play /home/mu-02/rokey_ws/bad_autonoumous_delivery/실험_rosbag2_2026_11_20-17_32_24 \
+(sleep 5 && exec ros2 bag play "$PWD/실험_rosbag2_2026_11_20-17_32_24" \
   --loop --disable-keyboard-controls > /dev/null 2>&1) &
 BAG_PID=$!
 
