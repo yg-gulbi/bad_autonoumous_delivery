@@ -113,7 +113,8 @@ def test_41_actual_fleet_event_titles_reasons_and_journal(tmp_path,monkeypatch):
         collect(sim,35)
         sim.cmd("RESUME_ALL")
         collect(sim,36)
-        sim.pending.append(("/patient/bed_exit",False,None))
+        for stamp in (36, 36.25, 36.5, 36.75, 37):
+            sim.core.enqueue("/patient/bed_exit", False, stamp)
         collect(sim,37)
         sim.cmd("RESUME_ROBOT",robot=A)
         collect(sim,37.1)

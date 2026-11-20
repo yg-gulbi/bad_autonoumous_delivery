@@ -101,7 +101,7 @@ PROBE = r"""
 """
 
 
-def run_browser(tmp_path):
+def run_browser(tmp_path, probe=PROBE):
     if CHROME is None:
         pytest.skip("headless Chrome 없음")
     page = tmp_path / "probe.html"
@@ -113,7 +113,7 @@ def run_browser(tmp_path):
 <div id="situation"></div>
 <script src="{(STATIC / 'app.js').as_uri()}"></script>
 <script src="{(STATIC / 'pages' / 'dashboard.js').as_uri()}"></script>
-<script>{PROBE.replace("__STATES__", json.dumps(STATES, ensure_ascii=False))}</script>""", encoding="utf-8")
+<script>{probe.replace("__STATES__", json.dumps(STATES, ensure_ascii=False))}</script>""", encoding="utf-8")
     profile = tmp_path / "chrome-profile"
     result = subprocess.run(
         [CHROME, "--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run", "--disable-extensions",

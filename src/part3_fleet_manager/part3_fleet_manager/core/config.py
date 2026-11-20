@@ -135,6 +135,7 @@ class BedMonitorCfg:
     recover_s: float = 2.0
     min_rate_hz: float = 10.0
     require_at_start: bool = True
+    exit_clear_hold_s: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -430,6 +431,7 @@ def config_from_dict(data: Mapping) -> FleetConfig:
     policy = {**asdict(BedMonitorCfg()), **_mapping(cfg["safety"].get("bed_monitor", {}), "safety.bed_monitor")}
     monitor = BedMonitorCfg(**_numbers(policy, "safety.bed_monitor", ("warn_s", "lost_s", "recover_s", "min_rate_hz"),
                                        positive=True),
+                            exit_clear_hold_s=_number(policy["exit_clear_hold_s"], "safety.bed_monitor.exit_clear_hold_s", minimum=0),
                             require_at_start=_value(policy, "require_at_start", "safety.bed_monitor", bool))
     if monitor.warn_s >= monitor.lost_s:
         raise ConfigError("safety.bed_monitor.lost_s: warn_s보다 커야 합니다")

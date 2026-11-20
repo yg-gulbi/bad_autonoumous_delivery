@@ -36,6 +36,7 @@ def test_default_yaml_loads(cfg):
     assert cfg.resources.aging_s == 0
     assert cfg.deadlock.yield_zones == {"ROOM_B": "D", "ROOM_E": "F"}
     assert cfg.safety.bed_exit_pause_targets == ("robot_a",)
+    assert cfg.safety.bed_monitor.exit_clear_hold_s == 1.0
     assert cfg.mission.confirm_at_stops and not cfg.mission.return_to_dock
     assert (cfg.mock.speed_mps, cfg.mock.stall_radius_m, cfg.mock.supports_request_id) == (0.2, 0.05, False)
     assert (cfg.publish.fleet_state_hz, cfg.publish.tick_hz) == (5, 10)
@@ -88,6 +89,7 @@ def test_default_yaml_loads(cfg):
     ("obstacle.image_topic", "/robot2/hospital_nav/obstacle_image"),
     ("obstacle.none_text", ""),
     ("safety.slot_stop_m", 0),
+    ("safety.bed_monitor.exit_clear_hold_s", -0.1),
     ("zones.F.slot2_blocks_exit", "false"),
     ("mock.abort_after_s", 0),
     ("corridor.mode", "SHARE"),

@@ -234,21 +234,21 @@ def test_10_bed_exit_and_20_bump_require_operator_resume(sim):
     sim.event(A, "PAUSED")
     assert sim.core.service("/robot/resume", .3)[0] is False
     assert not sim.tick(.3).commands and sim.state(A) == "SAFE_PAUSE"
-    sim.pending.append(("/patient/bed_exit", False, None))
-    assert not sim.tick(.4).commands
-    assert sim.core.service("/robot/resume", .5)[0]
-    assert commands(sim.tick(.5)) == {A: "RESUME"}
+    _, wire = bed_frames(sim, .4, 1)
+    assert not wire
+    assert sim.core.service("/robot/resume", 1.5)[0]
+    assert commands(sim.tick(1.5)) == {A: "RESUME"}
     sim.event(A, "RESUMED")
     sim.pending.append(("hazards", ["BACKUP_LIMIT"], A))
-    assert not sim.tick(.6).commands
+    assert not sim.tick(1.6).commands
     sim.pending.append(("hazards", ["BUMP", "BACKUP_LIMIT"], A))
-    out = sim.tick(.7)
+    out = sim.tick(1.7)
     assert commands(out) == {A: "PAUSE"} and any(e["type"] == "BUMP" for e in out.events)
     sim.event(A, "PAUSED")
-    sim.core.service("/robot/resume", .8)
-    assert not sim.tick(.8).commands and sim.state(A) == "SAFE_PAUSE"
+    sim.core.service("/robot/resume", 1.8)
+    assert not sim.tick(1.8).commands and sim.state(A) == "SAFE_PAUSE"
     sim.cmd("RESUME_ROBOT", robot=A)
-    assert commands(sim.tick(.9)) == {A: "RESUME"}
+    assert commands(sim.tick(1.9)) == {A: "RESUME"}
 
 
 def test_11_unanswered_move_is_fault_with_card(sim):
@@ -361,12 +361,12 @@ def test_25_bed_exit_preempts_give_way_rechecks_before_resume(sim):
     encounter(sim)
     sim.pending.append(("/patient/bed_exit", True, None))
     assert not sim.tick(2.1).commands and sim.state(A) == "SAFE_PAUSE"
-    sim.pending.append(("/patient/bed_exit", False, None))
-    assert not sim.tick(2.2).commands
+    _, wire = bed_frames(sim, 2.2, 1)
+    assert not wire
     sim.cmd("RESUME_ROBOT", robot=A)
-    assert not sim.tick(2.3).commands and sim.state(A) == "GIVE_WAY"
+    assert not sim.tick(3.3).commands and sim.state(A) == "GIVE_WAY"
     sim.frames[B]["pose"] = sim.pose("E")
-    assert commands(sim.tick(2.4)) == {A: "RESUME"}
+    assert commands(sim.tick(3.4)) == {A: "RESUME"}
     assert sim.state(A) == "MOVING"
 
 
@@ -699,10 +699,10 @@ def test_35_new_mission_during_loss_and_recovery_with_exit(sim):
     events, wire = bed_frames(sim, 4, 2, value=True)
     assert not wire and {"BED_MONITOR_BACK", "BED_EXIT"} <= {e["type"] for e in events}
     assert not sim.core.service("/robot/resume", 6.1)[0]
-    sim.core.enqueue("/patient/bed_exit", False, 6.2)
-    assert not sim.tick(6.2).commands and sim.state(A) == "SAFE_PAUSE"
-    assert sim.core.service("/robot/resume", 6.3)[0]
-    assert commands(sim.tick(6.3))[A].startswith("MOVE ")
+    _, wire = bed_frames(sim, 6.2, 1)
+    assert not wire and sim.state(A) == "SAFE_PAUSE"
+    assert sim.core.service("/robot/resume", 7.3)[0]
+    assert commands(sim.tick(7.3))[A].startswith("MOVE ")
 
 
 @pytest.mark.parametrize("required", [True, False])

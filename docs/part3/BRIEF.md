@@ -386,6 +386,7 @@ PART 04의 ROS 패키지 이름은 `hospital_nav`, 소스 폴더는 `src/part4_a
 
 화면이 쓰는 필드:
 
+- `bed_exit.value`는 관제가 확정한 이탈 여부이고 `since`는 그 값의 확정 시각이다. 첫 값 확정 전에는 둘 다 null이다. 이탈은 즉시, 정상은 5.6절의 연속 수신 조건을 충족한 프레임에서 확정한다.
 - `robots.<id>.mark`는 지도 표시 한 글자, `pause_causes`는 동시에 걸린 안전 정지 사유 목록이다.
 - `resources.CORRIDOR.holder_detail`은 로봇별 `{robot, state, direction}` 목록이다. `direction`은 TOP → BOTTOM이면 +1, 역방향이면 −1, 횡단·미확인이면 0이다. `holders`는 기존 ID 목록이다. `follow_stop`은 `{front, rear, since}` 또는 null이다.
 - `robots.<id>.route`: 지금 구간의 남은 계획 경로 `[[x, y], ...]` (map 좌표). 지금 위치 → 지나갈 입구 중심점(`mouths`) → 목적지 구역. 구간이 없으면 `[]`.
@@ -424,7 +425,7 @@ PART 04의 ROS 패키지 이름은 `hospital_nav`, 소스 폴더는 `src/part4_a
 
 - ROS 명령줄용이다. 화면 버튼은 4.2절 `PAUSE_ALL`·`RESUME_ALL`을 쓴다 (`Trigger`는 인자가 없어 누른 사람을 남길 수 없다). 이 경로의 `by`는 "ROS 서비스"다.
 - `pause`: 항상 `success:true`로 바로 답하고, 실제 정지는 다음 tick에 한다.
-- `resume`: 침상 이탈이 아직 `true`이거나 침상 감시가 끊겼으면 `success:false`와 이유 문장. 아니면 `success:true`로 답하고 다음 tick에 재개한다.
+- `resume`: 감지한 침상 이탈이 아직 해제되지 않았거나 침상 감시가 끊겼으면 `success:false`와 이유 문장. 아니면 `success:true`로 답하고 다음 tick에 재개한다.
 
 ### 4.8 `/mission/event`
 
@@ -711,7 +712,7 @@ PART 04 사진 + PART 06 1번 프로그램으로 판별한다. 관제는 촬영 
 
 | 상황 | 감지 | 동작 | 복구 |
 |---|---|---|---|
-| 침상 이탈 | `/patient/bed_exit` false → true (상승 에지) | `bed_exit_pause_targets` 로봇 중 임무 중인 로봇을 `SAFE_PAUSE`. 주행 중이면 `PAUSE` 전송. 경고 `BED_EXIT` | 재개 (bed_exit가 false일 때만) |
+| 침상 이탈 | `/patient/bed_exit`에서 첫 true 수신 또는 확정 정상 뒤의 true 수신 | `bed_exit_pause_targets` 로봇 중 임무 중인 로봇을 `SAFE_PAUSE`. 주행 중이면 `PAUSE` 전송. 경고 `BED_EXIT` | 재개 (bed_exit가 false일 때만) |
 | 수동 정지 | `PAUSE_ALL`, `/robot/pause`, `PAUSE_ROBOT` | 대상 로봇 `SAFE_PAUSE`, 주행 중이면 `PAUSE` | `RESUME_ALL`, `/robot/resume`, `RESUME_ROBOT` |
 | 근접 정지 | 중심 간 거리가 `safety.proximity_stop_m`(0.6 m) 미만이고 하나라도 주행 중. 상대가 진행 구간 없이 구역 자리에 정차해 있으면 경유하는 구역에서도 `safety.slot_stop_m`(0.45 m) | 주행 중인 쪽만 PAUSE. 둘 다 주행 중이면 둘 다 멈춘다. 범퍼와 별도로 기록한다 | 두 로봇의 연결이 살아 있고 거리가 `safety.proximity_resume_m`(0.9 m) 이상이면 이 규칙의 정지만 해제 |
 | 선택 범퍼 충돌 (D-23) | `safety.use_hazard_topic: true`이고 `hazard_detection`에 `BUMP`가 새로 나타남 | 그 로봇과, 그 로봇에서 `safety.bump_neighbor_m`(1.0 m) 안에 있는 다른 로봇을 함께 `SAFE_PAUSE`. 주행 중이면 `PAUSE`. 경고 `BUMP` (`detail.targets`에 충돌 로봇과 함께 세운 이웃 로봇 ID 목록) | 사람이 확인 후 `RESUME_ROBOT` (로봇마다) |
@@ -728,6 +729,7 @@ PART 04 사진 + PART 06 1번 프로그램으로 판별한다. 관제는 촬영 
   - 정지가 더 필요 없어지면 횟수를 지운다. 다음 정지는 처음부터 센다.
   - 화면 경보 창의 관제 조치, 로봇 블록 배지·지도 표시, 상황 줄은 STATE가 `PAUSED`(또는 주행이 끝난 `IDLE`·`COMPLETE`·`CANCELED`·`FAILED`)면 "정지 확인"(빨강), 아니면 "정지 요청 중(확인 전)"(주황)이다 (`WEB_DB_DESIGN.md` 3장 상태 표·5.11·5.13). 운영자 정지는 경보 창 없이 배지와 상황 줄로 보인다.
 - 멈춰 있는 동안에도 쥔 자원은 그대로 유지한다.
+- 정상 신호가 `safety.bed_monitor.exit_clear_hold_s`(기본 1.0초) 동안 이어진 뒤 `BED_EXIT_CLEAR`를 한 번 기록한다. 그 전에 true가 다시 오면 정상 확인 시간을 초기화하고 이탈 상태를 유지한다. 수신 간격이 `warn_s` 이상이면 다음 false부터 새로 잰다. 화면과 ROS 서비스의 재개 거절도 이 판정을 따른다.
 - 침상 이탈 중에 들어온 임무는 `SAFE_PAUSE`로 시작한다.
 - 환자 안전 판단은 시간이 지나도 저절로 재개하지 않는다.
 - 침상 감시
@@ -928,6 +930,7 @@ safety:
   slot_stop_m: 0.45              # 진행 구간 없이 구역 자리에 정차한 상대를 지날 때의 중심 간 정지 거리 (D-36)
   bump_neighbor_m: 1.0
   bed_monitor:
+    exit_clear_hold_s: 1.0       # 침상 정상을 확정하는 연속 False 수신 시간
     warn_s: 1.0
     lost_s: 3.0
     recover_s: 2.0
@@ -1047,6 +1050,8 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH=src/part1_ui_dashboard:s
 68. **YOLO 정보 보고**. 기록 문장, 카드·정지 0건, 최근 감지와 사진의 30초 만료. 뒤이어 같은 임무가 포기하면 포기 사진의 PART 06 결과로 카드 1장.
 69. **정차 상대와 우선 출발**. D1 옆 0.58 m 통과, 0.40 m 정지. 상대가 후행 대기면 이 로봇을 먼저 보내고 거리 회복 뒤 상대가 출발한다. 다시 가까워지면 재정지한다.
 70. **같은 구역 출구**. F1의 첫 MOVE 보류, 일반 요청은 30초·Level 3은 즉시 카드, F2가 실제로 떠난 뒤 F1 출발. 그대로 출발을 골라도 근접 거리 안이면 첫 MOVE 보류.
+71. **침상 이탈 신호 깜빡임**. 3분간 0.1~0.5초 간격으로 이탈과 정상을 반복한다. 이탈·정지 각 1회, 짧은 정상 중 화면·서비스 재개 거절, 정상 1초 뒤 해제 1회와 운영자 재개를 확인한다.
+72. **경보 중복**. 같은 종류·대상은 팝업 하나의 시각만 갱신한다. 확인 후 같은 원인의 새 PAUSE 때 다시 열리며, BACK은 미확인 LOST를 제거한다. WARN 토스트는 문구별 30초 간격이다.
 
 - 화면 라우트 테스트 (Flask test client): 버튼마다 가짜 publisher에 올바른 토픽과 JSON이 넘어간다. `dev_tools: false`면 시험 도구 라우트가 403이다. `/map/meta`·`/map/image`가 맵이 있을 때와 없을 때 맞게 답한다.
 - 화면 확인은 mock 2대로 시나리오 1~5(`stage3-scenarios.md`)를 **화면 클릭만으로** 끝까지 진행하고, 캡처를 `docs/part3/ui/screens/`에 남긴다. 녹화는 사람이 한다.

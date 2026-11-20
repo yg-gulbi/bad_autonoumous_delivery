@@ -56,7 +56,6 @@ class FleetCore:
         self.history = self.store.recent_finished(config.publish.finished_mission_limit)
         self.state_times = {}
         self._lock = Lock()
-        self._latest_bed = None
         self._next_publish = None
         self._acks_seen = OrderedDict()
         self._unsaved_events = []
@@ -67,8 +66,6 @@ class FleetCore:
         if topic in {"status", "pose", "battery", "docked", "hazards", "obstacle_result"} and robot not in self.links:
             raise ValueError("unknown robot")
         with self._lock:
-            if topic == "/patient/bed_exit" and type(payload) is bool:
-                self._latest_bed = payload
             self.inputs.append((topic, payload, stamp, robot))
 
     def _safety_event(self, kind, now, reason, *, robot=None, **detail):
@@ -79,7 +76,14 @@ class FleetCore:
         if name not in ("/robot/pause", "/robot/resume"):
             raise ValueError("unknown service")
         with self._lock:
-            reason = self.safety.denial(self.links, now, self._latest_bed) if name == "/robot/resume" else None
+            reason = None
+            if name == "/robot/resume":
+                # Preview pending readings without consuming them or producing safety events.
+                signal = self.safety.exit_signal
+                for topic, payload, stamp, _ in self.inputs:
+                    if topic == "/patient/bed_exit" and type(payload) is bool:
+                        signal = signal.after_sample(payload, stamp, self.safety.monitor.policy)
+                reason = self.safety.denial(self.links, now, signal.value)
             self.inputs.append(("resume_rejected" if reason else name, reason, now, None))
         return (False, reason) if reason else (True, "접수했습니다")
 
@@ -283,8 +287,7 @@ class FleetCore:
                                     obstacle_kind=stall.obstacle["kind"] if stall.obstacle else None)
 
     def _drain(self, now, out):
-        with self._lock:
-            batch, self.inputs = self.inputs, deque()
+        batch, self.inputs = self.inputs, deque()
         ui, safety, messages = [], [], []
         results = {robot: [] for robot in self.links}
         parsers = {"/ui/mission_req": schemas.parse_mission_req, "/ui/decision": schemas.parse_decision,
@@ -341,12 +344,13 @@ class FleetCore:
             raise ValueError("tick time must be nondecreasing")
         self._last_tick = now
         out = FleetOutput()
-        ui, safety, messages, results = self._drain(now, out)
         active = [robot for robot, unit in self.mission.robots.items() if unit.job]
-        for topic, payload, _, stamp in safety:
-            if topic == "/patient/bed_exit" and type(payload) is bool:
-                self.safety.observe(payload, active, stamp)
-        self.safety.monitor.tick(now)
+        with self._lock:
+            ui, safety, messages, results = self._drain(now, out)
+            for topic, payload, _, stamp in safety:
+                if topic == "/patient/bed_exit" and type(payload) is bool:
+                    self.safety.observe(payload, active, stamp)
+            self.safety.monitor.tick(now)
         for robot in active:
             self.safety.protect(robot, now)
         for topic, payload, robot, _ in safety:

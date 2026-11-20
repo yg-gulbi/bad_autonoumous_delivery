@@ -94,6 +94,7 @@ safety:
   slot_stop_m: 0.45              # 진행 구간 없이 구역 자리에 정차한 상대를 지날 때의 중심 간 정지 거리 (D-36)
   bump_neighbor_m: 1.0
   bed_monitor:
+    exit_clear_hold_s: 1.0       # 침상 정상을 확정하기까지 False가 연속 수신되어야 하는 시간
     warn_s: 1.0
     lost_s: 3.0
     recover_s: 2.0

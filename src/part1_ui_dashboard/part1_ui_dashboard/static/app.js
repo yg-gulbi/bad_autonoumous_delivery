@@ -247,6 +247,8 @@ function renderTop() {
         '<div class="buttons">' + noticeButtons.join("") + '</div>');
     if (modal === "alarm" && alerts[0]) {
         const [action, tone] = alarmAction(alerts[0]);
+        $("alarm-at").textContent = tm(alerts[0].ts);
+        $("elapsed").dataset.since = alerts[0].ts;
         $("alarm-action").textContent = action;
         $("alarm-action").className = tone;
         $("mute").textContent = sound ? "경보음 끄기" : "경보음 켜기";
@@ -294,7 +296,7 @@ const choiceDescriptions = {
     STOP_UNCONFIRMED: {resend:"정지 명령을 다시 보내고 멈췄다는 보고를 다시 기다립니다.", confirmed:"현장에서 로봇이 멈춘 것을 봤습니다. 정지 명령을 더 보내지 않습니다."}
 };
 const elapsedSince = (t, stopped = false) => `<time id="elapsed" data-since="${t}" data-stopped="${stopped}"></time>`;
-const factList = pairs => "<dl>" + pairs.map(([k,v]) => `<dt>${h(k)}</dt><dd>${h(v)}</dd>`).join("") + "</dl>";
+const factList = pairs => "<dl>" + pairs.map(([k,v,id]) => `<dt>${h(k)}</dt><dd${id ? ` id="${h(id)}"` : ""}>${h(v)}</dd>`).join("") + "</dl>";
 function showCard(id) {
     const c = cards.get(id);
     if (!c)
@@ -339,6 +341,68 @@ async function showObstaclePhoto(c) {
     }
 }
 const alarmKinds = { BED_MONITOR_LOST: "red", BED_EXIT: "red", BUMP: "red", BLOCKED: "amber", LINK_LOST: "red", FAULT: "amber" };
+const acknowledgedAlarms = new Map(), lastAlarmPause = new Map(), monitorWarnings = new Map();
+
+function alarmTargets(e) {
+    if (e.detail.targets) return e.detail.targets;
+    if (e.robot) return [e.robot];
+    return ["BED_EXIT", "BED_MONITOR_LOST"].includes(e.type) ? (cfg.bed_targets || []) : [];
+}
+
+const alarmKey = e => JSON.stringify([e.type, [...new Set(alarmTargets(e))].sort()]);
+
+function clearLostAlarms(recoveredAt) {
+    const recovered = e => e?.type === "BED_MONITOR_LOST" && e.ts <= recoveredAt;
+    const close = modal === "alarm" && recovered(alerts[0]);
+    alerts = alerts.filter(e => !recovered(e));
+    if (close) closeModal();
+}
+
+function queueAlarm(e) {
+    const key = alarmKey(e);
+    const i = alerts.findIndex(other => alarmKey(other) === key);
+    if (i >= 0) {
+        // The event journal retains each original timestamp. Update only the popup copy.
+        alerts[i] = {...alerts[i], ts: Math.max(alerts[i].ts, e.ts)};
+    } else if (acknowledgedAlarms.has(key)) {
+        acknowledgedAlarms.set(key, e);
+    } else {
+        alerts.push(e);
+        beep();
+        if (modal !== "alarm") alarm();
+    }
+}
+
+function handleAlarmEvent(e) {
+    if (alarmKinds[e.type]) {
+        queueAlarm(e);
+    } else if (e.type === "PAUSE" && alarmKinds[e.detail.cause]) {
+        const stop = JSON.stringify([e.detail.cause, e.robot]);
+        if (e.ts <= (lastAlarmPause.get(stop) ?? -Infinity)) return;
+        lastAlarmPause.set(stop, e.ts);
+        // A bumper alarm can cover both robots. Reopen only the matching alarm.
+        const matches = alarm => alarm.type === e.detail.cause && alarmTargets(alarm).includes(e.robot);
+        const previous = [...alerts, ...acknowledgedAlarms.values()].filter(matches).sort((a,b) => b.ts - a.ts)[0];
+        if (previous && e.ts >= previous.ts && acknowledgedAlarms.delete(alarmKey(previous))) {
+            queueAlarm({...previous, ts: e.ts, mission_id: e.mission_id ?? previous.mission_id});
+        }
+    } else if (e.type === "BED_MONITOR_BACK") {
+        clearLostAlarms(e.ts);
+    } else if (e.type === "BED_MONITOR_WARN") {
+        const message = e.detail.reason, now = performance.now();
+        if (now - (monitorWarnings.get(message) ?? -Infinity) >= 30_000) {
+            monitorWarnings.set(message, now);
+            toast(message, false);
+        }
+    }
+}
+
+function dismissAlarm() {
+    const entry = alerts.shift();
+    if (entry) acknowledgedAlarms.set(alarmKey(entry), entry);
+    closeModal();
+    nextNotice();
+}
 // 4K (D-32): the control's stop causes are a request. Only the robot's STATE confirms it stopped:
 // PAUSED, or a state that is not driving at all. A robot whose STATE is not arriving is not confirmed.
 const stillStates = new Set(["PAUSED", "IDLE", "COMPLETE", "CANCELED", "FAILED"]);
@@ -367,9 +431,9 @@ function alarm() {
     if (!alerts.length)
         return;
     const e = alerts[0];
-    const targets = e.detail.targets || (e.robot ? [e.robot] : cfg.bed_targets || []);
+    const targets = alarmTargets(e);
     const robot = S?.robots[targets[0]], job = mById(e.mission_id || robot?.mission_id);
-    const facts = [["로봇", targets.map(robotName).join(" · ") || "관제"], ["작업", job ? job.mission_id + " " + cfg.kinds[job.type] : "배정된 작업 없음"], ["감지 시각", tm(e.ts)]];
+    const facts = [["로봇", targets.map(robotName).join(" · ") || "관제"], ["작업", job ? job.mission_id + " " + cfg.kinds[job.type] : "배정된 작업 없음"], ["감지 시각", tm(e.ts), "alarm-at"]];
     const [action, tone] = alarmAction(e);
     openModal("alarm", `<header class="pop-head ${alarmKinds[e.type] === "red" ? "alarm-head" : "attention"}"><b aria-hidden="true">⚠</b><h2>${h(e.title)}</h2>${elapsedSince(e.ts)}</header>
         <div class="pop-body"><p class="lead">${h(e.type === "BED_EXIT" ? "침상에서 환자가 일어났습니다. 침상 카메라로 환자 상태를 확인하세요." : e.detail.reason)}</p>
@@ -390,7 +454,7 @@ function beep() { if (!sound || !audioContext || audioContext.state !== "running
     return; const o = audioContext.createOscillator(), g = audioContext.createGain(); o.frequency.value = 630; g.gain.value = .04; o.connect(g); g.connect(audioContext.destination); o.start(); o.stop(audioContext.currentTime + .13); }
 Object.assign(actions, { close: () => { if (modal === "card")
         cards.get(modalCard).deferred = true; closeModal(); nextNotice(); }, defer: () => { cards.get(modalCard).deferred = true; closeModal(); nextNotice(); },
-    card: showCard, alarm, dismiss: () => { alerts.shift(); closeModal(); nextNotice(); }, sound: () => { sound = !sound; renderTop(); },
+    card: showCard, alarm, dismiss: dismissAlarm, sound: () => { sound = !sound; renderTop(); },
     choose: (id, b) => send("decision", { card_id: modalCard, choice: id }, b),
     safety: (_, b) => command(b.textContent === "전체 재개" ? "RESUME_ALL" : "PAUSE_ALL", {}, b),
     cancel: id => openModal("confirm", dialogHead("임무 취소") + `<p>${h(id)} 임무를 취소하시겠습니까?</p>` + btn("임무 취소 실행", "cancel-ok", id, "danger")),
