@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 import shlex
 import shutil
 import subprocess
@@ -23,6 +24,27 @@ from typing import Callable, Sequence
 DEFAULT_TTS_MESSAGE = '주행 중인 침상에서 이탈하지 말아주세요.'
 DEFAULT_TTS_LANGUAGE = 'ko'
 DEFAULT_TTS_REPEAT_INTERVAL = 1.0
+DEFAULT_TTS_AUDIO_FILENAME = 'tts_bed_exit_ko.mp3'
+
+
+def find_bundled_tts_audio() -> Path | None:
+    """기본 한국어 안내 문구의 사전 생성 오디오 파일 경로를 찾는다."""
+    source_candidate = Path(__file__).resolve().parents[1] / 'config' / DEFAULT_TTS_AUDIO_FILENAME
+    if source_candidate.is_file():
+        return source_candidate
+    try:
+        from ament_index_python.packages import get_package_share_directory
+
+        share_candidate = (
+            Path(get_package_share_directory('part5_bed_exit'))
+            / 'config'
+            / DEFAULT_TTS_AUDIO_FILENAME
+        )
+        if share_candidate.is_file():
+            return share_candidate
+    except Exception:
+        pass
+    return None
 
 
 def _build_custom_command(
@@ -48,24 +70,64 @@ def _build_custom_command(
     return resolved
 
 
+def _resolve_audio_player_command(
+    audio_path: Path,
+    lookup: Callable[[str], str | None],
+) -> list[str] | None:
+    """사전 생성 오디오 파일을 블로킹으로 재생할 로컬 플레이어 명령을 찾는다."""
+    ffplay = lookup('ffplay')
+    if ffplay:
+        return [ffplay, '-nodisp', '-autoexit', '-loglevel', 'quiet', str(audio_path)]
+
+    mpv = lookup('mpv')
+    if mpv:
+        return [mpv, '--no-video', '--really-quiet', str(audio_path)]
+
+    mpg123 = lookup('mpg123')
+    if mpg123:
+        return [mpg123, '-q', str(audio_path)]
+
+    if audio_path.suffix.lower() == '.wav':
+        aplay = lookup('aplay')
+        if aplay:
+            return [aplay, '-q', str(audio_path)]
+    return None
+
+
 def resolve_tts_command(
     message: str,
     language: str = DEFAULT_TTS_LANGUAGE,
     command: str | Sequence[str] | None = None,
     which: Callable[[str], str | None] | None = None,
+    audio_file: str | Path | None = None,
 ) -> list[str] | None:
     """실행할 TTS 외부 명령 argv를 결정한다.
 
     우선순위:
     1. 명시적 ``command`` (문자열 또는 argv 시퀀스; ``{message}``/``{language}`` 치환 지원)
-    2. ``spd-say -l <language> -w <message>`` (Ubuntu 기본 Speech Dispatcher, 블로킹 완료 대기)
-    3. ``espeak-ng -v <language> <message>``
-    4. ``espeak -v <language> <message>``
+    2. 명시적 ``audio_file`` 또는 기본 문구용 사전 생성 한국어 오디오 파일(``ffplay``/``mpv``/``mpg123``)
+    3. ``spd-say -l <language> -w <message>`` (Ubuntu 기본 Speech Dispatcher, 블로킹 완료 대기)
+    4. ``espeak-ng -v <language> <message>``
+    5. ``espeak -v <language> <message>``
     """
     if command is not None and (not isinstance(command, str) or command.strip()):
         return _build_custom_command(command, message, language)
 
     lookup = shutil.which if which is None else which
+
+    resolved_audio: Path | None = None
+    if audio_file is not None and str(audio_file).strip():
+        candidate = Path(str(audio_file).strip()).expanduser()
+        if candidate.is_file():
+            resolved_audio = candidate
+    elif message == DEFAULT_TTS_MESSAGE and language == DEFAULT_TTS_LANGUAGE:
+        resolved_audio = find_bundled_tts_audio()
+
+    if resolved_audio is not None:
+        player_cmd = _resolve_audio_player_command(resolved_audio, lookup)
+        if player_cmd is not None:
+            return player_cmd
+
     spd_say = lookup('spd-say')
     if spd_say:
         return [spd_say, '-l', language, '-w', message]
@@ -98,6 +160,7 @@ class TtsSpeaker:
         repeat_interval: float = DEFAULT_TTS_REPEAT_INTERVAL,
         language: str = DEFAULT_TTS_LANGUAGE,
         command: str | Sequence[str] | None = None,
+        audio_file: str | Path | None = None,
         which: Callable[[str], str | None] | None = None,
         popen_factory: Callable[..., subprocess.Popen] | None = None,
         clock: Callable[[], float] | None = None,
@@ -134,6 +197,9 @@ class TtsSpeaker:
         self.repeat_interval = repeat_interval
         self.language = language.strip() or DEFAULT_TTS_LANGUAGE
         self.command = normalized_command
+        self.audio_file = (
+            str(audio_file).strip() if audio_file is not None and str(audio_file).strip() else None
+        )
 
         self._which = shutil.which if which is None else which
         self._popen_factory = subprocess.Popen if popen_factory is None else popen_factory
@@ -237,6 +303,7 @@ class TtsSpeaker:
                 language=self.language,
                 command=self.command,
                 which=self._which,
+                audio_file=self.audio_file,
             )
             if not argv:
                 raise FileNotFoundError(

@@ -207,3 +207,31 @@ def test_tts_speaker_validates_configuration():
     disabled.set_active(True)
     assert disabled.is_active is False
     disabled.close()
+
+
+def test_resolve_tts_command_prefers_bundled_or_custom_audio_file_with_ffplay(tmp_path):
+    custom_mp3 = tmp_path / 'alert.mp3'
+    custom_mp3.write_bytes(b'ID3')
+
+    assert resolve_tts_command(
+        DEFAULT_TTS_MESSAGE,
+        language='ko',
+        which=lambda name: f'/usr/bin/{name}' if name in ('ffplay', 'spd-say') else None,
+        audio_file=custom_mp3,
+    ) == ['/usr/bin/ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', str(custom_mp3)]
+
+    # 기본 문구일 때는 내장 한국어 여성 음성 MP3가 있으면 ffplay로 우선 재생
+    bundled_cmd = resolve_tts_command(
+        DEFAULT_TTS_MESSAGE,
+        language='ko',
+        which=lambda name: f'/usr/bin/{name}' if name in ('ffplay', 'spd-say') else None,
+    )
+    assert bundled_cmd[0] == '/usr/bin/ffplay'
+    assert bundled_cmd[-1].endswith('tts_bed_exit_ko.mp3')
+
+    # 문구를 바꿨을 때는 기본 MP3 대신 spd-say로 폴백
+    assert resolve_tts_command(
+        '사용자 지정 문구',
+        language='ko',
+        which=lambda name: f'/usr/bin/{name}' if name in ('ffplay', 'spd-say') else None,
+    ) == ['/usr/bin/spd-say', '-l', 'ko', '-w', '사용자 지정 문구']

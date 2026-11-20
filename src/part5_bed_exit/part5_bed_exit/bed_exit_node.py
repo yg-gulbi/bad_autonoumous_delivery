@@ -163,6 +163,7 @@ class BedExitNode(Node):
             _cfg_float(cfg, 'tts_repeat_interval', DEFAULT_TTS_REPEAT_INTERVAL),
         )
         self.declare_parameter('tts_command', _cfg_str(cfg, 'tts_command', ''))
+        self.declare_parameter('tts_audio_file', _cfg_str(cfg, 'tts_audio_file', ''))
 
         # 5) 내장 모델·선택적 앙상블 오버라이드 파라미터 (센티널 유지 시 JSON/v1.3 기본값 사용)
         self.declare_parameter('weights', '')
@@ -207,6 +208,7 @@ class BedExitNode(Node):
         tts_language = str(self.get_parameter('tts_language').value)
         tts_repeat_interval = float(self.get_parameter('tts_repeat_interval').value)
         tts_command = str(self.get_parameter('tts_command').value)
+        tts_audio_file = str(self.get_parameter('tts_audio_file').value)
 
         if not topic or not math.isfinite(fps) or fps <= 0:
             raise ValueError('Set output_topic and capture_fps > 0')
@@ -236,6 +238,7 @@ class BedExitNode(Node):
                 repeat_interval=tts_repeat_interval,
                 language=tts_language,
                 command=tts_command or None,
+                audio_file=tts_audio_file or None,
                 on_error=lambda msg: BedExitNode._log_callback_error(self, msg),
             )
         )
