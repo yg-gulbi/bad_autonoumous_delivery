@@ -66,6 +66,7 @@ function robotCard(id, r) {
         <p>${h(job ? job.mission_id + "　" + cfg.kinds[job.type] + "　Level " + job.level : home ? (r.leg?.purpose === "도크 복귀" ? "도크 복귀" : "홈 구역 복귀") : r.leg ? "직접 이동" : "배정된 작업 없음")}</p>
         <div class="unit-facts">${fields.map(([key,value]) => `<span><small>${key}</small> ${h(value)}</span>`).join("")}</div>
         ${r.via ? `<p class="via-note">교차로 경유${r.via.passed ? " · 통과" : ""}</p>` : ""}
+        ${r.yolo ? `<p data-yolo-until="${Number(r.yolo.at) + 30}">${h(r.yolo.text)} ${btn("감지 사진", "yolo-photo", id)}</p>` : ""}
         ${obstacleText(r) ? `<p>${h(obstacleText(r))}</p>` : ""}
         <div class="buttons">${controls}${job ? btn("작업 상세", "inspect", job.mission_id, "linkbtn") : ""}</div>`;
 }
@@ -143,4 +144,15 @@ renderers.dashboard = () => {
         '</tbody></table>' + (jobs.length ? "" : empty("해당 작업 없음")));
     put("latest", cardTitle("최근 기록", btn("전체 기록","logs","","linkbtn")) +
         (E.length ? E.slice(-3).reverse().map(e => `<div class="timeline"><time>${tm(e.ts)}</time><b>${h(e.title)}</b><span>${h(e.title.replace(/[ ·]/g,"") === e.detail.reason.replace(/[ ·]/g,"") ? "" : e.detail.reason)}</span></div>`).join("") : empty("수신된 이벤트가 없습니다.")));
+};
+
+
+actions["yolo-photo"] = id => {
+    const sighting = S?.robots[id]?.yolo;
+    if (!sighting) return;
+    openModal("yolo-photo", dialogHead("주행 중 감지 사진") +
+        `<figure class="obstacle-photo"><img id="yolo-image" alt="주행 중 감지 사진"><figcaption>${h(sighting.text)}</figcaption></figure>`);
+    const image = $("yolo-image");
+    image.onerror = () => { image.hidden = true; image.nextElementSibling.textContent = "이 감지에 해당하는 사진이 없습니다."; };
+    image.src = `/api/obstacle_image/${encodeURIComponent(id)}?kind=yolo&at=${encodeURIComponent(sighting.at)}`;
 };

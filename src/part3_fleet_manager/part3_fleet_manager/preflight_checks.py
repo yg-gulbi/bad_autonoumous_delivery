@@ -52,11 +52,13 @@ def discovery_ports(setting):
 
 
 def find_goal_file(config_path):
-    relative = Path("src/part4_amr_nav/hospital_nav/goal_manager.py")
+    package = Path("src/part4_amr_nav/hospital_nav")
     for start in (Path.cwd(), Path(config_path).expanduser().resolve().parent, Path(__file__).resolve().parent):
         for folder in (start, *start.parents):
-            if (folder / relative).is_file():
-                return folder / relative
+            for relative in ("hospital_nav/goal_manager.py", "goal_manager.py"):
+                path = folder / package / relative
+                if path.is_file():
+                    return path
     return None
 
 

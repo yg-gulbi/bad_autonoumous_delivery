@@ -207,3 +207,11 @@ def test_41_actual_fleet_event_titles_reasons_and_journal(tmp_path,monkeypatch):
                 assert not codes.search(card["title"] + card["reason"])
     finally:
         store.close()
+
+
+def test_yolo_sighting_has_its_own_history_title():
+    reason = "주행 중 장애물 감지 · medical_box 0.93 · 약 0.85 m · 계속 주행"
+    event = {"type": "OBSTACLE_REPORT", "robot": B, "detail": {"source": "yolo", "reason": reason}}
+    row = present_event(event, {}, {B: "약품 운송 로봇"})
+    assert row["title"] == "약품 운송 로봇 주행 중 장애물 감지"
+    assert row["detail"]["reason"] == reason

@@ -273,8 +273,8 @@ class RobotProtocol:
             self.update_pose(data.get("pose"), stamp)
             return None
         if event == "OBSTACLE":
-            # Sent after MISSION_FAILED, so the move is already finished. Pair by PART 04 mission ID.
-            paired = bool(move and remote and remote == move.remote_id)
+            # A driving sighting can have the same mission ID as a subsequent abort report.
+            paired = bool(data.get("source") != "yolo" and move and remote and remote == move.remote_id)
             return {**data, "event": "OBSTACLE", "paired": paired}
         if event not in EVENT_STATE and event not in PASSING_EVENTS:
             return {"event": "WARNING", "reason": f"알 수 없는 PART 04 이벤트 {event}"}

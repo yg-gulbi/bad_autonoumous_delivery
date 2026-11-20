@@ -111,6 +111,7 @@ def test_sse_clients_receive_independent_updates_and_slow_reader_resynchronizes(
     ("drop_link",{"robot":"robot_b","seconds":10},None),
     ("fail_next",{"robot":"robot_b"},None),("reject_next",{"robot":"robot_a"},None),
     ("battery",{"robot":"robot_a","value":25},None),
+    ("yolo",{"robot":"robot_b"},None),
 ])
 def test_demo_tools_only(action,form,expected):
     published=[]
@@ -256,3 +257,27 @@ def test_63_photo_reference_is_the_report_time_when_the_verdict_timed_out():
                           "obstacle": {"kind": "UNKNOWN", "reported_at": 203.0}})
     photos.put("robot_a", "raw", b"\xff\xd8x\xff\xd9", at=202.9)  # card opened 6 s after the photo
     assert client.get("/api/obstacle_image/robot_a").status_code == 200
+
+
+def test_yolo_photo_matches_current_sighting_without_replacing_the_abort_photo(monkeypatch):
+    from part1_ui_dashboard import web
+
+    clock = [100.0]
+    monkeypatch.setattr(web, "monotonic", lambda: clock[0])
+    feed, photos = Feed(), web.Photos(clock=lambda: clock[0])
+    client = create_app(feed, {"robot_names": {"robot_b": "약품 운송 로봇"}}, None, None, photos=photos).test_client()
+    feed.receive("state", {"stamp": 100.0, "open_cards": [], "robots": {"robot_b": {"yolo": {"at": 100.0}}}})
+    url = "/api/obstacle_image/robot_b"
+    photos.put("robot_b", "yolo", b"old", at=89.0)
+    assert client.get(url + "?kind=yolo&at=100").status_code == 404
+    photos.put("robot_b", "yolo", b"boxed")
+    assert client.get(url + "?kind=yolo&at=89").status_code == 404
+    assert client.get(url + "?kind=yolo&at=100").data == b"boxed"
+    assert client.get(url + "?kind=raw").status_code == 404
+    feed.receive("card", {"card_id": "K-failure", "robots": ["robot_b"], "created_at": 104.0,
+                          "obstacle": {"reported_at": 103.0}})
+    photos.put("robot_b", "raw", b"abort", at=103.0)
+    assert client.get(url + "?kind=yolo&at=100").data == b"boxed"
+    assert client.get(url + "?kind=raw").data == b"abort"
+    clock[0] = 130.0  # No fresh fleet state, even with a browser keeping the old link.
+    assert client.get(url + "?kind=yolo&at=100").status_code == 404

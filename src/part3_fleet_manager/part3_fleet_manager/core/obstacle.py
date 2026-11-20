@@ -12,6 +12,17 @@ def finite(value):
         return False
 
 
+def is_yolo_result(payload):
+    # At 406e497 YOLO publishes its boxed JPEG with a default ROS header. The abort
+    # reporter copies the camera header. PART 06 echoes the image header in its verdict.
+    try:
+        body = json.loads(payload)
+    except (TypeError, ValueError, RecursionError):
+        return False
+    header = body.get("header") if isinstance(body, dict) else None
+    return header == {"stamp": {"sec": 0, "nanosec": 0}, "frame_id": ""}
+
+
 def classify(payload, policy, at):
     result = {"kind": "UNKNOWN", "at": at, "labels": [], "detections": []}
     try:

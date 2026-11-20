@@ -75,6 +75,16 @@ class Feed:
             self.recent.append((self.sequence, kind, data))
             self.changed.notify_all()
 
+    def recent_yolo(self, robot):
+        with self.changed:
+            if self.state is None:
+                return None
+            report = self.state.get("robots", {}).get(robot, {}).get("yolo")
+            if not report:
+                return None
+            now = self.state["stamp"] + (monotonic() - self.received)
+            return report if now < report["at"] + 30 else None
+
     def obstacle_card(self, robot):
         """The newest open obstacle card (BRIEF 5.5 report mode) for this robot, if any."""
         with self.changed:
@@ -129,8 +139,15 @@ def create_app(feed, geometry, publish, trigger, *, meta=None, image=None, dev_t
 
     @app.get("/api/obstacle_image/<robot>")
     def obstacle_image(robot):
-        """Photo for the open obstacle card. Older than the card's report by 5 s or more is not this card's."""
+        """Return the photo for an open obstacle card or the specified recent YOLO report."""
         kind = request.args.get("kind", "raw")
+        if robot in robots and photos is not None and kind == "yolo":
+            report = feed.recent_yolo(robot)
+            photo = photos.get(robot, kind)
+            if (not report or not photo or request.args.get("at", type=float) != report["at"]
+                    or abs(photo[1] - report["at"]) > PHOTO_GRACE_S):
+                return jsonify(message="이 감지에 해당하는 사진이 없습니다."), 404
+            return Response(photo[0], mimetype="image/jpeg", headers={"Cache-Control": "no-store"})
         card = feed.obstacle_card(robot) if robot in robots and kind in PHOTO_KINDS else None
         item = photos.get(robot, kind) if photos is not None and card else None
         if item is None:
@@ -157,7 +174,7 @@ def create_app(feed, geometry, publish, trigger, *, meta=None, image=None, dev_t
         if action == "bed" and form.get("mode") in ("off", "normal", "exit"):
             set_bed_mode(form["mode"])
             return jsonify(mode=form["mode"], message="가짜 침상 감시 설정을 적용했습니다.")
-        elif action in ("stall", "drop_link", "fail_next", "reject_next", "battery", "obstacle") and form.get("robot") in robots:
+        elif action in ("stall", "drop_link", "fail_next", "reject_next", "battery", "obstacle", "yolo") and form.get("robot") in robots:
             data = {"robot": form["robot"], "action": action}
             if action == "obstacle":
                 if form.get("kind") not in ("medical_box", "person", "object", "none", "error", "silent"):

@@ -202,6 +202,8 @@ class FleetConfig:
     zone_names: Mapping[str, str] = field(default_factory=dict)
     slots: Mapping[str, tuple[geometry.Point, ...]] = field(default_factory=dict)
 
+    exit_blocked_zones: frozenset[str] = frozenset()
+
     def slot_point(self, zone: str, slot: int | None = 1) -> geometry.Point:
         """Slot 1 is the zone point; slot 2 exists only where fleet.yaml gives slot2."""
         points = self.slots.get(zone) or (self.zones[zone],)
@@ -357,6 +359,7 @@ def config_from_dict(data: Mapping) -> FleetConfig:
 
     zone_data = _mapping(cfg["zones"], "zones", geometry.ZONE_REGIONS)
     zones, slots = {}, {}
+    exit_blocked_zones = set()
     for zone, expected_region in geometry.ZONE_REGIONS.items():
         point = _point(zone_data[zone], f"zones.{zone}")
         points = [point]
@@ -369,6 +372,13 @@ def config_from_dict(data: Mapping) -> FleetConfig:
                 raise ConfigError(f"{where}: {expected_region}에 속해야 합니다 (현재 {region})")
         zones[zone] = point
         slots[zone] = tuple(points)
+        blocks_exit = zone_data[zone].get("slot2_blocks_exit", len(points) == 2 and zone in {"A", "F"})
+        if type(blocks_exit) is not bool:
+            raise ConfigError(f"zones.{zone}.slot2_blocks_exit: bool 값이 필요합니다")
+        if blocks_exit:
+            if len(points) != 2:
+                raise ConfigError(f"zones.{zone}.slot2_blocks_exit: 2번 자리 좌표가 필요합니다")
+            exit_blocked_zones.add(zone)
 
     robots = {}
     namespaces = set()
@@ -467,7 +477,7 @@ def config_from_dict(data: Mapping) -> FleetConfig:
         robot_link=_load_robot_link(cfg["robot_link"]),
         zones=zones,
         zone_names={z: zone_data[z].get("name") or f"{z} 구역" for z in zones},
-        slots=slots,
+        slots=slots, exit_blocked_zones=frozenset(exit_blocked_zones),
         corridor=corridor,
         resources=ResourcesCfg(
             zone_occupied_m=_number(cfg["resources"].get("zone_occupied_m", ResourcesCfg.zone_occupied_m),

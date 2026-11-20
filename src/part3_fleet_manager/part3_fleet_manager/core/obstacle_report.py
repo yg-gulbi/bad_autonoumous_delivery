@@ -32,6 +32,7 @@ class ObstacleReports:
     def __init__(self, core):
         self.core = core
         self.policy = core.config.obstacle
+        self.yolo = {}  # latest informational sighting per robot
         self.failures: dict[str, Failure] = {}
         self.views: dict[str, tuple] = {}       # robot -> (observation for the robot card, failed move)
         self.retried: dict[str, tuple] = {}     # robot -> (job, stop index, target) already retried once
@@ -68,6 +69,17 @@ class ObstacleReports:
 
     def report(self, robot, data, now):
         """OBSTACLE status from PART 04, paired with the failed move by its mission ID."""
+        if data.get("source") == "yolo":
+            label = data.get("class") or "종류 미상"
+            confidence = f" {data['conf']:.2f}" if obstacle.finite(data.get("conf")) else ""
+            depth = f"약 {data['depth_m']:g} m" if obstacle.finite(data.get("depth_m")) else "거리 미측정"
+            text = f"주행 중 장애물 감지 · {label}{confidence} · {depth} · 계속 주행"
+            fields = {k: data.get(k) for k in ("class", "conf", "depth_m", "bearing_deg", "map_x", "map_y",
+                                                "robot_pose", "destination", "image_stamp")}
+            self.yolo[robot] = dict(fields, text=text, at=now, part4_mission_id=data.get("mission_id"))
+            self._record("OBSTACLE_REPORT", robot, now, text, **fields, source="yolo",
+                         part4_mission_id=data.get("mission_id"))
+            return
         failure = self.failures.get(robot)
         paired = bool(self.active and data.get("paired") and failure and failure.report is None
                       and failure.remote is not None and data.get("mission_id") == failure.remote)

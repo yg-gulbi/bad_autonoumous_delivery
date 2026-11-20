@@ -25,12 +25,12 @@ robot_link:
   control_retries: 3            # 다시 보낸 횟수가 이 값을 넘으면 "정지 미확인" 카드 (D-32)
 
 zones:                          # PART 04 goal_manager.py SLOTS와 같은 값. x, y = 1번 자리, slot2 = 2번 자리 (D-30)
-  A: {x: -2.383, y:  1.027, slot2: {x: -2.458, y:  0.282}, name: ""}   # 1번 안쪽, 2번 입구 쪽
-  B: {x: -2.500, y: -1.250, slot2: {x: -2.600, y: -2.800}, name: ""}   # 문 양옆
-  C: {x: -2.758, y: -5.123, slot2: {x: -2.738, y: -4.573}, name: ""}
-  D: {x: -1.000, y:  0.800, slot2: {x: -0.750, y: -0.150}, name: ""}
-  E: {x: -0.400, y: -1.400, slot2: {x: -0.500, y: -2.950}, name: ""}   # 문 양옆
-  F: {x: -1.400, y: -5.400, slot2: {x: -1.350, y: -4.700}, name: ""}
+  A: {x: -2.383, y:  1.027, slot2: {x: -2.458, y:  0.282}, slot2_blocks_exit: true, name: ""}   # 1번 안쪽, 2번 입구 쪽
+  B: {x: -2.500, y: -1.250, slot2: {x: -2.600, y: -2.800}, slot2_blocks_exit: false, name: ""}   # 문 양옆
+  C: {x: -2.758, y: -5.123, slot2: {x: -2.738, y: -4.573}, slot2_blocks_exit: false, name: ""}
+  D: {x: -1.000, y:  0.800, slot2: {x: -0.750, y: -0.150}, slot2_blocks_exit: false, name: ""}
+  E: {x: -0.400, y: -1.400, slot2: {x: -0.500, y: -2.950}, slot2_blocks_exit: false, name: ""}   # 문 양옆
+  F: {x: -1.400, y: -5.400, slot2: {x: -1.350, y: -4.700}, slot2_blocks_exit: true, name: ""}
 
 corridor:
   mode: DIRECTIONAL
@@ -91,7 +91,7 @@ safety:
   use_hazard_topic: false        # 위치 기반 충돌 방지. true면 기존 범퍼 정지 규칙도 사용
   proximity_stop_m: 0.6          # 중심 간 거리가 이 값 미만이면 주행 중인 로봇 정지
   proximity_resume_m: 0.9        # 이 거리 이상에서 근접 정지 해제
-  slot_stop_m: 0.45              # 같은 구역 자리에 서 있는 로봇과, 그 구역에서 출발·도착하는 로봇 사이의 근접 정지 거리 (D-30, 현장 확인)
+  slot_stop_m: 0.45              # 진행 구간 없이 구역 자리에 정차한 상대를 지날 때의 중심 간 정지 거리 (D-36)
   bump_neighbor_m: 1.0
   bed_monitor:
     warn_s: 1.0

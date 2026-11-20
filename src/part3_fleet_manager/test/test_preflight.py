@@ -45,10 +45,23 @@ def test_discovery_requires_a_fastdds_process_on_the_configured_local_port(monke
     assert checks.discovery_ports("") == []
 
 
-PART4_GOALS = Path(__file__).resolve().parents[2] / "part4_amr_nav/hospital_nav/goal_manager.py"
+PART4_PACKAGE = Path(__file__).resolve().parents[2] / "part4_amr_nav/hospital_nav"
+PART4_GOALS = next((p for p in (PART4_PACKAGE / "hospital_nav/goal_manager.py", PART4_PACKAGE / "goal_manager.py")
+                    if p.is_file()), None)
 
 
-@pytest.mark.skipif(not PART4_GOALS.is_file(), reason="PART 04 소스가 없는 환경")
+def test_goal_file_prefers_new_package_layout(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    package = tmp_path / "src/part4_amr_nav/hospital_nav"
+    nested = package / "hospital_nav"
+    nested.mkdir(parents=True)
+    (package / "goal_manager.py").touch()
+    assert checks.find_goal_file(tmp_path) == package / "goal_manager.py"
+    (nested / "goal_manager.py").touch()
+    assert checks.find_goal_file(tmp_path) == nested / "goal_manager.py"
+
+
+@pytest.mark.skipif(PART4_GOALS is None, reason="PART 04 소스가 없는 환경")
 def test_62_preflight_reads_the_real_part4_slots_and_crossroad_as_text(cfg):
     points = checks.goal_points(PART4_GOALS)
     assert points["format"] == "SLOTS" and points["crossroad"] == (-1.5, -2.18)
