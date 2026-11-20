@@ -107,14 +107,14 @@ mission:
   return_home: true
   return_interruptible: true
   return_level: 1               # 완료한 임무의 응급도를 홈 복귀에 상속하지 않음
-  # return_after_cancel: null   # 미설정 시 LEGACY=false, SEGMENTS=true (D-43)
+  # return_after_cancel: null   # 미설정 시 LEGACY=false, PLAN=true (D-46)
   manual_level: 1               # GO_ZONE에는 UI가 level을 보내지 않음
   retry_after_return: false     # 이전 구역으로 되돌아간 뒤 원래 구간은 운영자가 재시도
   confirm_at_stops: true
 
-traffic:                        # 단계 4O 칸 기반 교통 판단 (기본값은 LEGACY 유지)
-  mode: LEGACY                  # LEGACY | SEGMENTS
-  stop_margin_m: 0.8            # 선점 가능 거리이자 정지선. 실측 정지거리가 나오면 줄입니다
+traffic:                        # 단계 4O 교통 판단 (기본값은 LEGACY 유지)
+  mode: LEGACY                  # LEGACY | PLAN (두 로봇 함께 계획, 실행 인자 traffic_mode:=PLAN)
+  stop_margin_m: 0.8            # 정지선. 다음 지점 영역까지 이 거리 안이면 멈출 수 없는 것으로 보고 지나가게 한다
   segments:
     HALL_TOP:        {kind: shared,  region: TOP,    label: "위쪽 홀"}
     HALL_BOTTOM:     {kind: shared,  region: BOTTOM, label: "아래쪽 홀"}
@@ -158,6 +158,27 @@ traffic:                        # 단계 4O 칸 기반 교통 판단 (기본값�
     - [DOOR_E, ROOM_E]
     - [ROOM_E, E1]
     - [ROOM_E, E2]
+  graph:                        # PLAN 지점 그래프 (D-44). 자리 12개는 위 칸 지도의 자리 칸에서 가져온다
+    corridor: [CORRIDOR_TOP, CORRIDOR_BOTTOM]   # 복도 칸: 이 두 칸을 cell_m 길이로 자동으로 나눈다
+    cell_m: 0.5
+    plan_speed_mps: null        # null = mock.speed_mps. 실제 주행 속도를 재면 바꾼다
+    plan_step_s: 0.5            # 탐색 시간 간격
+    level_weights: {1: 1, 2: 3, 3: 9}   # 비용 = Σ 가중치 × 도착 시각
+    idle_weight: 0.5            # 임무 없는 로봇(목표 = 지금 서 있는 자리)
+    replan_delay_s: 5.0         # 계획보다 이만큼 늦으면 다시 계획
+    plan_budget_ms: 200         # 보통 계획 시간 목표
+    plan_limit_ms: 1000         # 넘으면 Level 순 계획으로 대신하고 PLAN_UPDATE에 남긴다
+    aside_candidates: 4         # 계획 시작 때 비켜설 자리 후보: 지금 위치에서 경로가 짧은 자리 4곳 (목표 구역 제외)
+    move_start_s: 1.0           # 새 MOVE(또는 CANCEL 뒤 MOVE)부터 실제로 움직일 때까지. STATE 1 Hz 기준
+    points:
+      HALL_TOP:    {kind: hall,      segment: HALL_TOP,    x: -1.37, y: -0.55, label: "위쪽 홀 입구"}
+      HALL_BOTTOM: {kind: hall,      segment: HALL_BOTTOM, x: -1.72, y: -4.20, label: "아래쪽 홀 입구"}
+      CROSSROAD:   {kind: crossroad, segment: CROSSROAD}
+      DOOR_B:      {kind: door,      segment: DOOR_B}
+      DOOR_E:      {kind: door,      segment: DOOR_E}
+      ROOM_B:      {kind: room,      segment: ROOM_B, x: -2.45, y: -2.05, label: "102호 병실(B) 방 안"}
+      ROOM_E:      {kind: room,      segment: ROOM_E, x: -0.55, y: -2.20, label: "101호 병실(E) 방 안"}
+      DOCK_B:      {kind: dock,      robot: robot_b, label: "약품 운송 로봇 도크"}
 
 publish:
   fleet_state_hz: 5.0

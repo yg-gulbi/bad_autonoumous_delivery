@@ -151,10 +151,11 @@ def compare_points(config, part4):
 
 def traffic_mode_line(config):
     """One-line summary of the active traffic engine mode for preflight output."""
-    if config.traffic.mode == "SEGMENTS":
-        count = len(config.traffic.segments)
-        extra = f"정지선 {config.traffic.stop_margin_m:g} m" + (f", 칸 {count}개" if count else "")
-        return f"교통 판단 모드 · SEGMENTS ({extra})"
+    if config.traffic.mode == "PLAN":
+        graph = config.traffic.graph
+        extra = (f"정지선 {config.traffic.stop_margin_m:g} m, 복도 칸 {graph.cell_m:g} m, "
+                 f"계획 한도 {graph.plan_limit_ms:g} ms")
+        return f"교통 판단 모드 · PLAN ({extra})"
     return f"교통 판단 모드 · LEGACY (복도 {config.corridor.mode})"
 
 

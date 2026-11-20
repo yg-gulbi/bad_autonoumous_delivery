@@ -318,6 +318,7 @@ labels:
   - `RESOURCE_ENTER` → "{로봇} 복도 진입 확인", `RESOURCE_RELEASE` → "{로봇} 복도 통과 완료"
   - `CORRIDOR_YIELD_START` → "{로봇} 복도 양보 시작"
   - `MISSION_CREATED` → "{종류} 요청 등록", `ARRIVE` → "{로봇} · {구역} 도착", `CONFIRM_STEP` → "{구역} 확인 완료"
+  - 4O PLAN: `PLAN_UPDATE` → "두 로봇 다시 계획", `PLAN_WAIT` → "{로봇} 계획 순서 대기", `PLAN_YIELD_MOVE` → "{로봇} 길 비켜 주는 중". 세 종류 모두 운영 기록의 "판단" 필터에 들어간다. 지도에는 `traffic.plans`의 계획 경로를 가는 선으로 그린다.
 - 보조 문장은 `detail.reason`을 그대로 쓰고, 없으면 비운다.
 - 실시간 화면과 DB 기록 조회(운영 기록, 작업 상세의 기록)가 같은 문장 함수를 쓴다.
 - 옛 기록처럼 `reason`이 코드 값이거나 로봇 ID가 들어 있으면 그대로 보이지 않는다. 종류별 문장으로 바꾸고, ID는 표시 이름으로 바꾼다:

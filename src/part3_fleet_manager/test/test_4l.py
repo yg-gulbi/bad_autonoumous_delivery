@@ -9,11 +9,9 @@ from fleet_simulation import Simulation
 BED, MED = "robot_a", "robot_b"  # robot3 at D, robot2 at F
 
 
-@pytest.fixture(params=["LEGACY", "SEGMENTS"])
-def sim(cfg, tmp_path, request):
-    sc = replace(cfg, db_path=str(tmp_path / f"test-{request.param}.db"),
-                 traffic=replace(cfg.traffic, mode=request.param))
-    fleet = Simulation(sc, slots=True)
+@pytest.fixture
+def sim(cfg, tmp_path):
+    fleet = Simulation(replace(cfg, db_path=str(tmp_path / "test.db")), slots=True)
     yield fleet
     fleet.core.store.close()
 
@@ -81,8 +79,6 @@ def test_idle_peer_is_not_a_candidate_for_first_departure(sim):
 
 @pytest.mark.parametrize("approaches_again", [True, False])
 def test_self_first_breaks_follow_proximity_wait(sim, approaches_again):
-    if sim.cfg.traffic.mode == "SEGMENTS":
-        pytest.skip("LEGACY 전용 DIRECTIONAL 정원 2 동시 허가·following 전제 (SEGMENTS에서는 single 교차로 대기로 진입 전 차단)")
     assert sent(approach_d(sim, .40)) == {MED: "PAUSE"}
     sim.event(MED, "PAUSED")
     sim.cmd("GO_ZONE", robot=BED, zone="C")
@@ -111,8 +107,6 @@ def test_self_first_breaks_follow_proximity_wait(sim, approaches_again):
 
 @pytest.mark.parametrize("level,when", [(1, 30), (3, 0)])
 def test_f1_exit_wait_and_f2_can_leave(sim, level, when):
-    if sim.cfg.traffic.mode == "SEGMENTS":
-        pytest.skip("LEGACY 전용 EXIT 카드·zone_held 규칙 (SEGMENTS에서는 slot 칸으로 대체)")
     sim.frames[BED]["pose"] = sim.pose(sim.cfg.slot_point("F", 2))
     sim.call("f1", "D", level=level)
     out = sim.tick(0)
@@ -133,8 +127,6 @@ def test_f1_exit_wait_and_f2_can_leave(sim, level, when):
 
 
 def test_exit_override_keeps_proximity_before_the_first_move(sim):
-    if sim.cfg.traffic.mode == "SEGMENTS":
-        pytest.skip("LEGACY 전용 EXIT 카드·depart 선택 규칙")
     sim.frames[MED]["pose"] = sim.pose((-1.40, -5.20))
     sim.frames[BED]["pose"] = sim.pose((-1.35, -4.80))
     sim.call("f1", "D", level=3)
@@ -148,8 +140,6 @@ def test_exit_override_keeps_proximity_before_the_first_move(sim):
 
 
 def test_exit_retry_then_hold_at_a(sim):
-    if sim.cfg.traffic.mode == "SEGMENTS":
-        pytest.skip("LEGACY 전용 EXIT 카드·retry/hold 규칙")
     assert sim.cfg.exit_blocked_zones == {"A", "C", "F"}
     sim.frames[MED]["pose"] = sim.pose("A")
     sim.frames[BED]["pose"] = sim.pose(sim.cfg.slot_point("A", 2))

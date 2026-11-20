@@ -16,8 +16,9 @@ from .schemas import MISSION_TYPES
 CORRIDOR_MODES = ("DIRECTIONAL", "SHARED_YIELD", "EXCLUSIVE")
 ROOM_MODES = ("DOOR", "ROOM")
 OBSTACLE_MODES = ("report", "inspect")
-TRAFFIC_MODES = ("LEGACY", "SEGMENTS")
+TRAFFIC_MODES = ("LEGACY", "PLAN")
 SEGMENT_KINDS = ("shared", "one_way", "single")
+POINT_KINDS = ("hall", "crossroad", "door", "room", "dock")
 
 
 def zone_display_name(zone, name):
@@ -183,11 +184,40 @@ class SegmentSpec:
 
 
 @dataclass(frozen=True)
+class GraphPointSpec:
+    """One PLAN graph point besides the zone slots (which come from the slot segments)."""
+    name: str
+    kind: str
+    label: str
+    segment: str | None = None       # region for "inside" judgement, reused from traffic.segments
+    anchor: geometry.Point | None = None
+    robot: str | None = None         # dock owner
+
+
+@dataclass(frozen=True)
+class GraphCfg:
+    """Stage 4O PLAN: point graph, timing and cost settings (traffic.graph)."""
+    cell_m: float = 0.5
+    plan_speed_mps: float | None = None   # None = mock.speed_mps
+    plan_step_s: float = 0.5
+    level_weights: Mapping[int, float] = field(default_factory=lambda: {1: 1.0, 2: 3.0, 3: 9.0})
+    idle_weight: float = 0.5
+    replan_delay_s: float = 5.0
+    plan_budget_ms: float = 200.0
+    plan_limit_ms: float = 1000.0
+    aside_candidates: int = 4             # slots nearest to the robot offered as a move aside at plan start
+    move_start_s: float = 1.0             # from a new MOVE (or CANCEL then MOVE) until the robot drives
+    corridor: tuple[str, ...] = ()
+    points: Mapping[str, GraphPointSpec] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class TrafficCfg:
     mode: str = "LEGACY"
     stop_margin_m: float = 0.8
     segments: Mapping[str, SegmentSpec] = field(default_factory=dict)
     links: tuple[tuple[str, str], ...] = ()
+    graph: GraphCfg = field(default_factory=GraphCfg)
 
 
 @dataclass(frozen=True)
@@ -240,7 +270,7 @@ class FleetConfig:
     def effective_return_after_cancel(self) -> bool:
         if self.mission.return_after_cancel is not None:
             return self.mission.return_after_cancel
-        return self.traffic.mode == "SEGMENTS"
+        return self.traffic.mode == "PLAN"
 
     def slot_point(self, zone: str, slot: int | None = 1) -> geometry.Point:
         """Slot 1 is the zone point; slot 2 exists only where fleet.yaml gives slot2."""
@@ -478,7 +508,78 @@ def _load_traffic(data: Mapping | None, zones: Mapping) -> TrafficCfg:
         if segments and (a not in segments or b not in segments):
             raise ConfigError(f"{l_path}: 정의되지 않은 칸이 포함됐습니다 ({a}, {b})")
         links.append((a, b))
-    return TrafficCfg(mode=mode, stop_margin_m=stop_margin, segments=segments, links=tuple(links))
+    graph = _load_graph(raw.get("graph"), segments)
+    return TrafficCfg(mode=mode, stop_margin_m=stop_margin, segments=segments, links=tuple(links), graph=graph)
+
+
+def _load_graph(data: Mapping | None, segments: Mapping) -> GraphCfg:
+    if data is None:
+        return GraphCfg()
+    raw = _mapping(data, "traffic.graph")
+    numbers = {}
+    for key in ("cell_m", "plan_step_s", "idle_weight", "replan_delay_s", "plan_budget_ms", "plan_limit_ms",
+                "move_start_s"):
+        if raw.get(key) is not None:
+            numbers[key] = _number(raw[key], f"traffic.graph.{key}", positive=True)
+    speed = raw.get("plan_speed_mps")
+    if speed is not None:
+        speed = _number(speed, "traffic.graph.plan_speed_mps", positive=True)
+    weights = dict(GraphCfg().level_weights)
+    if raw.get("level_weights") is not None:
+        for level, value in _mapping(raw["level_weights"], "traffic.graph.level_weights").items():
+            if type(level) is not int or not 1 <= level <= 3:
+                raise ConfigError("traffic.graph.level_weights: 키는 Level 1~3 정수입니다")
+            weights[level] = _number(value, f"traffic.graph.level_weights.{level}", positive=True)
+    if raw.get("aside_candidates") is not None:
+        numbers["aside_candidates"] = _value(raw, "aside_candidates", "traffic.graph", int)
+        if numbers["aside_candidates"] < 0:
+            raise ConfigError("traffic.graph.aside_candidates: 0 이상 정수가 필요합니다")
+    corridor = tuple(raw.get("corridor") or ())
+    for name in corridor:
+        spec = segments.get(name)
+        if spec is None or spec.kind != "one_way" or not spec.polygon:
+            raise ConfigError(f"traffic.graph.corridor: {name}은 다각형 one_way 칸이어야 합니다")
+    points = {}
+    for name, spec_raw in _mapping(raw.get("points") or {}, "traffic.graph.points").items():
+        path = f"traffic.graph.points.{name}"
+        spec = _mapping(spec_raw, path)
+        kind = _text(spec.get("kind"), f"{path}.kind", POINT_KINDS)
+        segment = spec.get("segment")
+        if segment is not None and segment not in segments:
+            raise ConfigError(f"{path}.segment: 칸 지도에 없는 칸입니다 ({segment})")
+        if kind != "dock" and segment is None:
+            raise ConfigError(f"{path}.segment: 영역으로 쓸 칸이 필요합니다")
+        anchor = _point(spec, path) if spec.get("x") is not None else None
+        robot = _text(spec["robot"], f"{path}.robot") if spec.get("robot") is not None else None
+        if kind == "dock" and robot is None:
+            raise ConfigError(f"{path}.robot: 도크 주인 로봇이 필요합니다")
+        label = _text(spec.get("label") or (segments[segment].label if segment else name), f"{path}.label")
+        points[name] = GraphPointSpec(name=name, kind=kind, label=label, segment=segment, anchor=anchor, robot=robot)
+    return GraphCfg(plan_speed_mps=speed, level_weights=weights, corridor=corridor, points=points, **numbers)
+
+
+def _check_segment_map(traffic: TrafficCfg, slots: Mapping) -> None:
+    """PLAN reads its map only from fleet.yaml: every region and every zone slot needs a segment (4O)."""
+    if not traffic.segments and not traffic.links:
+        if traffic.mode == "PLAN":
+            raise ConfigError("traffic.segments·traffic.links: PLAN 모드에는 칸 지도가 필요합니다")
+        return
+    if not traffic.segments or not traffic.links:
+        raise ConfigError("traffic.segments·traffic.links: 둘 다 필요합니다")
+    specs = traffic.segments.values()
+    for region in (geometry.TOP, geometry.BOTTOM, *geometry.ROOMS):
+        if not any(s.kind == "shared" and s.region == region for s in specs):
+            raise ConfigError(f"traffic.segments: {region} 영역의 shared 칸이 필요합니다")
+    for zone, points in slots.items():
+        for slot in range(1, len(points) + 1):
+            if not any(s.zone == zone and s.slot == slot for s in specs):
+                raise ConfigError(f"traffic.segments: {zone} 구역 {slot}번 자리 칸이 필요합니다")
+    linked = {name for pair in traffic.links for name in pair}
+    for name in traffic.segments:
+        if name not in linked:
+            raise ConfigError(f"traffic.links: {name} 칸이 어디에도 연결되지 않았습니다")
+    if traffic.mode == "PLAN" and not traffic.graph.corridor:
+        raise ConfigError("traffic.graph.corridor: PLAN 모드에는 나눌 복도 칸이 필요합니다")
 
 
 def config_from_dict(data: Mapping) -> FleetConfig:
@@ -585,6 +686,7 @@ def config_from_dict(data: Mapping) -> FleetConfig:
     if return_after_cancel is not None and type(return_after_cancel) is not bool:
         raise ConfigError("mission.return_after_cancel: bool 값이 필요합니다")
     traffic = _load_traffic(root.get("traffic"), zones)
+    _check_segment_map(traffic, slots)
     values = {**asdict(ObstacleCfg()), **_mapping(root.get("obstacle", {}), "obstacle")}
     threshold = _number(values["min_confidence"], "obstacle.min_confidence", minimum=0)
     if threshold > 1:

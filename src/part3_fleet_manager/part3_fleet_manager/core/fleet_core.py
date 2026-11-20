@@ -37,7 +37,9 @@ class FleetCore:
     def __init__(self, config, store=None):
         self.config = config
         self.store = store if store is not None else Store(config.db_path)
-        self.links = {r: RobotProtocol(c.ns, config.robot_link) for r, c in config.robots.items()}
+        resend = config.traffic.mode == "PLAN"   # RESUME/CANCEL resend only in PLAN (LEGACY unchanged)
+        self.links = {r: RobotProtocol(c.ns, config.robot_link, resend_controls=resend)
+                      for r, c in config.robots.items()}
         self.traffic = create_traffic(config, self.links)
         self.resources = self.traffic.resources
         self.decisions = self.traffic.decisions
@@ -132,8 +134,7 @@ class FleetCore:
             return
         robot = card["robots"][0]
         r = self.mission.robots[robot]
-        if (not r.job and card.get("context") != "PROXIMITY") or (
-                r.canceling and not (r.exiting_corridor and card.get("context") == "PROXIMITY")):
+        if (not r.job and card.get("context") != "PROXIMITY") or r.canceling:
             raise ValueError("E-409: 현재 임무에서 실행할 수 없습니다.")
         if self.safety.causes[robot] and choice not in ("cancel", "hold"):
             raise ValueError("E-409: 안전 정지 중입니다.")
@@ -241,11 +242,11 @@ class FleetCore:
 
     def _stall_tick(self, robot, now, terminal, accepted, results, out):
         r, link = self.mission.robots[robot], self.links[robot]
-        stop_line = getattr(self.resources, "is_stop_line_paused", lambda _: False)(robot)
+        plan_hold = self.traffic.plan_hold(robot)
         if (not r.job or link.state in PREPARING or (r.state != "MOVING" and not accepted)
                 or not self.link_ok[robot] or self.safety.causes[robot]
                 or robot in self.collision.contacts or robot in self.collision.access.waits
-                or stop_line
+                or plan_hold
                 or self.resources.following(robot) or self.resources.robot_state(robot, r.state) == "GIVE_WAY" or terminal):
             self._inspect(robot, now, results, out, moving=False)
             if terminal or not r.job:
@@ -286,7 +287,7 @@ class FleetCore:
         ui, safety, messages = [], [], []
         results = {robot: [] for robot in self.links}
         allowed_resources = (tuple(dict.fromkeys((*g.RESOURCES, *self.resources.segments)))
-                             if self.traffic.mode == "SEGMENTS" else g.RESOURCES)
+                             if self.traffic.mode == "PLAN" else g.RESOURCES)
         parsers = {"/ui/mission_req": schemas.parse_mission_req, "/ui/decision": schemas.parse_decision,
                    "/ui/operator_cmd": lambda s: schemas.parse_operator_cmd(s, robots=self.links, resources=allowed_resources)}
         for topic, payload, stamp, robot in batch:
@@ -408,13 +409,18 @@ class FleetCore:
         self.traffic.observe(now, reports, self.mission.robots)
         for data in clears:
             self._ui("/ui/operator_cmd", data, now, out)
-        self.mission.check_corridor_exits(now)
-        if self.mission.ready:
+        if self.traffic.mode == "PLAN" and self.mission.ready:
+            # A leg finished by an arrival or cancel in this batch is requested again before planning.
             self.mission.plan(now)
         self.traffic.reconcile(now)
         arbitration = self.traffic.arbitrate(now)
         for leg in arbitration.grants:
             self.mission.granted(leg)
+        for robot in getattr(arbitration, "retarget", ()):
+            self.mission.retarget(robot, now)
+        for robot, zone, slot in getattr(arbitration, "arrived", ()):
+            # PLAN: the robot already stands in its goal slot; the leg ends here without a MOVE.
+            self.mission.received(robot, {"event": "ARRIVED", "destination": zone, "slot": slot}, now)
         self.deadlock.observe(now)
         self.collision.cards(now, self.mission.robots)
         for data in choices:
@@ -485,8 +491,6 @@ class FleetCore:
         wait = self.collision.near.get(robot) or self.collision.zone.get(robot) or self.collision.access.waits.get(robot)
         if wait:
             return wait.reason
-        if self.mission.robots[robot].exiting_corridor:
-            return "취소됨 · 복도를 빠져나온 뒤 정지"
         return self.resources.wait_reasons.get(robot)
 
     def mission_row(self, job):
@@ -547,7 +551,6 @@ class FleetCore:
                 "battery_pct": link.battery, "battery_status": link.battery_status, "docked": link.docked, "mission_id": r.job.journal_id if r.job else None,
                 "leg": leg_info,
                 "returning": r.returning,
-                "canceling_exit": r.exiting_corridor,
                 "slot": r.slot if region == g.ZONE_REGIONS[r.zone] else None,
                 "via": {"point": "교차로", "passed": via_done} if crossing else None,
                 "yolo": sighting if sighting and now < sighting["at"] + 30 else None,

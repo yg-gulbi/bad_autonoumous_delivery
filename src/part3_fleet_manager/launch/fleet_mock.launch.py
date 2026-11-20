@@ -54,7 +54,7 @@ def generate_launch_description():
         DeclareLaunchArgument("robot_a_r1", default_value="", description="Override R1 support on robot_a"),
         DeclareLaunchArgument("robot_b_r1", default_value="", description="Override R1 support on robot_b"),
         DeclareLaunchArgument("assignment_mode", default_value="", description="IDLE_BEST_BATTERY or ROLE"),
-        DeclareLaunchArgument("traffic_mode", default_value="", description="LEGACY or SEGMENTS (empty uses fleet.yaml)"),
+        DeclareLaunchArgument("traffic_mode", default_value="", description="LEGACY or PLAN (empty uses fleet.yaml)"),
         DeclareLaunchArgument("robot_a_battery", default_value="", description="Robot A initial battery (%)"),
         DeclareLaunchArgument("robot_b_battery", default_value="", description="Robot B initial battery (%)"),
         DeclareLaunchArgument("robot_a_slots", default_value="", description="false: robot_a runs PART 04 before 4J"),

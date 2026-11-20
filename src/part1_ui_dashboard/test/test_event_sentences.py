@@ -9,7 +9,6 @@ from part1_ui_dashboard.web import Feed, create_app
 from part3_fleet_manager.core.config import load_config
 from part3_fleet_manager.core.deadlock import DeadlockManager
 from part3_fleet_manager.core.resource_manager import ResourceManager, RobotReport
-from part3_fleet_manager.core.segments import SegmentManager
 from part3_fleet_manager.core.store import Store
 
 A, B = "robot_a", "robot_b"
@@ -55,14 +54,18 @@ def traffic(cfg):
     dl.arrived(dl.yielding[B].detour,23)
     yield from rm.events
 
-    # 4O segment preemption event
-    sm = SegmentManager(replace(cfg, traffic=replace(cfg.traffic, mode="SEGMENTS")))
-    seg_reports = {A: RobotReport(cfg.zones["C"], True, departed=True), B: RobotReport(cfg.zones["E"], True)}
-    sm.request(A, "A", 2, 0, mission_id="M-PRE-A")
-    sm.tick(1, seg_reports)
-    sm.request(B, "B", 3, 2, mission_id="M-PRE-B")
-    sm.tick(3, seg_reports)
-    yield from sm.events
+    # 4O PLAN: plan updates, order waits and a move aside from a short two-robot run.
+    from kinematic_mock import KinematicSim
+    # Level 1 robot goes D -> C while a Level 3 call takes the other robot C -> D: the Level 1 robot
+    # moves aside in the top hall and waits for its turn (PLAN_YIELD_MOVE, PLAN_WAIT).
+    sim = KinematicSim(replace(cfg, assignment=replace(cfg.assignment, mode="ROLE")), mode="PLAN", poses={B: "C"})
+    try:
+        sim.cmd("GO_ZONE", robot=A, zone="C")
+        sim.submit_call("D", level=3)
+        sim.run_until(80.0)
+        yield from (e for e in sim.all_events if e["type"].startswith("PLAN_"))
+    finally:
+        sim.close()
 
 
 def test_41_actual_fleet_event_titles_reasons_and_journal(tmp_path,monkeypatch):

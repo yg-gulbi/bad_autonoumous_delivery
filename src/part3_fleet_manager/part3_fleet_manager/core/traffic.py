@@ -1,4 +1,4 @@
-"""Traffic engine selector: LEGACY (existing ResourceManager + ZoneTraffic) vs SEGMENTS (Stage 4O)."""
+"""Traffic engine selector: LEGACY (existing ResourceManager + ZoneTraffic) vs PLAN (Stage 4O)."""
 
 from . import geometry as g
 from .collision import CollisionControl
@@ -6,7 +6,7 @@ from .config import FleetConfig
 from .decisions import Decisions
 from .resource_manager import ResourceManager, TickResult
 from .robot_protocol import DONE
-from .segments import SegmentManager
+from .plan_traffic import PlanManager
 
 
 class LegacyTraffic:
@@ -43,6 +43,18 @@ class LegacyTraffic:
         return (robot in self.collision.access.waits or robot in self.collision.contacts
                 or robot in self.collision.zone or self.collision.yielding_priority(robot))
 
+    def plan_hold(self, robot: str) -> bool:
+        del robot
+        return False
+
+    def parked_zone(self, robot: str):
+        del robot
+        return None
+
+    def arrived_aside(self, robot: str, data: dict, now: float) -> bool:
+        del robot, data, now
+        return False
+
     def block_robot(self, robot: str, pose, now: float):
         region = self.config.corridor.region_of(pose) if pose is not None else None
         resource = self.resources.resources.get(region)
@@ -72,40 +84,25 @@ class LegacyTraffic:
             raise ValueError("E-423: 복도 통과 후 취소하세요.")
         return "IMMEDIATE"
 
-    def start_corridor_exit(self, robot: str, now: float) -> bool:
-        del robot, now
-        return False
-
-    def exiting_cleared(self, robot: str) -> bool:
-        del robot
-        return True
-
-    def finish_corridor_exit(self, robot: str, now: float):
-        del robot, now
-
-    def needs_slot_replan(self, robot: str) -> bool:
-        del robot
-        return False
-
     def traffic_snapshot(self) -> dict:
         return {
             "mode": "LEGACY",
             "stop_margin_m": self.config.traffic.stop_margin_m,
             "segments": {},
             "stop_line_waits": {},
-            "last_preempt": None,
         }
 
 
-class SegmentTraffic:
-    """Stage 4O single-rule segment reservation engine (no LEGACY corridor/GiveWay/ZoneTraffic/E-423)."""
+class PlanTraffic:
+    """Stage 4O: the two robots are planned together; the plan's order is kept while they drive (D-43)."""
 
-    mode = "SEGMENTS"
+    mode = "PLAN"
 
     def __init__(self, config: FleetConfig, links: dict):
         self.config = config
         self.links = links
-        self.resources = SegmentManager(config)
+        self.resources = PlanManager(config)
+        self.resources.links = links
         self.decisions = Decisions(self.resources.record)
         self.collision = CollisionControl(self.resources, links, self.decisions, enable_zone_traffic=False)
 
@@ -132,7 +129,15 @@ class SegmentTraffic:
 
     def traffic_stop(self, robot: str) -> bool:
         return (robot in self.collision.access.waits or robot in self.collision.contacts
-                or self.collision.yielding_priority(robot) or self.resources.is_stop_line_paused(robot))
+                or self.collision.yielding_priority(robot) or robot in self.resources.held)
+
+    def plan_hold(self, robot: str) -> bool:
+        return robot in self.resources.held
+
+    def parked_zone(self, robot: str):
+        """Zone of the slot the robot stands in after a completed MOVE ("" when stopped on the way)."""
+        slot = self.resources.parked_at.get(robot)
+        return self.resources.graph.points[slot].zone if slot else ""
 
     def block_robot(self, robot: str, pose, now: float):
         region = self.config.corridor.region_of(pose) if pose is not None else None
@@ -144,29 +149,17 @@ class SegmentTraffic:
         self.resources.unblock_robot(robot)
 
     def cancel_policy(self, robot: str, state: str, link, now: float) -> str:
-        del now
-        if (state != "FAULT" and link.move and link.state not in DONE
-                and self.resources.holds_occupied_narrow(robot, pose=link.pose)):
-            return "EXIT_CORRIDOR"
-        return "IMMEDIATE"
+        del robot, state, link, now
+        return "IMMEDIATE"      # a cancel is a new goal; the plan takes the robot out (D-46)
 
-    def start_corridor_exit(self, robot: str, now: float) -> bool:
-        return self.resources.start_corridor_exit(robot, now, pose=self.links[robot].pose)
-
-    def exiting_cleared(self, robot: str) -> bool:
-        return not self.resources.holds_any_narrow(robot)
-
-    def finish_corridor_exit(self, robot: str, now: float):
-        self.resources.finish_corridor_exit(robot, now)
-
-    def needs_slot_replan(self, robot: str) -> bool:
-        return self.resources.needs_slot_replan(robot)
+    def arrived_aside(self, robot: str, data: dict, now: float) -> bool:
+        return self.resources.arrived_aside(robot, data, now)
 
     def traffic_snapshot(self) -> dict:
         return self.resources.traffic_snapshot()
 
 
 def create_traffic(config: FleetConfig, links: dict):
-    if config.traffic.mode == "SEGMENTS":
-        return SegmentTraffic(config, links)
+    if config.traffic.mode == "PLAN":
+        return PlanTraffic(config, links)
     return LegacyTraffic(config, links)

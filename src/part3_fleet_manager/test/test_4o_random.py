@@ -1,4 +1,8 @@
-"""Stage 4O · 7C: Random event stress test (50 seeds default, SEGMENTS_RANDOM_SEEDS=300 for full run)."""
+"""Stage 4O · 7C: Random event stress test in PLAN mode (50 seeds default, PLAN_RANDOM_SEEDS=300 for full run).
+
+Checks 1-5 are the ones of ac58e60. Check 4 used the preemption rule, which PLAN no longer has; it keeps its
+meaning as "a pending robot the plan lets go is not kept waiting longer than decision_window_s + 2 s".
+"""
 import os
 import random
 
@@ -9,7 +13,7 @@ from part3_fleet_manager.core.robot_protocol import DONE
 
 A, B = "robot_a", "robot_b"
 ZONES = ("A", "B", "C", "D", "E", "F")
-DEFAULT_SEEDS = int(os.environ.get("SEGMENTS_RANDOM_SEEDS", "50"))
+DEFAULT_SEEDS = int(os.environ.get("PLAN_RANDOM_SEEDS", "50"))
 SIM_DURATION_S = 600.0
 DRAIN_LIMIT_S = 480.0
 DT = 0.2
@@ -26,18 +30,20 @@ def _travel_dir(bot, smap) -> int:
 
 def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> dict:
     rng = random.Random(seed)
-    sim = KinematicSim(cfg, mode="SEGMENTS", speed_mps=0.2)
+    sim = KinematicSim(cfg, mode="PLAN", speed_mps=0.2)
     log: list[str] = []
     submitted_refs: list[str] = []
-    stats = {"missions": 0, "cancels": 0, "requeues": 0, "pauses": 0, "drops": 0, "preempts": 0, "safety_cards": 0}
+    stats = {"missions": 0, "cancels": 0, "requeues": 0, "pauses": 0, "drops": 0, "safety_cards": 0,
+             "prox_stops": 0, "prox_stops_planned": 0, "replans": 0, "plan_ms_max": 0.0, "fallbacks": 0}
+    injected_until = {"t": -1.0}   # proximity stops right after a manual pause or link drop are not plan failures
 
     # Pre-schedule random events across the 10-minute window.
     next_event_t = rng.uniform(0.5, 4.0)
     paused_until: dict[str, float] = {}
     both_wait_s = 0.0
     max_both_wait_s = 0.0
-    preempt_wait_since: dict[str, float] = {}
-    max_preempt_wait_s = 0.0
+    start_wait_since: dict[str, float] = {}
+    max_start_wait_s = 0.0
     confirm_at: dict[str, float] = {}
     card_answered: set[str] = set()
 
@@ -46,7 +52,7 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
         raise AssertionError(f"[seed={seed} t={sim.now:.1f}s] {msg}\nRecent events ({len(log)} total):\n  {tail}")
 
     def check_invariants(phase: str):
-        nonlocal both_wait_s, max_both_wait_s, max_preempt_wait_s
+        nonlocal both_wait_s, max_both_wait_s, max_start_wait_s
         sm = sim.core.resources
         smap = sm.map
         now = sim.now
@@ -97,7 +103,7 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
                 is_wait = (
                     (vis == "HOLD" or sm.is_stop_line_paused(r) or r in sm.pending)
                     and bot.state in ("IDLE", "COMPLETE", "CANCELED", "PAUSED")
-                    and (unit.job is not None or unit.exiting_corridor or r in sm.pending or r in sm.stop_lines)
+                    and (unit.job is not None or r in sm.pending)
                 )
                 if is_wait:
                     waiting.append(r)
@@ -112,22 +118,21 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
             else:
                 both_wait_s = 0.0
 
-        # Invariant 4: when preemption conditions hold, high Level does not wait > decision_window_s + 2.0 s.
+        # Invariant 4: a pending robot the plan lets go now gets its MOVE within decision_window_s + 2.0 s.
         limit_s = cfg.resources.decision_window_s + 2.0
         for r in sim.robots:
             leg = sm.pending.get(r)
-            if leg is not None and sm.eligible(r) and not any_safety and not any_offline:
-                c = sm._build_contender(r, leg, is_reacquire=False)
-                if c is not None:
-                    ok, preemptions, _ = sm._evaluate(c, now)
-                    if ok and preemptions:
-                        start = preempt_wait_since.setdefault(r, now)
-                        waited = now - start
-                        max_preempt_wait_s = max(max_preempt_wait_s, waited)
-                        if waited > limit_s + 1e-6:
-                            fail(f"Inv4({phase}): {r} waited {waited:.2f}s > {limit_s:.2f}s despite preemptable {preemptions}")
-                        continue
-            preempt_wait_since.pop(r, None)
+            plan = sm.plans.get(r)
+            if (leg is not None and plan is not None and plan.legs and sm.eligible(r) and not any_safety
+                    and not any_offline and r not in sm.held and not sim.core.mission.robots[r].replacing
+                    and r not in sim.core.collision.access.waits and r not in sim.core.collision.contacts):
+                start = start_wait_since.setdefault(r, now)
+                waited = now - start
+                max_start_wait_s = max(max_start_wait_s, waited)
+                if waited > limit_s + 1e-6:
+                    fail(f"Inv4({phase}): {r} waited {waited:.2f}s > {limit_s:.2f}s although the plan lets it go")
+                continue
+            start_wait_since.pop(r, None)
 
     def handle_operator_routine():
         now = sim.now
@@ -180,7 +185,7 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
                         continue
                     if cand == "peer_first" and (not peer or not sim.core.collision.can_go_first(peer, r, sim.core.mission, now)):
                         continue
-                    if cand == "return" and not (sim.core.mission.robots[r].job or sim.core.mission.robots[r].exiting_corridor):
+                    if cand == "return" and not sim.core.mission.robots[r].job:
                         continue
                     choice = cand
                     break
@@ -227,7 +232,9 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
             r, job = rng.choice(active_missions)
             sim.cancel(job.id)
             stats["cancels"] += 1
-            in_narrow = sim.core.resources.holds_occupied_narrow(r)
+            sm = sim.core.resources
+            in_narrow = any(r in sm.segments[n].holders and sm.segments[n].holders[r].state == "OCCUPIED"
+                            for n in sm.map.narrow_names)
             log.append(f"t={now:.1f} CANCEL {job.id} ({r}, in_narrow={in_narrow})")
             if rng.random() < 0.50:
                 new_lvl = min(3, job.level + 1)
@@ -252,6 +259,7 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
                 dur = rng.uniform(2.0, 6.0)
                 sim.pause(r)
                 paused_until[r] = now + dur
+                injected_until["t"] = max(injected_until["t"], now + dur + 10.0)
                 stats["pauses"] += 1
                 log.append(f"t={now:.1f} PAUSE {r} for {dur:.1f}s")
         else:
@@ -259,8 +267,21 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
             r = rng.choice((A, B))
             if now >= sim.robots[r].drop_until:
                 sim.drop_link(r, 2.0)
+                injected_until["t"] = max(injected_until["t"], now + 12.0)
                 stats["drops"] += 1
                 log.append(f"t={now:.1f} DROP_LINK {r} 2.0s")
+
+    def count_events(out):
+        for e in out.events:
+            if e["type"] == "PROXIMITY_STOP":
+                stats["prox_stops"] += 1
+                if e["ts"] > injected_until["t"] and not any(sim.core.safety.causes[r] for r in sim.robots):
+                    stats["prox_stops_planned"] += 1
+                    log.append(f"t={e['ts']:.1f} PROXIMITY_STOP {e['robot']} {e['detail'].get('distance_m')}")
+            elif e["type"] == "PLAN_UPDATE":
+                stats["replans"] += 1
+                stats["plan_ms_max"] = max(stats["plan_ms_max"], e["detail"]["plan_ms"])
+                stats["fallbacks"] += int(e["detail"]["fallback"])
 
     try:
         # Phase 1: 10 simulated minutes of mixed random events.
@@ -270,7 +291,7 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
                 next_event_t = sim.now + rng.uniform(4.0, 16.0)
             handle_operator_routine()
             out = sim.step(DT)
-            stats["preempts"] += sum(1 for e in out.events if e["type"] == "RESOURCE_PREEMPT")
+            count_events(out)
             check_invariants("active")
 
         # Phase 2: Resume any active manual pause and drain all missions back to home.
@@ -284,14 +305,13 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
         while sim.now < drain_end - 1e-9:
             handle_operator_routine()
             out = sim.step(DT)
-            stats["preempts"] += sum(1 for e in out.events if e["type"] == "RESOURCE_PREEMPT")
+            count_events(out)
             check_invariants("drain")
             # Stop draining early once everything is completely settled at home.
             all_idle_home = all(
                 sim.core.mission.robots[r].state == "IDLE"
                 and sim.core.mission.robots[r].job is None
                 and not sim.core.mission.robots[r].queue
-                and not sim.core.mission.robots[r].exiting_corridor
                 and sim.core.mission.robots[r].zone == cfg.robots[r].start_zone
                 and sim.robots[r].state in DONE
                 for r in sim.robots
@@ -318,7 +338,7 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
                 fail(f"Inv5: narrow segment {name} still held by {sim.core.resources.segments[name].holders}")
 
         stats["max_both_wait_s"] = round(max_both_wait_s, 2)
-        stats["max_preempt_wait_s"] = round(max_preempt_wait_s, 2)
+        stats["max_start_wait_s"] = round(max_start_wait_s, 2)
         return stats
     finally:
         sim.close()
@@ -327,3 +347,10 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
 @pytest.mark.parametrize("seed", range(DEFAULT_SEEDS))
 def test_random_segments_invariants(cfg, seed):
     run_random_seed(cfg, seed)
+
+
+def test_seed_39_e_room_no_mutual_proximity_stop(cfg):
+    """ac58e60 failed seed 39: both robots stopped 0.38 m apart inside room E for over 30 s."""
+    stats = run_random_seed(cfg, 39)
+    assert stats["max_both_wait_s"] <= 30.0
+    assert stats["prox_stops_planned"] == 0

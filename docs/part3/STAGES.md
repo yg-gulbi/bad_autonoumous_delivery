@@ -31,6 +31,7 @@
 | 4L | 11/20 | YOLO 주행 중 보고와 포기 사진 구분, 정차 로봇 옆 통과, 근접 카드에서 먼저 갈 로봇 선택, A·F 출구 대기, preflight 두 경로 | PART 01 78개·PART 03 455개 통과, 두 패키지 빌드 성공. 격리 mock 두 대로 감지 사진·출구 카드·우선 출발 후 재정지 확인 | [4L 보고서](ui/stage4l-report.md) |
 | 4M | 11/20 | 침상 정상 1초 연속 수신, 경보 종류·대상별 중복 억제, 감시 복구 시 끊김 경보 제거 | 3분 깜빡임에서 이탈·정지·팝업 각 1회. PART 01·03 합계 546개 통과, 두 패키지 빌드 성공 | [4M 보고서](ui/stage4m-report.md) |
 | 4N | 11/20 | 병원 구역명, 같은 구역 출입 순서, 출발 전 간격과 마주 봄 카드 | 현장 두 장면의 근접 정지 각 0회. PART 01 89개·PART 03 475개 통과, 격리 mock 화면 두 장과 preflight 경고 확인 | [4N 보고서](ui/stage4n-report.md) |
+| 4O | 11/20 | 두 로봇 함께 계획하기(`traffic.mode: PLAN`, 기본 LEGACY): 지점 그래프·충돌 쌍, 시공간 A* 계획기, ADG 실행, 비켜서기 MOVE, 취소는 새 목표. ac58e60의 허가 비교·선점과 상황별 보정 삭제 | 11/20 다섯 장면에서 Level 3 출발 대기 0.2 s(16:06:32만 11.4 s), 도착이 LEGACY보다 빠르고 근접 정지 0회. 무작위 300개 위반 0, 계획한 로봇 근접 정지 0. PART 01 92개·PART 03 552개 통과, main 시험은 이벤트 목록 비교 1건 외 통과. colcon·격리 mock 캡처는 노트북에서 | [4O 보고서](ui/stage4o-report.md) |
 
 - 11/18 PR #2·#3으로 main에 합쳤다 (화면·DB·장애물 분류·실제 연결 준비, README 갱신).
 - 11/18 강의실 관제 PC(`mu-03`)에 새로 설치하고, 가짜 로봇 시연을 확인한 뒤 **실제 로봇 2대와 첫 연결 시험**을 했다 (17:23~17:30, 4P 전이라 관제·화면을 따로 띄움, 기록 `~/.bad/bad_real.db`).
@@ -77,6 +78,12 @@
 
 - 실제 PART 04에서 PAUSE 뒤 STATE가 `STOPPING_PAUSE`·`PAUSED`로 바뀌는 데 걸리는 시간. 1.5초 재전송 간격(`robot_link.control_retry_s`)이 짧지 않은지 본다.
 - 현장에서 STATUS `ARRIVED`가 빠지는 일이 실제로 있는지 (`ARRIVED_FROM_STATE` 기록 건수).
+
+### 3.1d 4O PLAN 확인 (노트북·현장)
+
+- `colcon build --symlink-install`, 격리 mock 두 대로 `traffic_mode:=PLAN` 실행과 화면 캡처 4장(계획 경로 선·순서 대기, 길 비켜 주는 중, 기록의 `PLAN_*`, 칸 UNKNOWN 해제). 4O 보고서 12절.
+- 실제 로봇의 주행 속도, PAUSE → `PAUSED` 시간, MOVE → `MOVING` 시간을 재서 `graph.plan_speed_mps`·`stop_margin_m`·`graph.move_start_s`를 정한다. 이 셋이 맞아야 계획 순서와 실제 도착 순서가 같다.
+- Nav2 경로가 `route_planner` 선에서 얼마나 벗어나는지 (교차로·문 근처). 충돌 쌍은 그 선으로 계산한다.
 
 ### 3.2 다른 파트 대기
 

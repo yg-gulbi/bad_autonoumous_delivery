@@ -62,12 +62,11 @@ function robotCard(id, r) {
     const mark = r.mark;
     const fields = [["가는 곳", destinationText(r, job)], ["지금", locationText(r)],
         ["배터리", (r.battery_pct == null ? "미수신" : Math.round(r.battery_pct) + "%") + (r.battery_status === "CHARGING" ? " 충전 중" : "")], ["연결", "/" + r.ns]];
-    const stopWait = S.traffic?.mode === "SEGMENTS" ? S.traffic.stop_line_waits?.[id] : null;
+    const plan = S.traffic?.mode === "PLAN" ? S.traffic.plans?.[id] : null;
     return `<div class="unit-title">${robotMark(r)}<div><h2>${h(r.label)}</h2><small>Robot ${h(mark)}</small></div>${pill(...displayState(id, r))}</div>
         <p>${h(job ? job.mission_id + "　" + cfg.kinds[job.type] + "　Level " + job.level : home ? (r.leg?.purpose === "도크 복귀" ? "도크 복귀" : "홈 구역 복귀") : r.leg ? "직접 이동" : "배정된 작업 없음")}</p>
         <div class="unit-facts">${fields.map(([key,value]) => `<span><small>${key}</small> ${h(value)}</span>`).join("")}</div>
-        ${r.canceling_exit ? '<p class="cancel-note">취소됨 · 복도를 빠져나온 뒤 정지</p>' : ""}
-        ${stopWait?.by ? `<p class="cancel-note">${h(stopWait.reason)}</p>` : ""}
+        ${plan?.wait ? `<p class="cancel-note">${h(plan.wait)}</p>` : plan?.aside ? '<p class="cancel-note">길 비켜 주는 중</p>' : ""}
         ${r.via ? `<p class="via-note">교차로 경유${r.via.passed ? " · 통과" : ""}</p>` : ""}
         ${r.yolo ? `<p data-yolo-until="${Number(r.yolo.at) + 30}">${h(r.yolo.text)} ${btn("감지 사진", "yolo-photo", id)}</p>` : ""}
         ${obstacleText(r) ? `<p>${h(obstacleText(r))}</p>` : ""}
@@ -75,7 +74,7 @@ function robotCard(id, r) {
 }
 
 function segmentStrip() {
-    if (S.traffic?.mode !== "SEGMENTS" || !S.traffic.segments) return "";
+    if (S.traffic?.mode !== "PLAN" || !S.traffic.segments) return "";
     const keys = ["CORRIDOR_TOP", "CROSSROAD", "CORRIDOR_BOTTOM", "DOOR_B", "DOOR_E"].filter(k => S.traffic.segments[k]);
     if (!keys.length) return "";
     return '<div class="seg-strip">' + keys.map(k => {
@@ -98,7 +97,7 @@ function roadPanel() {
     const labels = track?.kind === "follow" ? [c.follow_stop?.rule === "GAP" ? "재개 간격 확보" : "선행 로봇 재출발 또는 이탈", "뒤 로봇 연결", "별도 정지 없음", "출발 응답"] : track?.kind === "yield" ? ["우선 로봇 통과", "양보 로봇 연결", "별도 정지 없음", "양보 로봇 재출발"] :
         ["선행 로봇 완전 통과", "복도 비움 확인", "진입 허가", "출발 응답"];
     const passing = (c.holder_detail || []).filter(entry => !waiting.includes(entry.robot));
-    const unknownClear = S.traffic?.mode === "SEGMENTS"
+    const unknownClear = S.traffic?.mode === "PLAN"
         ? Object.entries(S.traffic.segments || {}).filter(([, seg]) => seg.state === "UNKNOWN")
             .map(([key]) => btn("현장 확인 후 " + resLabel(key) + " 비움", "clear", key, "danger")).join("")
         : Object.entries(S.resources).filter(([, res]) => res.state === "UNKNOWN")
@@ -124,19 +123,27 @@ function basis(e) {
         return;
     }
     const dist = d.distance_m != null ? ` · 경계까지 ${Number(d.distance_m).toFixed(2)} m` : "";
-    const note = S?.traffic?.mode === "SEGMENTS"
-        ? "비어 있는 칸은 근접·출구 → 응급도 → 요청 시각 → 로봇 순, 미진입 칸은 높은 응급도가 선점"
+    const note = S?.traffic?.mode === "PLAN"
+        ? "두 로봇을 함께 계획: 비용 = Σ Level 가중치 × 도착 시각. 겹치는 곳마다 계획에서 정한 순서대로 지나갑니다"
         : "동급이면 먼저 요청한 쪽, 허가된 통행은 회수하지 않음";
-    openModal("basis", `<span class="eyebrow">${h(S?.traffic?.mode === "SEGMENTS" ? "구간 예약" : "복도")}</span>${dialogHead("통행 판단 상세")}<label>판단 당시 자원 상태</label><p class="tile">${h(resNames[d.state_before] || "상태 미수신")} · ${tm(e.ts)}${h(dist)}</p><div>${(d.contenders || []).map(c => `<p><b class="${color(c.robot)}-text">${h(robotName(c.robot))}</b> · ${h(cfg.kinds[c.type] || "직접 이동")} · Level ${c.level} · ${tm(c.requested_at)}</p>`).join("")}</div>
+    if (["PLAN_WAIT", "PLAN_UPDATE", "PLAN_YIELD_MOVE"].includes(e.type)) {
+        const plan = S?.traffic?.plan || {};
+        openModal("basis", `<span class="eyebrow">두 로봇 계획</span>${dialogHead("통행 판단 상세")}` +
+            factList([["로봇", robotName(e.robot) || "두 로봇"], ["판단 시각", tm(e.ts)],
+                ["계획 시간", plan.ms != null ? plan.ms + " ms" : "미수신"], ["다시 계획한 이유", plan.reason || "미수신"]]) +
+            `<p class="notice blue-surface">${h(d.reason)}</p><p class="muted">${h(note)}</p>${btn("판단 기록 보기", "decision-log")}`);
+        return;
+    }
+    openModal("basis", `<span class="eyebrow">${h(S?.traffic?.mode === "PLAN" ? "두 로봇 계획" : "복도")}</span>${dialogHead("통행 판단 상세")}<label>판단 당시 자원 상태</label><p class="tile">${h(resNames[d.state_before] || "상태 미수신")} · ${tm(e.ts)}${h(dist)}</p><div>${(d.contenders || []).map(c => `<p><b class="${color(c.robot)}-text">${h(robotName(c.robot))}</b> · ${h(cfg.kinds[c.type] || "직접 이동")} · Level ${c.level} · ${tm(c.requested_at)}</p>`).join("")}</div>
  <p class="notice blue-surface"><b>${h(cfg.rules[d.rule] || e.title || "현장 상태 확인")}</b><br>${h(d.reason)}</p><p class="muted">${h(note)}</p>${btn("판단 기록 보기", "decision-log")}`);
 }
 function basisEvent() {
     if (!S) return null;
     const top = situation(true)[0];
     if (top?.basis?.detail) return top.basis;
-    if (S.traffic?.mode === "SEGMENTS" && (Object.values(S.traffic.stop_line_waits || {}).some(w => w.by) || (S.traffic.last_preempt && S.stamp - S.traffic.last_preempt.ts <= 10))) {
-        const pre = E.findLast(e => e.type === "RESOURCE_PREEMPT");
-        if (pre) return pre;
+    if (S.traffic?.mode === "PLAN" && Object.keys(S.traffic.stop_line_waits || {}).length) {
+        const wait = E.findLast(e => e.type === "PLAN_WAIT");
+        if (wait) return wait;
     }
     const follow = S.resources.CORRIDOR.follow_stop;
     if (follow) return E.findLast(e => e.type === "CORRIDOR_FOLLOW_STOP" && e.robot === follow.rear) || S.last_decision;
@@ -167,8 +174,8 @@ renderers.dashboard = () => {
     for (const id of ids) put("unit-" + id, robotCard(id, S.robots[id]));
     paint();
     put("road", roadPanel());
-    put("map-legend", S.traffic?.mode === "SEGMENTS"
-        ? '<span><i class="seg-dot a"></i> ● A　침상형 이송 로봇</span><span><i class="seg-dot b"></i> ■ B　약품 운송 로봇</span><span>┄ 남은 경로</span><span>➜ 칸 방향</span>'
+    put("map-legend", S.traffic?.mode === "PLAN"
+        ? '<span><i class="seg-dot a"></i> ● A　침상형 이송 로봇</span><span><i class="seg-dot b"></i> ■ B　약품 운송 로봇</span><span>┄ 남은 경로</span><span>─ 계획 경로</span><span>➜ 칸 방향</span>'
         : '<span>● A　침상형 이송 로봇</span><span>■ B　약품 운송 로봇</span><span>┄ 남은 경로</span><span>➜ 복도 사용 방향</span>');
     const jobs = S.missions.filter(m => m.status === dashTab);
     const controls = ["ACTIVE","QUEUED"].map(t => btn((t === "ACTIVE" ? "진행 중 " : "배정 대기 ") +

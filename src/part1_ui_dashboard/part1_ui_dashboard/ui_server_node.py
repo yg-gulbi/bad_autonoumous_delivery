@@ -49,9 +49,11 @@ class UIServer(Node):
         self.testing = self.dev_tools and self.demo and self.mode != "live"
         self.names = {z: zone_display_name(z, data.get("name")) for z, data in cfg["zones"].items()}
         self.robot_names = {robot: unit["label"] for robot, unit in cfg["robots"].items()}
-        seg_map = SegmentMap(config_from_dict(cfg))
-        self.segment_labels = {name: seg.label for name, seg in seg_map.segments.items()}
-        self.segments = {
+        # The segment map is drawn only when fleet.yaml has one (LEGACY copies without traffic.segments still start).
+        fleet_cfg = config_from_dict(cfg)
+        seg_map = SegmentMap(fleet_cfg) if fleet_cfg.traffic.segments and fleet_cfg.traffic.links else None
+        self.segment_labels = {name: seg.label for name, seg in seg_map.segments.items()} if seg_map else {}
+        self.segments = {} if seg_map is None else {
             name: {
                 "kind": seg.kind,
                 "label": seg.label,

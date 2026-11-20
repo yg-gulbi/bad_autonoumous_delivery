@@ -189,7 +189,7 @@ class KinematicRobot:
 class KinematicSim:
     """Drives FleetCore with pure-Python KinematicRobots at 0.2 m/s."""
 
-    def __init__(self, cfg, *, mode: str = "SEGMENTS", speed_mps: float = 0.2, poses: dict | None = None,
+    def __init__(self, cfg, *, mode: str = "PLAN", speed_mps: float = 0.2, poses: dict | None = None,
                  require_at_start: bool = False):
         monitor = replace(cfg.safety.bed_monitor, require_at_start=require_at_start)
         cfg = replace(

@@ -171,7 +171,7 @@ function paint() {
     ctx.closePath();
     ctx.fillStyle = palette.lane;
     ctx.fill();
-    const isSegments = S?.traffic?.mode === "SEGMENTS" && cfg.segments;
+    const isSegments = S?.traffic?.mode === "PLAN" && cfg.segments;
     if (isSegments) {
         const mapSegOrder = ["CORRIDOR_TOP", "CORRIDOR_BOTTOM", "DOOR_B", "DOOR_E", "CROSSROAD"];
         for (const segKey of mapSegOrder) {
@@ -277,6 +277,20 @@ function paint() {
     }
     const routes = [];
     const units = Object.entries(S?.robots || {});
+    if (S?.traffic?.mode === "PLAN") {
+        // D-45: the joint plan's way for each robot, including a move aside, as a thin line.
+        for (const [id, plan] of Object.entries(S.traffic.plans || {})) {
+            if (!plan.route?.length || plan.route.length < 2) continue;
+            path(plan.route.map(p => screen(...p)));
+            ctx.lineJoin = "round";
+            ctx.lineWidth = 1;
+            ctx.setLineDash([]);
+            ctx.globalAlpha = 0.55;
+            ctx.strokeStyle = id === "robot_b" ? palette["seg-b-stroke"] : palette["seg-a-stroke"];
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+        }
+    }
     for (const [id, r] of units) {
         if (!r.route?.length) continue;
         const points = r.route.map(p => screen(...p));

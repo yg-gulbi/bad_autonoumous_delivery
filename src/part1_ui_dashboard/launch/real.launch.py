@@ -40,7 +40,7 @@ def generate_launch_description():
         DeclareLaunchArgument("map_yaml", default_value="", description="PART 04 common occupancy map"),
         DeclareLaunchArgument("db_path", default_value=str(Path.home() / ".bad/bad_real.db")),
         DeclareLaunchArgument("corridor_mode", default_value="", description="Default from fleet.yaml"),
-        DeclareLaunchArgument("traffic_mode", default_value="", description="LEGACY or SEGMENTS (empty uses fleet.yaml)"),
+        DeclareLaunchArgument("traffic_mode", default_value="", description="LEGACY or PLAN (empty uses fleet.yaml)"),
         DeclareLaunchArgument("bed_monitor_require_at_start", default_value="", description="Default from fleet.yaml"),
         DeclareLaunchArgument("ui_config", default_value=str(ui)),
         OpaqueFunction(function=start),

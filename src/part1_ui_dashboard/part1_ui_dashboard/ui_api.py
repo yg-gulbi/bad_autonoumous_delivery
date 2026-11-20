@@ -96,7 +96,7 @@ EVENTS = {
     "LEG_START": "{robot} 구간 출발", "ARRIVE": "{robot} · {zone} 도착", "CONFIRM_STEP": "{zone} 확인 결과",
     "MISSION_DONE": "{robot} 임무 완료", "MISSION_CANCELED": "임무 취소", "RESOURCE_REQUEST": "{robot} 통행 요청",
     "RESOURCE_GRANT": "{robot} {resource} 진입 허가", "RESOURCE_HOLD": "{robot} 진입 전 대기",
-    "RESOURCE_PREEMPT": "{robot} {resource} 선점",
+    "PLAN_UPDATE": "두 로봇 다시 계획", "PLAN_WAIT": "{robot} 계획 순서 대기", "PLAN_YIELD_MOVE": "{robot} 길 비켜 주는 중",
     "RESOURCE_ENTER": "{robot} {resource} 진입 확인", "RESOURCE_RELEASE": "{robot} {resource} 통과 완료",
     "RESOURCE_UNKNOWN": "{resource} 점유 확인 불가", "RESOURCE_CLEAR_CONFIRM": "{resource} 현장 확인",
     "DEADLOCK_DETECTED": "교착 감지", "YIELD_START": "{robot} 교착 양보 시작", "YIELD_DONE": "{robot} 교착 양보 완료",
@@ -167,7 +167,7 @@ def present_event(event, names, robots=None, card=None, segment_labels=None):
     if d.get("slot") == 2 and d.get("destination") in names:
         zone += " 2번 자리"
     robot = robots.get(event.get("robot"), "")
-    res_keys = [d["segment"]] if kind == "RESOURCE_PREEMPT" and d.get("segment") else d.get("resources", [])
+    res_keys = d.get("resources", [])
     resources = [resource_label(n, names, segment_labels) for n in res_keys]
     title = EVENTS.get(kind, "관제 기록").format(robot=robot, zone=zone, resource=" · ".join(resources) or "구간",
                                                kind=KINDS.get(d.get("mission_type"), "이송")).strip()

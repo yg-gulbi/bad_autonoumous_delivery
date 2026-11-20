@@ -76,11 +76,9 @@ class Demo:
         return self.sim.core.snapshot(self.t)
 
 
-@pytest.fixture(params=["LEGACY", "SEGMENTS"])
-def demo(cfg, tmp_path, request):
-    sc = replace(cfg, db_path=str(tmp_path / f"demo-{request.param}.db"),
-                 traffic=replace(cfg.traffic, mode=request.param))
-    sim = Simulation(sc, slots=True)
+@pytest.fixture
+def demo(cfg, tmp_path):
+    sim = Simulation(replace(cfg, db_path=str(tmp_path / "demo.db")), slots=True)
     yield Demo(sim)
     sim.core.store.close()
 
@@ -102,72 +100,42 @@ def test_61_demo_five_acts(demo):
     sim.confirm(B, "m")  # B: F → E next
     act2 = demo.t
 
-    # --- 2막·3막: 반대 방향 교행·선점 + 침상 이탈로 A만 정지 → 운영자 재개 ------------------------
+    # --- 2막: 복도 반대 방향 대기 (A는 C로 내려가고 B는 E로 올라가려 함) ---------------------------
     assert demo.moved(A)[-1].startswith("MOVE C 2")
-    if sim.cfg.traffic.mode == "LEGACY":
-        demo.tick()
-        hold = demo.of("RESOURCE_HOLD", B, act2)[-1]
-        assert hold["detail"]["rule"] == "DIRECTION"
-        assert hold["detail"]["reason"] == "침상형 이송 로봇 복도 반대 방향 통행 중 → 약품 운송 로봇 복도 밖 대기"
-        assert demo.state(B) == "HOLD" and len(demo.moved(B)) == 1
-        sim.event(A, "MISSION_ACCEPTED")
-        demo.at(A, (-1.55, -1.7))
-        demo.tick()
+    demo.tick()
+    hold = demo.of("RESOURCE_HOLD", B, act2)[-1]
+    assert hold["detail"]["rule"] == "DIRECTION"
+    assert hold["detail"]["reason"] == "침상형 이송 로봇 복도 반대 방향 통행 중 → 약품 운송 로봇 복도 밖 대기"
+    assert demo.state(B) == "HOLD" and len(demo.moved(B)) == 1
+    sim.event(A, "MISSION_ACCEPTED")
+    demo.at(A, (-1.55, -1.7))
+    demo.tick()
 
-        # --- 3막: 침상 이탈로 A만 정지 → 운영자 재개 ----------------------------------------------
-        act3 = demo.t + 0.5
-        demo.bed = True
-        out = demo.tick()
-        assert demo.of("BED_EXIT", since=act3) and {c.robot: c.command for c in out.commands} == {A: "PAUSE"}
-        assert demo.state(A) == "SAFE_PAUSE" and demo.state(B) == "HOLD"
-        sim.event(A, "PAUSED")
-        demo.tick()
-        demo.bed = False
-        demo.tick()
-        demo.tick()
-        assert demo.state(A) == "SAFE_PAUSE"  # never resumes by itself
-        sim.cmd("RESUME_ROBOT", robot=A)
-        out = demo.tick()
-        assert {c.robot: c.command for c in out.commands} == {A: "RESUME"}
-        sim.event(A, "RESUMED")
-        demo.tick()
-        demo.at(A, (-1.7, -3.9))
-        demo.tick()
-        sim.event(A, "ARRIVED")
-        demo.tick()
-        assert demo.state(A) == "WAIT_CONFIRM"
-        assert demo.wait_move(B).startswith("MOVE E 3")  # A left the corridor: B goes up into E
-        demo.drive(B, (-1.6, -3.3), CROSSROAD, (-1.0, -2.2), via=True)
-        assert demo.state(B) == "WAIT_CONFIRM" and demo.snapshot()["robots"][B]["zone"] == "E"
-    else:
-        # SEGMENTS: A(L2)가 교차로에 들어가기 전에 B(L3)가 F→E 요청 → B가 교차로·아래쪽을 선점해 먼저 출발
-        sim.event(A, "MISSION_ACCEPTED")
-        demo.at(A, (-1.50, -0.70))  # CORRIDOR_TOP 안, 교차로 경계에서 >= 0.8 m
-        assert demo.wait_move(B).startswith("MOVE E 3")
-        assert demo.of("RESOURCE_PREEMPT", B, act2)
-        # A는 정지선에서 정지, B는 E로 주행 시작; 침상 이탈 시 A만 SAFE_PAUSE
-        demo.at(A, (-1.50, -0.90))
-        demo.tick()
-        sim.event(A, "PAUSED")
-        act3 = demo.t + 0.5
-        demo.bed = True
-        demo.tick()
-        assert demo.of("BED_EXIT", since=act3)
-        assert demo.state(A) == "SAFE_PAUSE" and demo.state(B) != "SAFE_PAUSE"
-        demo.drive(B, (-1.6, -3.3), CROSSROAD, (-1.0, -2.2), via=True)
-        assert demo.state(B) == "WAIT_CONFIRM" and demo.snapshot()["robots"][B]["zone"] == "E"
-        demo.bed = False
-        demo.tick()
-        demo.tick()
-        assert demo.state(A) == "SAFE_PAUSE"
-        sim.cmd("RESUME_ROBOT", robot=A)
-        demo.until(lambda: any(r == A and c == "RESUME" for _, r, c in demo.sent))
-        sim.event(A, "RESUMED")
-        demo.at(A, (-1.7, -3.9))
-        demo.tick()
-        sim.event(A, "ARRIVED")
-        demo.tick()
-        assert demo.state(A) == "WAIT_CONFIRM"
+    # --- 3막: 침상 이탈로 A만 정지 → 운영자 재개 --------------------------------------------------
+    act3 = demo.t + 0.5
+    demo.bed = True
+    out = demo.tick()
+    assert demo.of("BED_EXIT", since=act3) and {c.robot: c.command for c in out.commands} == {A: "PAUSE"}
+    assert demo.state(A) == "SAFE_PAUSE" and demo.state(B) == "HOLD"
+    sim.event(A, "PAUSED")
+    demo.tick()
+    demo.bed = False
+    demo.tick()
+    demo.tick()
+    assert demo.state(A) == "SAFE_PAUSE"  # never resumes by itself
+    sim.cmd("RESUME_ROBOT", robot=A)
+    out = demo.tick()
+    assert {c.robot: c.command for c in out.commands} == {A: "RESUME"}
+    sim.event(A, "RESUMED")
+    demo.tick()
+    demo.at(A, (-1.7, -3.9))
+    demo.tick()
+    sim.event(A, "ARRIVED")
+    demo.tick()
+    assert demo.state(A) == "WAIT_CONFIRM"
+    assert demo.wait_move(B).startswith("MOVE E 3")  # A left the corridor: B goes up into E
+    demo.drive(B, (-1.6, -3.3), CROSSROAD, (-1.0, -2.2), via=True)
+    assert demo.state(B) == "WAIT_CONFIRM" and demo.snapshot()["robots"][B]["zone"] == "E"
 
     # --- 4막: B가 복도에서 상자 → 5초 뒤 포기 → OBSTACLE → medical_box → 복도 막힘 ------------------
     sim.confirm(B, "m")  # B: E → B (crossing the corridor, single file)

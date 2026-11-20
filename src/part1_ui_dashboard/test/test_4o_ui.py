@@ -1,4 +1,4 @@
-"""Stage 4O PART 01 tests: RESOURCE_PREEMPT history filter, segment labels, clear commands, static checks."""
+"""Stage 4O PART 01 tests: PLAN events in the decision filter, segment labels, clear commands, static checks."""
 from pathlib import Path
 
 from part1_ui_dashboard import ui_api
@@ -11,32 +11,27 @@ PACKAGE = Path(__file__).resolve().parents[1]
 PART3_CFG = Path(__file__).resolve().parents[2] / "part3_fleet_manager/config/fleet.yaml"
 
 
-def test_resource_preempt_in_decision_filter_and_present_event(tmp_path):
+def test_plan_events_in_decision_filter_and_present_event(tmp_path):
     cfg = load_config(PART3_CFG)
     seg_map = SegmentMap(cfg)
     seg_labels = {k: v.label for k, v in seg_map.segments.items()}
     robot_labels = {k: v.label for k, v in cfg.robots.items()}
 
-    ev_preempt = {
-        "ts": 100.0,
-        "type": "RESOURCE_PREEMPT",
-        "robot": "robot_b",
-        "mission_id": "M-0002",
-        "detail": {
-            "reason": "응급도 우선: 약품 운송 로봇(Level 3)가 교차로 먼저 → 침상형 이송 로봇 정지선 대기",
-            "resources": ["CROSSROAD", "CORRIDOR_TOP", "D1"],
-            "segment": "CROSSROAD",
-            "preempted": "robot_a",
-            "rule": "PREEMPT",
-            "distance_m": 1.15,
-            "contenders": [{"robot": "robot_b", "level": 3, "requested_at": 99.5, "type": "MED_ROUND"}],
-        },
-    }
-    presented = ui_api.present_event(ev_preempt, cfg.zone_names, robot_labels, segment_labels=seg_labels)
-    assert presented["title"] == "약품 운송 로봇 교차로 선점"
-    assert "교차로" in presented["detail"]["reason"]
+    wait = {"ts": 100.0, "type": "PLAN_WAIT", "robot": "robot_a", "mission_id": "M-0002",
+            "detail": {"reason": "교차로: 약품 운송 로봇이 지나간 뒤", "peer": "robot_b", "point": "CROSSROAD"}}
+    aside = {"ts": 101.0, "type": "PLAN_YIELD_MOVE", "robot": "robot_a", "mission_id": "M-0002",
+             "detail": {"reason": "침상형 이송 로봇 → 102호 병실(B) 2번 자리 · 길 비켜 주는 중", "target": "B2"}}
+    update = {"ts": 99.0, "type": "PLAN_UPDATE", "robot": None, "mission_id": None,
+              "detail": {"reason": "다시 계획 · 새 구간 요청 · 12 ms", "plan_ms": 12.0, "cost": 30.0,
+                         "method": "JOINT", "fallback": False}}
+    assert ui_api.present_event(wait, cfg.zone_names, robot_labels, segment_labels=seg_labels)["title"] == \
+        "침상형 이송 로봇 계획 순서 대기"
+    assert ui_api.present_event(aside, cfg.zone_names, robot_labels, segment_labels=seg_labels)["title"] == \
+        "침상형 이송 로봇 길 비켜 주는 중"
+    assert ui_api.present_event(update, cfg.zone_names, robot_labels, segment_labels=seg_labels)["title"] == \
+        "두 로봇 다시 계획"
 
-    # Legacy resource labels remain unchanged.
+    # Segment labels stay as before.
     assert ui_api.resource_label("CORRIDOR", cfg.zone_names, seg_labels) == "복도"
     assert ui_api.resource_label("ROOM_B", cfg.zone_names, seg_labels) == f"{cfg.zone_names['B']} 출입"
     assert ui_api.resource_label("DOOR_B", cfg.zone_names, seg_labels) == f"{cfg.zone_names['B']} 문"
@@ -46,20 +41,16 @@ def test_resource_preempt_in_decision_filter_and_present_event(tmp_path):
     db_path = tmp_path / "history.db"
     store = Store(db_path)
     try:
-        store.save([], [
-            ev_preempt,
-            {"ts": 101.0, "type": "RESOURCE_ENTER", "robot": "robot_b", "mission_id": "M-0002",
-             "detail": {"reason": "약품 운송 로봇 · 교차로 진입 확인", "resources": ["CROSSROAD"]}},
-        ])
+        store.save([], [update, wait, aside,
+                        {"ts": 102.0, "type": "RESOURCE_ENTER", "robot": "robot_a", "mission_id": "M-0002",
+                         "detail": {"reason": "침상형 이송 로봇 · 교차로 진입 확인", "resources": ["CROSSROAD"]}}])
         client = create_app(
             Feed(), {"names": cfg.zone_names, "robot_names": robot_labels, "segment_labels": seg_labels},
             None, None, db_path=db_path,
         ).test_client()
         resp = client.get("/api/events", query_string={"group": "decision"})
         assert resp.status_code == 200
-        items = resp.get_json()["items"]
-        assert [i["type"] for i in items] == ["RESOURCE_PREEMPT"]
-        assert items[0]["title"] == "약품 운송 로봇 교차로 선점"
+        assert sorted(i["type"] for i in resp.get_json()["items"]) == ["PLAN_UPDATE", "PLAN_WAIT", "PLAN_YIELD_MOVE"]
     finally:
         store.close()
 
@@ -84,9 +75,13 @@ def test_clear_command_accepts_segment_names_and_rejects_invalid():
     assert bad.status_code == 400
 
 
-def test_static_assets_include_4o_segment_and_preempt_hooks():
+def test_static_assets_include_4o_plan_hooks():
     static = PACKAGE / "part1_ui_dashboard/static"
-    assert "RESOURCE_PREEMPT" in (static / "pages/log.js").read_text(encoding="utf-8")
-    assert "취소됨 · 복도를 빠져나온 뒤 정지" in (static / "app.js").read_text(encoding="utf-8")
-    assert "CORRIDOR_TOP" in (static / "map.js").read_text(encoding="utf-8")
-    assert "stop_line_waits" in (static / "pages/dashboard.js").read_text(encoding="utf-8")
+    log = (static / "pages/log.js").read_text(encoding="utf-8")
+    assert all(kind in log for kind in ("PLAN_UPDATE", "PLAN_WAIT", "PLAN_YIELD_MOVE"))
+    app = (static / "app.js").read_text(encoding="utf-8")
+    assert "길 비켜 주는 중" in app and "canceling_exit" not in app and "SEGMENTS" not in app
+    map_js = (static / "map.js").read_text(encoding="utf-8")
+    assert "CORRIDOR_TOP" in map_js and "traffic.plans" in map_js
+    dash = (static / "pages/dashboard.js").read_text(encoding="utf-8")
+    assert "plan.wait" in dash and "SEGMENTS" not in dash

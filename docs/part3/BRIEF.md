@@ -406,6 +406,13 @@ PART 04의 ROS 패키지 이름은 `hospital_nav`, 소스 폴더는 `src/part4_a
 - `robots.<id>.obstacle.text`: report 모드 판별 문장 (예: "의료용 상자가 길을 막고 있음 (로봇 앞 약 0.4 m)"). `obstacle_pending`은 사진 판별을 기다리는 동안 true.
 - `resources.ROOM_B|ROOM_E.holder_detail[].door`: `IN`(들어가는 중) 또는 `OUT`(나오는 중). DOOR 모드에서만 있다.
 
+4O 필드 `traffic` (5.3a절):
+
+- `traffic.mode`: `LEGACY` 또는 `PLAN`. LEGACY에서는 `segments`·`stop_line_waits`가 빈 객체다.
+- `traffic.segments.<칸>`: `{kind, label, state, direction, holders: [{robot, state, direction}]}`. 상태는 `FREE`·`GRANTED`·`OCCUPIED`·`UNKNOWN`이다.
+- `traffic.stop_line_waits.<로봇>`: 계획 순서 때문에 서 있는 로봇. `{segment, segment_label, by, since, paused, reason}`. `reason` 예: "교차로: 약품 운송 로봇이 지나간 뒤".
+- `traffic.plans.<로봇>`: `{points, labels, route, targets, wait, aside}`. `route`는 지도에 그리는 계획 경로, `aside`는 길을 비켜 주는 이동이다. `traffic.plan`은 마지막 계획의 `{at, ms, cost, method, reason, fallback}`이다.
+
 ### 4.6 `/fleet/decision_req`
 
 ```json
@@ -434,7 +441,9 @@ PART 04의 ROS 패키지 이름은 `hospital_nav`, 소스 폴더는 `src/part4_a
  "detail": {"resources": ["CORRIDOR", "ROOM_E"], "reason": "복도 비어 있음 + Level 3 > Level 2 → 약품 운송 로봇 허가"}}
 ```
 
-이벤트 종류: `MISSION_CREATED`, `MISSION_REJECTED`, `LEG_START`, `ARRIVE`, `CONFIRM_STEP`, `MISSION_DONE`, `MISSION_CANCELED`, `RESOURCE_REQUEST`, `RESOURCE_GRANT`, `RESOURCE_HOLD`, `RESOURCE_ENTER`, `RESOURCE_RELEASE`, `RESOURCE_UNKNOWN`, `RESOURCE_CLEAR_CONFIRM`, `DEADLOCK_DETECTED`, `YIELD_START`, `YIELD_DONE`, `CORRIDOR_YIELD_START`, `CORRIDOR_YIELD_END`, `CORRIDOR_YIELD_TIMEOUT`, `CORRIDOR_FOLLOW_STOP`, `CORRIDOR_FOLLOW_CLEAR`, `ZONE_OCCUPIED_HOLD`, `ZONE_OCCUPIED_CLEAR`, `PROXIMITY_STOP`, `PROXIMITY_CLEAR`, `STALL_SHORT`, `STALL_LONG`, `BLOCKED`, `UNBLOCKED`, `PAUSE`, `RESUME`, `RESUME_REJECTED`, `BED_EXIT`, `BED_EXIT_CLEAR`, `BUMP`, `MOVE_REJECTED`, `NAV_FAILED`, `FAULT`, `CARD_OPEN`, `CARD_CLOSED`, `LINK_LOST`, `LINK_BACK`, `WARNING`, `BED_MONITOR_WARN`, `BED_MONITOR_LOST`, `BED_MONITOR_BACK`, `BED_MONITOR_BYPASS`, `OBSTACLE_INSPECT`, `OBSTACLE_RESULT`, `OBSTACLE_REPORT`, `OBSTACLE_RETRY`, `STOP_RESENT`, `STOP_UNCONFIRMED`, `ARRIVED_FROM_STATE`.
+이벤트 종류: `MISSION_CREATED`, `MISSION_REJECTED`, `LEG_START`, `ARRIVE`, `CONFIRM_STEP`, `MISSION_DONE`, `MISSION_CANCELED`, `RESOURCE_REQUEST`, `RESOURCE_GRANT`, `RESOURCE_HOLD`, `RESOURCE_ENTER`, `RESOURCE_RELEASE`, `RESOURCE_UNKNOWN`, `RESOURCE_CLEAR_CONFIRM`, `DEADLOCK_DETECTED`, `YIELD_START`, `YIELD_DONE`, `CORRIDOR_YIELD_START`, `CORRIDOR_YIELD_END`, `CORRIDOR_YIELD_TIMEOUT`, `CORRIDOR_FOLLOW_STOP`, `CORRIDOR_FOLLOW_CLEAR`, `ZONE_OCCUPIED_HOLD`, `ZONE_OCCUPIED_CLEAR`, `PROXIMITY_STOP`, `PROXIMITY_CLEAR`, `STALL_SHORT`, `STALL_LONG`, `BLOCKED`, `UNBLOCKED`, `PAUSE`, `RESUME`, `RESUME_REJECTED`, `BED_EXIT`, `BED_EXIT_CLEAR`, `BUMP`, `MOVE_REJECTED`, `NAV_FAILED`, `FAULT`, `CARD_OPEN`, `CARD_CLOSED`, `LINK_LOST`, `LINK_BACK`, `WARNING`, `BED_MONITOR_WARN`, `BED_MONITOR_LOST`, `BED_MONITOR_BACK`, `BED_MONITOR_BYPASS`, `OBSTACLE_INSPECT`, `OBSTACLE_RESULT`, `OBSTACLE_REPORT`, `OBSTACLE_RETRY`, `STOP_RESENT`, `STOP_UNCONFIRMED`, `ARRIVED_FROM_STATE`, `PLAN_UPDATE`, `PLAN_WAIT`, `PLAN_YIELD_MOVE`.
+
+- 4O PLAN: `PLAN_UPDATE`는 다시 계획한 이유·시간·비용 (`reason_code`, `plan_ms`, `cost`, `method`, `fallback`, `plans`). `PLAN_WAIT`는 계획 순서 때문에 지점 앞에서 기다림 (`point`, `peer`). `PLAN_YIELD_MOVE`는 길을 비켜 주려고 다른 자리로 가는 MOVE와 그 도착 (`target`, `arrived`). 비켜 주는 자리 도착은 정류장 도착이 아니어서 확인 대기·정지 기록을 남기지 않는다.
 
 - `OBSTACLE_REPORT`의 `source: "yolo"`는 주행 중 감지 기록이다. 문장은 “주행 중 장애물 감지 · <class> <conf> · 약 <depth_m> m · 계속 주행”이고, 깊이가 없으면 “거리 미측정”으로 표시한다.
 - 주행 포기 때의 `OBSTACLE_REPORT`: PART 04 `OBSTACLE` 요약 (`lidar_m`, `depth_m`, `captured`, `image_topic`, `paired`: 그 주행 실패와 묶였는지). `OBSTACLE_RESULT`: 판별 (`kind`, `labels`, `detections`, `applied`: 판단에 썼는지, report 모드는 `source: "report"`). `OBSTACLE_RETRY`: NONE 판별 뒤 자동 재출발 (`retry_if_clear: true`일 때만, 4K 기본은 false).
@@ -653,6 +662,17 @@ PART 04의 ROS 패키지 이름은 `hospital_nav`, 소스 폴더는 `src/part4_a
     - `SAFE_PAUSE`가 양보보다 우선이다. 안전 정지 중에는 양보 쪽에서 `RESUME`을 내지 않는다. 재개하면 양보가 필요한지 다시 판단한다.
     - PART 04가 나중에 로봇 쪽에서 우선순위 양보를 직접 하게 되면 `corridor.yield_enabled: false`로 끈다.
     - 거리값은 시험 영상을 보고 정한 시작값이다. 리허설에서 조정한다.
+
+### 5.3a PLAN 모드 — 두 로봇 함께 계획하기 (4O, D-43~D-47)
+
+`traffic.mode: PLAN`(실행 인자 `traffic_mode:=PLAN`)이면 5.3절의 허가 비교와 선점 대신 두 로봇의 경로와 순서를 함께 계획한다. 기본값은 `LEGACY`이고 LEGACY 동작은 바뀌지 않는다.
+
+1. **지점 그래프** (`traffic.graph`): 자리 12개, 약품 운송 로봇 도크, 교차로, B·E 문, B·E 방 안, 위·아래 홀 입구, 그리고 복도 칸(`cell_m` 0.5 m로 자동 분할)이다. 지점 사이 경로는 `route_planner` 경로를 지점 영역으로 자른 실제 선이다. 걸리는 시간은 거리 ÷ `plan_speed_mps`(기본 mock 속도)다.
+2. **충돌 쌍**: 두 위치의 선 사이 거리가 근접 정지 거리보다 짧으면 동시에 쓸 수 없다. 둘 다 움직이면 `proximity_stop_m`, 한쪽이 자리에 서 있으면 `slot_stop_m`, 둘 다 서 있으면 충돌이 아니다. 복도·교차로·문은 대수 제한(single, 복도는 방향별 one_way)도 같이 본다.
+3. **계획**: 상태는 (A 위치, B 위치, 시간), 한 단계 `plan_step_s`(0.5초)다. 행동은 다음 지점으로 가기, 기다리기, 서 있을 때 다른 자리로 가는 새 MOVE다. 충돌 쌍과 자리 맞바꾸기는 허용하지 않는다. 비용은 Σ `level_weights[Level]` × 도착 시각이고, 임무 없는 로봇은 지금 자리를 목표로 `idle_weight`를 쓴다. 목표 자리는 1번과 2번 모두 후보이고 같으면 1번이다. 정지선(`stop_margin_m`) 안의 지점은 이미 정해진 것으로 두고, 지나온 지점으로 되돌리지 않는다. 시간 한도(`plan_limit_ms`)를 넘거나 세 대 이상이면 Level 순서로 한 대씩 계획하고 `PLAN_UPDATE`에 적는다.
+4. **실행 (ADG)**: 계획의 순서를 충돌 쌍마다 "앞 로봇이 지점을 `clear_margin_m`만큼 지나 `clear_hold_s` 동안 벗어남"으로 바꿔 지킨다. 다음 지점이 아직 막혀 있으면 정지선에서 `PAUSE`, 풀리면 `RESUME`. PART 04에는 MOVE·PAUSE·RESUME·CANCEL만 보낸다. 다른 자리로 가는 MOVE는 "길 비켜 주는 중"이다.
+5. **다시 계획**: 새 구간 요청, 취소, Level 상향 재접수, 구간 도착, 계획보다 `replan_delay_s` 넘게 늦음, 안전 정지 해제, 연결 복구 때. 들어간 지점은 바꾸지 않는다. 취소는 새 목표다(복귀, `return_after_cancel` 기본 true). 연결이 끊긴 로봇은 지금 지점과 남은 MOVE 경로를 막은 것으로 두고 칸은 `UNKNOWN`이 된다.
+6. 근접 정지, 0.9 m 출발 확인, 침상 이탈, 장애물, 정지 확인, 멈춤, 도크, 정면·교착 카드는 LEGACY와 같다.
 
 ### 5.4 `deadlock` — 교착 감지와 해소
 
@@ -1062,6 +1082,10 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH=src/part1_ui_dashboard:s
 73. **구역 출입**. 15:02:26과 15:03:38의 근접 정지 0회, 수술실(C) 2번 자리 도착·출구 대기·출발 순서, 출구 선분 경고. 반대 순서에서는 반경 밖 PAUSE 뒤 RESUME.
 74. **마주 봄과 이격**. 최근 0.5초 이격 중 무정지, 다시 접근하면 정지. 먼저 보내기 두 선택의 실패, 후발 로봇 추천 및 복귀, 상대 재개를 검증한다.
 75. **구역 이름**. 화면·과거 DB 조회·카드의 수술실(C) 2번 자리, MOVE C2와 DB 문자 C를 검증한다.
+76. **PLAN 계획기** (`test_4o_plan.py`). 낮은 Level의 대기·비켜서기·통과가 비용에서만 나온다. 모든 자리 쌍 × Level 조합에서 충돌 쌍과 맞바꾸기가 없고, 평균 계획 시간 `plan_budget_ms` 이하, 최대 `plan_limit_ms` 근처다. LEGACY는 재전송·끼어들기 조건이 그대로다.
+77. **11/20 재현** (`test_4o_1120_replay.py`). 다섯 장면(16:09:59는 두 변형)에서 Level 3 로봇의 출발·도착이 LEGACY보다 늦지 않고 근접 정지 0회. 4N 15:02:26·15:03:38도 PLAN에서 근접 정지 0회.
+78. **무작위 시험** (`test_4o_random.py`, 기본 50개, `PLAN_RANDOM_SEEDS=300`). 칸 대수·방향, 예약 없는 진입, 정지·출발 지연, 끝난 뒤 홈 복귀 다섯 가지 검사. 시드 39는 따로 이름 붙인 시험이다.
+79. **PLAN 화면** (`test_4o_ui.py`·`test_event_sentences.py`). 계획 경로 선, 대기 이유, `PLAN_*` 이벤트 문장과 기록 필터.
 
 - 화면 라우트 테스트 (Flask test client): 버튼마다 가짜 publisher에 올바른 토픽과 JSON이 넘어간다. `dev_tools: false`면 시험 도구 라우트가 403이다. `/map/meta`·`/map/image`가 맵이 있을 때와 없을 때 맞게 답한다.
 - 화면 확인은 mock 2대로 시나리오 1~5(`stage3-scenarios.md`)를 **화면 클릭만으로** 끝까지 진행하고, 캡처를 `docs/part3/ui/screens/`에 남긴다. 녹화는 사람이 한다.

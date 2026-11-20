@@ -225,8 +225,6 @@ def parse_fleet_state(text: str) -> dict:
                     _choice(wait.get("zone"), ZONE_REGIONS, path+"zone_wait.zone")
         if "returning" in robot:
             _fields(robot, {"returning": bool}, path=path)
-        if "canceling_exit" in robot:
-            _fields(robot, {"canceling_exit": bool}, path=path)
         if "state_since" in robot:
             _fields(robot, {"state_since": NUMBER}, path=path)
         if "route" in robot:
@@ -341,7 +339,7 @@ def parse_fleet_state(text: str) -> dict:
         if not isinstance(traffic, dict):
             raise SchemaError("traffic: 객체가 필요합니다")
         _fields(traffic, {"mode": str, "segments": dict, "stop_line_waits": dict}, path="traffic.")
-        _choice(traffic["mode"], ("LEGACY", "SEGMENTS"), "traffic.mode")
+        _choice(traffic["mode"], ("LEGACY", "PLAN"), "traffic.mode")
         for seg_name, seg in traffic["segments"].items():
             sp = f"traffic.segments.{seg_name}."
             if not isinstance(seg, dict):
@@ -363,6 +361,11 @@ def parse_fleet_state(text: str) -> dict:
             if not isinstance(wait, dict):
                 raise SchemaError(f"traffic.stop_line_waits.{robot_id}: 객체가 필요합니다")
             _fields(wait, {"segment": str, "by": str, "since": NUMBER, "paused": bool, "reason": str}, path=wp)
+        for robot_id, plan in traffic.get("plans", {}).items():
+            pp = f"traffic.plans.{robot_id}."
+            if not isinstance(plan, dict):
+                raise SchemaError(f"traffic.plans.{robot_id}: 객체가 필요합니다")
+            _fields(plan, {"points": list, "route": list, "wait": (str, NULL), "aside": bool}, path=pp)
 
     _fields(data["kpi"], {
         "hold_count": int, "deadlock_count": int, "deadlock_resolve_s_avg": (*NUMBER, NULL),
@@ -405,6 +408,6 @@ def parse_event(text: str) -> dict:
     data, _ = _read(text)
     _texts(data, ("type",), None)
     _fields(data, {"ts": NUMBER, "robot": (str, NULL), "mission_id": (str, NULL), "detail": dict})
-    if data["type"] in ("RESOURCE_GRANT", "RESOURCE_HOLD", "RESOURCE_PREEMPT", "CORRIDOR_YIELD_START", "CORRIDOR_FOLLOW_STOP") and "rule" in data["detail"]:
+    if data["type"] in ("RESOURCE_GRANT", "RESOURCE_HOLD", "CORRIDOR_YIELD_START", "CORRIDOR_FOLLOW_STOP") and "rule" in data["detail"]:
         _decision_detail(data["detail"])
     return data

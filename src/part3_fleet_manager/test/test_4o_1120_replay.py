@@ -1,9 +1,10 @@
-"""Stage 4O · 7B: 11/20 mock log replay (5 scenes + 3s variant) and 4N 15:02:26/15:03:38 in SEGMENTS."""
-from dataclasses import replace
+"""Stage 4O: 11/20 mock log replay (5 scenes, 16:09:59 in two variants) and 4N 15:02:26/15:03:38 in PLAN.
 
+The Level 3 robot is always robot_b. Each scene is measured in LEGACY too; the report table
+(docs/part3/ui/stage4o-report.md) lists LEGACY, ac58e60 SEGMENTS and PLAN side by side.
+"""
 import pytest
 
-from fleet_simulation import Simulation
 from kinematic_mock import KinematicSim
 
 A, B = "robot_a", "robot_b"
@@ -16,102 +17,74 @@ def _first_move_time(sim: KinematicSim, robot: str, after: float) -> float | Non
     return None
 
 
-def _count_events(sim, kind: str) -> int:
-    return sum(1 for e in sim.all_events if e["type"] == kind)
+def _paused_s(sim, robot, after):
+    total, since = 0.0, None
+    for ts, r, cmd in sim.all_commands:
+        if r != robot or ts < after - 1e-6:
+            continue
+        if cmd == "PAUSE" and since is None:
+            since = ts
+        elif cmd == "RESUME" and since is not None:
+            total, since = total + ts - since, None
+    return round(total + (sim.now - since if since is not None else 0.0), 1)
 
 
-def _wire(out):
-    return {c.robot: c.command for c in out.commands}
-
-
-def _at(sim, robot, point):
-    sim.frames[robot]["pose"] = sim.pose(point)
+def _measure(sim, req_t):
+    """Level 3 robot (B): wait until its first MOVE, time to its first arrival, time spent paused."""
+    first = _first_move_time(sim, B, req_t)
+    arrive = next((e["ts"] for e in sim.all_events if e["type"] == "ARRIVE" and e["robot"] == B and e["ts"] >= req_t), None)
+    return {
+        "wait_s": round(first - req_t, 1) if first is not None else None,
+        "arrive_s": round(arrive - req_t, 1) if arrive is not None else None,
+        "b_paused_s": _paused_s(sim, B, req_t),
+        "a_paused_s": _paused_s(sim, A, req_t),
+        "a_zone": sim.core.mission.robots[A].zone,
+        "b_zone": sim.core.mission.robots[B].zone,
+        "prox_stops": sum(1 for e in sim.all_events if e["type"] == "PROXIMITY_STOP"),
+        "a_waits": [e["detail"]["reason"] for e in sim.all_events if e["type"] == "PLAN_WAIT" and e["robot"] == A],
+        "a_aside": sum(1 for e in sim.all_events if e["type"] == "PLAN_YIELD_MOVE" and e["robot"] == A),
+    }
 
 
 def _run_160550(cfg, mode: str) -> dict:
-    """16:05:50 A(L2) D->C while B(L3) F->E is driving after grant."""
+    """16:05:50 A(L2) D->C is requested 4 s after B(L3) F->E->B->D started."""
     sim = KinematicSim(cfg, mode=mode, speed_mps=0.2)
     try:
-        # B(L3) F->E->B->D starts at t=0.2 (simulating 16:05:46)
         sim.submit_med(("E", "B", "D"), level=3, ref="m2")
         sim.run_until(4.0, auto_confirm=False)
-        b_start = _first_move_time(sim, B, 0.0)
-        assert b_start is not None
-        # 4 s later (16:05:50): A(L2) D->C requested
-        req_t = sim.now
+        a_req = sim.now
         sim.submit_patient("C", "A", level=2, ref="m1")
-        # Run until A departs (do NOT confirm B at E until A departs, just like 11/20!)
-        sim.run_until(req_t + 40.0, auto_confirm=False)
-        a_start = _first_move_time(sim, A, req_t)
-        assert a_start is not None
-        b_arr = next((e["ts"] for e in sim.all_events if e["type"] == "ARRIVE" and e["robot"] == B), None)
-        return {
-            "wait_s": round(a_start - req_t, 2),
-            "a_start": a_start,
-            "b_start": b_start,
-            "b_arr": b_arr,
-            "prox_stops": _count_events(sim, "PROXIMITY_STOP"),
-        }
+        sim.run_until(a_req + 60.0, auto_confirm=False)
+        out = _measure(sim, 0.0)
+        a_start = _first_move_time(sim, A, a_req)
+        out["a_wait_s"] = round(a_start - a_req, 1) if a_start is not None else None
+        return out
     finally:
         sim.close()
 
 
-def test_160550_a_d_to_c_starts_once_b_enters_door_e(cfg):
-    leg = _run_160550(cfg, "LEGACY")
-    seg = _run_160550(cfg, "SEGMENTS")
-    # In SEGMENTS, A starts as soon as B clears CROSSROAD into E door/room (well under 27 s and before B reaches E1).
-    assert seg["wait_s"] < 27.0
-    assert seg["a_start"] < seg["b_arr"]
-    assert seg["prox_stops"] == 0
-    assert leg["wait_s"] > 0.0
-
-
 def _run_160632(cfg, mode: str) -> dict:
-    """16:06:32 B(L3) E->B while A(L2) D->C is going down the corridor."""
+    """16:06:32 B(L3) E->B while A(L2) D->C is in CORRIDOR_TOP, too close to CROSSROAD to stop before it."""
     sim = KinematicSim(cfg, mode=mode, speed_mps=0.2, poses={A: "D", B: "E"})
     try:
-        # A(L2) D->C starts driving down corridor
         sim.submit_patient("C", "A", level=2, ref="m1")
-        # Wait until A is inside CORRIDOR_TOP near CROSSROAD (cannot be preempted: < 0.8 m from CROSSROAD)
         while sim.now < 20.0:
             sim.step(0.2)
             if sim.robots[A].pose[1] <= -1.35:
                 break
         req_t = sim.now
         sim.submit_med(("B", "D"), level=3, ref="m2")
-        # Advance until B departs
-        sim.run_until(req_t + 30.0, auto_confirm=False)
-        b_start = _first_move_time(sim, B, req_t)
-        assert b_start is not None
-        # Also record when A actually arrived at C
-        a_arr = next((e["ts"] for e in sim.all_events if e["type"] == "ARRIVE" and e["robot"] == A), None)
-        return {
-            "wait_s": round(b_start - req_t, 2),
-            "b_start": b_start,
-            "a_arr": a_arr,
-            "prox_stops": _count_events(sim, "PROXIMITY_STOP"),
-        }
+        sim.run_until(req_t + 45.0, auto_confirm=False)
+        return _measure(sim, req_t)
     finally:
         sim.close()
 
 
-def test_160632_b_e_to_b_starts_as_soon_as_a_clears_crossroad(cfg):
-    leg = _run_160632(cfg, "LEGACY")
-    seg = _run_160632(cfg, "SEGMENTS")
-    # In SEGMENTS, B starts right after A clears CROSSROAD (while A is still in CORRIDOR_BOTTOM), strictly shorter than LEGACY!
-    assert seg["wait_s"] < leg["wait_s"]
-    assert seg["wait_s"] < 14.0
-    assert seg["b_start"] < seg["a_arr"]
-    assert seg["prox_stops"] == 0
-
-
 def _run_160709(cfg, mode: str) -> dict:
-    """16:07:09 B(L3) B->D while A(L1, C->D return) is going up CORRIDOR_BOTTOM."""
+    """16:07:09 B(L3) B->D while A(L1, C->D return) is going up CORRIDOR_BOTTOM, >= 0.8 m from CROSSROAD."""
     sim = KinematicSim(cfg, mode=mode, speed_mps=0.2, poses={A: "C", B: "B"})
     try:
-        # Start A(L1) C->D (return_home / GO_ZONE at Level 1)
         sim.cmd("GO_ZONE", robot=A, zone="D")
-        # Wait until A enters CORRIDOR_BOTTOM heading up, still >= 0.8 m from CROSSROAD (y ~ -3.9, dist to CROSSROAD ~ 1.12 m)
         while sim.now < 20.0:
             sim.step(0.2)
             if sim.robots[A].pose[1] >= -4.05 and sim.robots[A].pose[0] > -2.15:
@@ -119,101 +92,37 @@ def _run_160709(cfg, mode: str) -> dict:
         req_t = sim.now
         sim.submit_med(("D", "F"), level=3, ref="m2")
         sim.run_until(req_t + 45.0, auto_confirm=False)
-        b_start = _first_move_time(sim, B, req_t)
-        assert b_start is not None
-        preempts = [e for e in sim.all_events if e["type"] == "RESOURCE_PREEMPT"]
-        a_pauses = [ts for ts, r, cmd in sim.all_commands if r == A and cmd == "PAUSE" and ts >= req_t]
-        a_resumes = [ts for ts, r, cmd in sim.all_commands if r == A and cmd == "RESUME" and ts >= req_t]
-        b_follow_stops = [e for e in sim.all_events if e["type"] == "CORRIDOR_FOLLOW_STOP" and e["robot"] == B]
-        return {
-            "wait_s": round(b_start - req_t, 2),
-            "preempts": len(preempts),
-            "a_paused": len(a_pauses),
-            "a_resumed": len(a_resumes),
-            "b_follow_stops": len(b_follow_stops),
-            "a_zone": sim.core.mission.robots[A].zone,
-            "b_zone": sim.core.mission.robots[B].zone,
-            "prox_stops": _count_events(sim, "PROXIMITY_STOP"),
-        }
+        return _measure(sim, req_t)
     finally:
         sim.close()
 
 
-def test_160709_b_b_to_d_preempts_crossroad_and_a_follows_behind(cfg):
-    leg = _run_160709(cfg, "LEGACY")
-    seg = _run_160709(cfg, "SEGMENTS")
-    # In SEGMENTS: B preempts CROSSROAD immediately (no 17 s bogus follow-stop on B!),
-    # A pauses at stop line and resumes behind B, both reach D!
-    assert seg["preempts"] >= 1
-    assert seg["wait_s"] <= 2.0
-    assert seg["b_follow_stops"] == 0
-    assert seg["a_paused"] >= 1 and seg["a_resumed"] >= 1
-    assert seg["a_zone"] == "D" and seg["b_zone"] == "D"
-    assert seg["prox_stops"] == 0
-    assert leg["wait_s"] >= 0.0  # baseline measured cleanly
-
-
 def _run_160959(cfg, mode: str, *, lead_s: float) -> dict:
-    """16:09:59 B(L3) F->E while A(L2) D->C is going down CORRIDOR_TOP (lead_s controls A's progress)."""
+    """16:09:59 B(L3) F->E while A(L2) D->C is going down CORRIDOR_TOP (lead_s = how long A has driven)."""
     sim = KinematicSim(cfg, mode=mode, speed_mps=0.2, poses={A: "D", B: "F"})
     try:
         sim.submit_patient("C", "A", level=2, ref="m3")
-        # Wait until A starts moving, then let A drive for lead_s seconds.
         while sim.now < 5.0 and _first_move_time(sim, A, 0.0) is None:
             sim.step(0.2)
         a_move = _first_move_time(sim, A, 0.0)
         assert a_move is not None
         sim.run_until(a_move + lead_s, auto_confirm=False)
         req_t = sim.now
-        a_dist_to_cross = (
-            sim.core.resources.segments["CROSSROAD"].spec.distance(sim.robots[A].pose)
-            if mode == "SEGMENTS" else None
-        )
+        stop_line = sim.cfg.traffic.stop_margin_m
+        crossroad = sim.core.resources.segments["CROSSROAD"].spec if mode == "PLAN" else None
+        a_dist = crossroad.distance(sim.robots[A].pose) if crossroad else None
         sim.submit_med(("E", "B"), level=3, ref="m4")
         sim.run_until(req_t + 60.0, auto_confirm=False)
-        b_start = _first_move_time(sim, B, req_t)
-        assert b_start is not None
-        preempts = [e for e in sim.all_events if e["type"] == "RESOURCE_PREEMPT"]
-        a_pauses = [ts for ts, r, cmd in sim.all_commands if r == A and cmd == "PAUSE" and ts >= req_t]
-        a_resumes = [ts for ts, r, cmd in sim.all_commands if r == A and cmd == "RESUME" and ts >= req_t]
-        return {
-            "wait_s": round(b_start - req_t, 2),
-            "a_dist": round(a_dist_to_cross, 3) if a_dist_to_cross is not None else None,
-            "preempts": len(preempts),
-            "a_paused": len(a_pauses),
-            "a_resumed": len(a_resumes),
-            "a_zone": sim.core.mission.robots[A].zone,
-            "b_zone": sim.core.mission.robots[B].zone,
-            "prox_stops": _count_events(sim, "PROXIMITY_STOP"),
-        }
+        out = _measure(sim, req_t)
+        out["a_dist"] = round(a_dist, 3) if a_dist is not None else None
+        out["stop_line"] = stop_line
+        return out
     finally:
         sim.close()
 
 
-def test_160959_both_preempt_and_within_stop_margin_variants(cfg):
-    # Variant 1 (3 s earlier): A is entering CORRIDOR_TOP, >= 0.8 m from CROSSROAD even after decision_window_s -> B preempts!
-    # Variant 2 (+3 s later): A has moved 0.6 m closer (< 0.8 m from CROSSROAD) -> B does NOT preempt and waits cleanly!
-    early_seg = _run_160959(cfg, "SEGMENTS", lead_s=6.8)
-    early_leg = _run_160959(cfg, "LEGACY", lead_s=6.8)
-    assert early_seg["a_dist"] >= 0.8
-    assert early_seg["preempts"] >= 1
-    assert early_seg["wait_s"] <= 2.0
-    assert early_seg["wait_s"] < early_leg["wait_s"]
-    assert early_seg["a_paused"] >= 1 and early_seg["a_resumed"] >= 1
-    assert early_seg["a_zone"] == "C" and early_seg["b_zone"] == "E"
-    assert early_seg["prox_stops"] == 0
-
-    # Variant 2 (3 s later): A is < 0.8 m from CROSSROAD -> B does NOT preempt and waits cleanly for A!
-    late_seg = _run_160959(cfg, "SEGMENTS", lead_s=9.8)
-    assert 0.0 < late_seg["a_dist"] < 0.8
-    assert late_seg["preempts"] == 0
-    assert late_seg["wait_s"] > 2.0
-    assert late_seg["a_zone"] == "C" and late_seg["b_zone"] == "E"
-    assert late_seg["prox_stops"] == 0
-
-
 def _run_161049(cfg, mode: str) -> dict:
-    """16:10:49 B(L3) E->B while A(L2) C->A departed 1 s earlier."""
+    """16:10:49 B(L3) E->B one second after A(L2) C->A departed."""
     sim = KinematicSim(cfg, mode=mode, speed_mps=0.2, poses={A: "C", B: "E"})
     try:
         sim.submit_patient("A", "D", level=2, ref="m3")
@@ -221,100 +130,109 @@ def _run_161049(cfg, mode: str) -> dict:
             sim.step(0.2)
         a_move = _first_move_time(sim, A, 0.0)
         assert a_move is not None
-        # 1 s after A departed: B(L3) E->B requested
         sim.run_until(a_move + 1.0, auto_confirm=False)
         req_t = sim.now
         sim.submit_med(("B", "F"), level=3, ref="m4")
         sim.run_until(req_t + 65.0, auto_confirm=False)
-        b_start = _first_move_time(sim, B, req_t)
-        assert b_start is not None
-        preempts = [e for e in sim.all_events if e["type"] == "RESOURCE_PREEMPT"]
-        a_pauses = [ts for ts, r, cmd in sim.all_commands if r == A and cmd == "PAUSE" and ts >= req_t]
-        a_resumes = [ts for ts, r, cmd in sim.all_commands if r == A and cmd == "RESUME" and ts >= req_t]
-        return {
-            "wait_s": round(b_start - req_t, 2),
-            "preempts": len(preempts),
-            "a_paused": len(a_pauses),
-            "a_resumed": len(a_resumes),
-            "a_zone": sim.core.mission.robots[A].zone,
-            "b_zone": sim.core.mission.robots[B].zone,
-            "prox_stops": _count_events(sim, "PROXIMITY_STOP"),
-        }
+        return _measure(sim, req_t)
     finally:
         sim.close()
 
 
-def test_161049_b_e_to_b_starts_immediately_and_a_waits_at_bottom_stop_line(cfg):
+def test_160550_l2_robot_starts_at_once_and_waits_at_the_corridor_stop_line(cfg):
+    leg = _run_160550(cfg, "LEGACY")
+    plan = _run_160550(cfg, "PLAN")
+    assert plan["wait_s"] <= 1.0 and plan["arrive_s"] <= leg["arrive_s"]
+    assert plan["b_paused_s"] == 0.0
+    # LEGACY kept A in D for ~19 s; PLAN sends it at once and pauses it before B's way, naming B.
+    assert leg["a_wait_s"] > 10.0
+    assert plan["a_wait_s"] <= 1.0
+    assert plan["a_paused_s"] > 0.0
+    assert any("약품 운송 로봇이 지나간 뒤" in r for r in plan["a_waits"])
+    assert plan["prox_stops"] == 0
+
+
+def test_160632_l3_waits_only_while_a_crosses_and_arrives_before_legacy(cfg):
+    leg = _run_160632(cfg, "LEGACY")
+    plan = _run_160632(cfg, "PLAN")
+    # A is inside its stop line before CROSSROAD: it cannot stop, so B waits for it to pass.
+    assert plan["wait_s"] < leg["wait_s"]
+    assert plan["arrive_s"] is not None and plan["arrive_s"] <= 26.0
+    assert plan["a_paused_s"] == 0.0 and plan["b_paused_s"] == 0.0
+    assert plan["a_zone"] == "C" and plan["b_zone"] == "B"
+    assert plan["prox_stops"] == 0
+
+
+def test_160709_l3_goes_first_and_l1_robot_waits_below_crossroad(cfg):
+    leg = _run_160709(cfg, "LEGACY")
+    plan = _run_160709(cfg, "PLAN")
+    assert plan["wait_s"] <= 1.0
+    assert plan["arrive_s"] < leg["arrive_s"] and plan["arrive_s"] <= 21.0
+    assert plan["b_paused_s"] == 0.0 and leg["b_paused_s"] > 10.0
+    assert plan["a_paused_s"] > 0.0
+    assert plan["a_zone"] == "D" and plan["b_zone"] == "D"
+    assert plan["prox_stops"] == 0
+
+
+@pytest.mark.parametrize("lead_s", [6.8, 9.8])
+def test_160959_l3_starts_at_once_whether_or_not_a_can_stop_before_crossroad(cfg, lead_s):
+    leg = _run_160959(cfg, "LEGACY", lead_s=lead_s)
+    plan = _run_160959(cfg, "PLAN", lead_s=lead_s)
+    if lead_s == 6.8:
+        assert plan["a_dist"] >= plan["stop_line"]    # A can still stop before CROSSROAD: it pauses there
+        assert plan["a_aside"] == 0 and plan["a_paused_s"] > 0.0
+    else:
+        assert plan["a_dist"] < plan["stop_line"]     # A cannot stop before CROSSROAD: it gets out of B's way
+        assert plan["a_aside"] >= 1
+    assert plan["wait_s"] <= 1.0
+    assert plan["arrive_s"] <= 25.0 and plan["arrive_s"] < leg["arrive_s"]
+    assert plan["b_paused_s"] == 0.0
+    assert plan["a_zone"] == "C" and plan["b_zone"] == "E"
+    assert plan["prox_stops"] == 0
+
+
+def test_161049_l3_starts_at_once_and_l2_robot_waits_in_corridor_bottom(cfg):
     leg = _run_161049(cfg, "LEGACY")
-    seg = _run_161049(cfg, "SEGMENTS")
-    # B starts immediately via preemption (<= 2 s vs ~27 s LEGACY); A drives to stop line, pauses, then resumes!
-    assert seg["preempts"] >= 1
-    assert seg["wait_s"] <= 2.0
-    assert seg["wait_s"] < leg["wait_s"]
-    assert seg["a_paused"] >= 1 and seg["a_resumed"] >= 1
-    assert seg["a_zone"] == "A" and seg["b_zone"] == "B"
-    assert seg["prox_stops"] == 0
+    plan = _run_161049(cfg, "PLAN")
+    assert plan["wait_s"] <= 1.0 and leg["wait_s"] > 20.0
+    assert plan["arrive_s"] <= 15.0 and plan["arrive_s"] < leg["arrive_s"]
+    assert plan["b_paused_s"] == 0.0 and plan["a_paused_s"] > 0.0
+    assert plan["a_zone"] == "A" and plan["b_zone"] == "B"
+    assert plan["prox_stops"] == 0
 
 
-# --- 4N field timelines 15:02:26 & 15:03:38 in SEGMENTS mode (0 proximity stops) -----------------
+# --- 4N field timelines 15:02:26 & 15:03:38 in PLAN (0 proximity stops) -----------------------------
 
-def test_150226_segments_zero_proximity_stops(cfg, tmp_path):
-    sc = replace(cfg, db_path=str(tmp_path / "f1.db"), traffic=replace(cfg.traffic, mode="SEGMENTS"))
-    sim = Simulation(sc, slots=True)
+def test_150226_plan_zero_proximity_stops(cfg):
+    """15:02:26: B stands in F2; A D->C comes down toward the bottom hall when B is sent F->D."""
+    sim = KinematicSim(cfg, mode="PLAN", speed_mps=0.2, poses={B: cfg.slot_point("F", 2)})
     try:
-        _at(sim, B, sim.cfg.slot_point("F", 2))
         sim.cmd("GO_ZONE", robot=A, zone="C")
-        sim.tick(0)
-        assert _wire(sim.tick(1))[A].startswith("MOVE C ")
-        sim.event(A, "MISSION_ACCEPTED")
-        _at(sim, A, (-1.65, -3.7))
+        while sim.now < 40.0 and sim.robots[A].pose[1] > -3.7:
+            sim.step(0.2)
+        assert sim.robots[A].pose[1] <= -3.7
         sim.cmd("GO_ZONE", robot=B, zone="D")
-        sim.tick(1.1)
-        _at(sim, A, (-1.81, -4.70))
-        sim.tick(2)
-        for i in range(1, 12):
-            _at(sim, A, (-1.81 - 0.039 * i / 11, -4.7))
-            assert not sim.tick(2 + 0.1 * i).commands
-        assert A not in sim.core.resources.snapshot()["CORRIDOR"]["holders"]
-        # Even after the 1.0 s corridor decision window expires at t=4.0, A is still moving within 0.9 m -> NearStartGuard holds B!
-        assert not sim.tick(4.0).commands
-        assert sim.core.wait_reason(B) == "가까이 움직이는 로봇 대기"
-        _at(sim, A, (-2.26, -4.70))  # 0.91 m away -> B departs immediately with 0 proximity stops!
-        assert _wire(sim.tick(4.1))[B].startswith("MOVE D ")
-        prox = sim.core.store.db.execute("SELECT count(*) FROM events WHERE type='PROXIMITY_STOP'").fetchone()[0]
-        assert prox == 0
+        sim.run_until(sim.now + 60.0)
+        assert sim.core.mission.robots[A].zone == "C" and sim.core.mission.robots[B].zone == "D"
+        assert sum(1 for e in sim.all_events if e["type"] == "PROXIMITY_STOP") == 0
     finally:
-        sim.core.store.close()
+        sim.close()
 
 
-def test_150338_segments_zero_proximity_stops(cfg, tmp_path):
-    sc = replace(cfg, db_path=str(tmp_path / "f2.db"), traffic=replace(cfg.traffic, mode="SEGMENTS"))
-    sim = Simulation(sc, slots=True)
+def test_150338_plan_zero_proximity_stops(cfg):
+    """15:03:38: B stands in C1; A picks a patient up in C (C2) and takes them to F while B is sent C->D."""
+    sim = KinematicSim(cfg, mode="PLAN", speed_mps=0.2, poses={B: "C"})
     try:
-        _at(sim, B, "C")
-        sim.patient("bed", "C", "F")
-        sim.tick(0)
-        assert _wire(sim.tick(1))[A].startswith("MOVE C2 ")
-        sim.event(A, "MISSION_ACCEPTED")
-        _at(sim, A, (-1.65, -3.55))
+        sim.submit_patient("C", "F", level=2, ref="bed")
+        while sim.now < 40.0 and sim.robots[A].pose[1] > -3.55:
+            sim.step(0.2)
+        assert sim.robots[A].pose[1] <= -3.55
         sim.cmd("GO_ZONE", robot=B, zone="D")
-        assert not sim.tick(2).commands
-        _at(sim, A, (-1.85, -4.52))
-        assert not sim.tick(3).commands
-        assert not sim.tick(4.1).commands  # A still holds C2 even after clearing corridor!
-        _at(sim, A, (-2.758, -4.539))
-        assert not sim.tick(4.15).commands
-        sim.event(A, "ARRIVED")
-        assert not sim.tick(4.2).commands  # A now parked in C2 -> B still waits on C2!
-        sim.confirm(A, "bed")
-        assert _wire(sim.tick(5.0))[A].startswith("MOVE F ")
-        sim.event(A, "MISSION_ACCEPTED")
-        _at(sim, A, (-2.15, -4.64))  # still within 0.9 m of B
-        assert not sim.tick(6.0).commands
-        _at(sim, A, (-1.70, -4.62))  # > 0.9 m away and outside C2 + clear_margin_m
-        sim.tick(7.0)
-        assert _wire(sim.tick(8.1))[B].startswith("MOVE D ")  # C2 released after clear_hold_s -> B departs immediately!
-        prox = sim.core.store.db.execute("SELECT count(*) FROM events WHERE type='PROXIMITY_STOP'").fetchone()[0]
-        assert prox == 0
+        sim.run_until(sim.now + 90.0)
+        done = [e for e in sim.all_events if e["type"] == "MISSION_DONE" and e["robot"] == A]
+        assert done and any(e["type"] == "ARRIVE" and e["robot"] == A and e["ts"] <= done[0]["ts"]
+                            and e["detail"].get("destination") == "F" for e in sim.all_events)
+        assert sim.core.mission.robots[B].zone == "D"
+        assert sum(1 for e in sim.all_events if e["type"] == "PROXIMITY_STOP") == 0
     finally:
-        sim.core.store.close()
+        sim.close()
