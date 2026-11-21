@@ -1,7 +1,8 @@
 """Stage 4O · 7C: Random event stress test in PLAN mode (50 seeds default, PLAN_RANDOM_SEEDS=300 for full run).
 
 Checks 1-5 are the ones of ac58e60. Check 4 used the preemption rule, which PLAN no longer has; it keeps its
-meaning as "a pending robot the plan lets go is not kept waiting longer than decision_window_s + 2 s".
+meaning as "a pending robot the plan lets go is not kept waiting longer than 3 s" (LEGACY's decision_window_s 1 s
++ 2 s; the setting went with LEGACY in the 4O 정리).
 
 Events: missions, cancels (with a higher-Level resubmit), manual pauses and 2 s link drops (1b565ba), and since
 the 4O follow-up: quick send (GO_ZONE with a Level), Level change (SET_LEVEL), the same mission sent, cancelled
@@ -32,6 +33,7 @@ SIM_DURATION_S = 600.0
 DRAIN_LIMIT_S = 480.0
 DT = 0.2
 DRIVING = ("MOVING", "UNDOCKING", "LOCALIZING", "DOCKING")
+GO_LIMIT_S = 3.0
 
 
 def _travel_dir(bot, smap) -> int:
@@ -53,7 +55,7 @@ def seed_config(cfg, seed: int):
 def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> dict:
     rng = random.Random(seed)
     cfg, docked = seed_config(cfg, seed)
-    sim = KinematicSim(cfg, mode="PLAN", speed_mps=0.2, docked=docked, bed_feed=True)
+    sim = KinematicSim(cfg, speed_mps=0.2, docked=docked, bed_feed=True)
     log: list[str] = []
     submitted_refs: list[str] = []
     stats = {"missions": 0, "cancels": 0, "requeues": 0, "pauses": 0, "drops": 0, "safety_cards": 0,
@@ -142,7 +144,7 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
                 unit = sim.core.mission.robots[r]
                 vis = sim.core.visible_state(r, unit)
                 is_wait = (
-                    (vis == "HOLD" or sm.is_stop_line_paused(r) or r in sm.pending)
+                    (vis == "HOLD" or r in sm.held or r in sm.pending)
                     and bot.state in ("IDLE", "COMPLETE", "CANCELED", "PAUSED")
                     and (unit.job is not None or r in sm.pending)
                 )
@@ -159,12 +161,12 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
             else:
                 both_wait_s = 0.0
 
-        # Invariant 4: a pending robot the plan lets go now gets its MOVE within decision_window_s + 2.0 s.
-        limit_s = cfg.resources.decision_window_s + 2.0
+        # Invariant 4: a pending robot the plan lets go now gets its MOVE within 3 s.
+        limit_s = GO_LIMIT_S
         for r in sim.robots:
             leg = sm.pending.get(r)
             plan = sm.plans.get(r)
-            if (leg is not None and plan is not None and plan.legs and sm.eligible(r) and not any_safety
+            if (leg is not None and plan is not None and plan.legs and sm.robots.view(r).connected and not sm.robots.view(r).safe_pause and not any_safety
                     and not any_offline and r not in sm.held and not sim.core.mission.robots[r].replacing
                     and r not in sim.core.collision.access.waits and r not in sim.core.collision.contacts):
                 start = start_wait_since.setdefault(r, now)

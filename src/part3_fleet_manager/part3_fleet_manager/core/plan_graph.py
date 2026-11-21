@@ -5,9 +5,9 @@ and the corridor cells (CORRIDOR_TOP/BOTTOM split into about ``cell_m``). Every 
 its segment in the segment map for the "inside" judgement.
 
 Robots never get a path from us: PART 04 drives toward a slot. The graph walks ``door_route``: the
-``route_planner.waypoints`` mouths and crossroad, and into or out of room B or E through the middle of the
-door and the point inside the room (``door_walks``), so no route runs over a door frame. LEGACY keeps
-``waypoints`` as it is. Each run of a route inside one point's region is a *piece*: the
+``waypoints`` mouths and crossroad, and into or out of room B or E through the middle of the door and the
+point inside the room (``door_walks``), so no route runs over a door frame. Each run of a route inside one
+point's region is a *piece*: the
 exact line the robot drives there. Neighbouring points are consecutive pieces, travel time is the piece
 length over ``plan_speed_mps``, and two positions conflict when their pieces come closer than the
 proximity distance (moving robots) or the slot distance (a robot standing at a slot). Nothing about a
@@ -20,7 +20,7 @@ from itertools import pairwise
 from math import ceil, dist, hypot
 
 from . import geometry as g
-from .route_planner import waypoints
+from .clearance import stop_distance
 
 SAMPLE_M = 0.02          # walk step along a route when assigning points
 PRUNE_OVER = 2000        # routes made for robot positions kept before old ones are forgotten (long runs)
@@ -171,11 +171,27 @@ def point_anchor(spec, seg):
     return None
 
 
+def waypoints(config, pose, destination, slot=1, *, via_done=False):
+    """Mouths between regions; travel into or out of room B·E stops at the crossroad first (PART 04)."""
+    goal = config.slot_point(destination, slot)
+    start, end = (config.corridor.region_of(p) for p in (pose, goal))
+    points = []
+    if start != end and (start in g.ROOMS or end in g.ROOMS):
+        if start in (g.TOP, g.BOTTOM):
+            points.append(config.corridor.mouths[start])
+        if not via_done:
+            points.append(config.corridor.crossroad)
+        if end in (g.TOP, g.BOTTOM):
+            points.append(config.corridor.mouths[end])
+    elif start != end:
+        if start != g.CORRIDOR:
+            points.append(config.corridor.mouths[start])
+        points.append(config.corridor.mouths[end])
+    return [*points, goal]
+
+
 def door_walks(config):
-    """{room region: (door middle, point inside the room)} from the graph's door and room points. Empty
-    unless room B and E have doors (``corridor.room_mode: DOOR``)."""
-    if not config.corridor.doors:
-        return {}
+    """{room region: (door middle, point inside the room)} from the graph's door and room points."""
     segs = config.traffic.segments
     doors, rooms = {}, {}
     for spec in config.traffic.graph.points.values():
@@ -191,7 +207,7 @@ def door_walks(config):
 
 
 def door_route(config, pose, destination, slot=1, *, via_done=False):
-    """``route_planner.waypoints`` with the walk through a B·E door: crossroad -> door middle -> point in
+    """``waypoints`` with the walk through a B·E door: crossroad -> door middle -> point in
     the room -> slot, and the same way back out (B -> E: room B point, door B, crossroad, door E, room E
     point). A route made again from where a driving robot is now leaves out the walk points it is already
     past: a robot is past a point once it is nearer the next point than that point is. A MOVE to a slot of
@@ -276,8 +292,7 @@ class PlanGraph:
         self.step_s = gcfg.plan_step_s
         self.step_m = self.speed * self.step_s
         self.start_steps = ceil(gcfg.move_start_s / self.step_s - 1e-9)
-        self.stop_m = config.safety.proximity_stop_m
-        self.slot_stop_m = config.safety.slot_stop_m
+        self.safety = config.safety
         self.corridor = tuple(config.corridor.polygon)
         segs = traffic.segments
         self.points: dict[str, Point] = {}
@@ -501,7 +516,7 @@ class PlanGraph:
     def stand(self, xy, extra=(), *, slot_rule=True):
         """Standing piece at a free pose (stopped on the way). It does not occupy a slot, but inside a slot
         circle the proximity rule treats it as standing at a slot (collision.parked_slot). ``slot_rule``
-        False: the proximity rule keeps proximity_stop_m for this robot (offline, or granted and not started)."""
+        False: the proximity rule keeps proximity_stop_m for this robot (it has a granted leg)."""
         at_slot = slot_rule and any(p.kind == "slot" and p.region.contains(xy) for p in self.endpoints.values())
         return self._piece(self._classify(xy, ()), ((round(xy[0], 3), round(xy[1], 3)),), standing=True,
                            at_slot=at_slot, extra=extra)
@@ -550,13 +565,12 @@ class PlanGraph:
         return found
 
     def threshold(self, a, b):
-        """Proximity threshold between two positions; None when both stand still (no stop can occur)."""
+        """Proximity threshold between two positions (clearance.stop_distance, the proximity stop's own rule);
+        None when both stand still (no stop can occur)."""
         pa, pb = self.pieces[a], self.pieces[b]
         if (pa.standing and pb.standing) or pa.fence or pb.fence:
             return None
-        if (pa.standing and pa.at_slot) or (pb.standing and pb.at_slot):
-            return min(self.stop_m, self.slot_stop_m)
-        return self.stop_m
+        return stop_distance(self.safety, pa.standing and pa.at_slot, pb.standing and pb.at_slot)
 
     def segs(self, piece_id):
         """{segment: direction} the position uses (single, one_way, or its own slot)."""

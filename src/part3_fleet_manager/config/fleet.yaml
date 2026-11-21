@@ -34,13 +34,8 @@ zones:                          # PART 04 goal_manager.py SLOTS와 같은 값. x
   F: {x: -1.400, y: -5.400, slot2: {x: -1.350, y: -4.700}, slot2_blocks_exit: true, name: "조제실"}
 
 corridor:
-  mode: DIRECTIONAL
-  follow_gap_m: 1.0              # 복도 축 간격이 이 값 이하면 뒤 로봇 정지
-  follow_resume_m: 1.4           # 이 간격 이상으로 벌어져야 후행 재개
-  yield_enabled: true
-  yield_trigger_m: 1.2
-  yield_release_m: 0.5
-  yield_timeout_s: 10.0
+  follow_gap_m: 1.0              # 같은 길·같은 방향 뒤따르기: 앞 로봇이 달리는 동안 지킬 간격 (D-59)
+  follow_resume_m: 1.4           # 정지선에서 기다리던 뒤 로봇은 이 간격이 생겨야 다시 출발 (D-59)
   include_boundary: true        # 통로 경계의 위치도 통로로 판정
   polygon: [[-1.89, -0.51], [-1.00, -0.58], [-1.26, -4.23], [-2.16, -4.17]]   # [TL, TR, BR, BL]. 단계 3D-2: 맵의 통로 벽 안쪽 면에 맞춤 (폭 0.90 m)
   # 이전 값(손으로 잡음, 벽보다 약 1.3° 틀어짐): [[-1.79, -0.50], [-0.95, -0.60], [-1.24, -4.25], [-2.19, -4.15]]
@@ -51,20 +46,11 @@ corridor:
     ROOM_E: {x: -1.08, y: -2.25}
   crossroad: {x: -1.500, y: -2.180}   # PART 04 goal_manager.CROSSROAD. B·E 방을 드나들 때 먼저 서는 점
   crossroad_clear_m: 0.6         # 교차로 중심에서 이 거리 안이면 교차로를 쓰는 중
-  room_mode: DOOR                # DOOR(문·교차로 한 대씩, 방 안 두 대) | ROOM(방 하나에 한 대, 4J 이전)
 
 resources:
-  zone_arrival_clear_m: 2.0      # 출입 순서를 확인하는 각 자리 중심 반경
-  zone_occupied_m: 0.6           # 목적지 중심에서 다른 로봇까지의 점유 반경
-  clear_margin_m: 0.20
-  clear_hold_s: 1.0
-  decision_window_s: 1.0
-  aging_s: 0                    # 0 = 끔
-
-deadlock:
-  confirm_s: 2.0
-  card_timeout_s: 20
-  yield_zones: {ROOM_B: D, ROOM_E: F}
+  zone_occupied_m: 0.6           # 자리 중심에서 이 거리 안이면 그 자리에 선 것으로 본다
+  clear_margin_m: 0.20           # 칸을 지나간 로봇이 칸 밖으로 이만큼 벗어나고
+  clear_hold_s: 1.0              # 이 시간 동안 유지되면 칸을 놓는다
 
 stall:
   window_s: 5.0
@@ -108,14 +94,12 @@ safety:
 mission:
   return_home: true
   return_interruptible: true
-  return_level: 1               # 완료한 임무의 응급도를 홈 복귀에 상속하지 않음
-  # return_after_cancel: null   # 미설정 시 LEGACY=false, PLAN=true (D-46)
+  return_level: 1               # 완료한 임무의 응급도를 홈 복귀에 상속하지 않음 (취소 뒤에도 홈 복귀, D-46)
   manual_level: 1               # level 없이 온 GO_ZONE의 응급도 (화면의 빠른 보내기는 1~3을 고른다)
   retry_after_return: false     # 이전 구역으로 되돌아간 뒤 원래 구간은 운영자가 재시도
   confirm_at_stops: true
 
-traffic:                        # 단계 4O 교통 판단 (기본값은 LEGACY 유지)
-  mode: LEGACY                  # LEGACY | PLAN (두 로봇 함께 계획, 실행 인자 traffic_mode:=PLAN)
+traffic:                        # 단계 4O 교통 판단: 두 로봇을 함께 계획하고 그 순서를 지킨다 (D-43). LEGACY는 4O 정리에서 없앰
   stop_margin_m: 0.8            # 정지선. 다음 지점 영역까지 이 거리 안이면 멈출 수 없는 것으로 보고 지나가게 한다
   segments:
     HALL_TOP:        {kind: shared,  region: TOP,    label: "위쪽 홀"}

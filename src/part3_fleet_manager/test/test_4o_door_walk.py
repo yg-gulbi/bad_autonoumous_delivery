@@ -2,7 +2,7 @@
 
 The PLAN graph and the kinematic mock go crossroad -> door middle -> point in the room -> slot (and back out).
 Every one of the 132 slot-to-slot routes keeps WALL_CLEARANCE_M from the walls of main_map/main_maps.pgm.
-LEGACY keeps route_planner.waypoints, which runs 72 of them over a door frame.
+(The bare mouth waypoints, LEGACY's route, ran 72 of them over a door frame; LEGACY is gone since the 4O 정리.)
 """
 from math import ceil, dist, floor, hypot
 from pathlib import Path
@@ -12,9 +12,8 @@ import yaml
 
 from kinematic_mock import KinematicRobot
 from part3_fleet_manager.core import geometry as g
-from part3_fleet_manager.core.plan_graph import door_route, door_walks
+from part3_fleet_manager.core.plan_graph import door_route, door_walks, waypoints
 from part3_fleet_manager.core.plan_traffic import plan_graph
-from part3_fleet_manager.core.route_planner import waypoints
 
 MAP_YAML = Path(__file__).resolve().parents[3] / "main_map" / "main_maps.yaml"
 WALL_CLEARANCE_M = 0.17
@@ -118,20 +117,6 @@ def test_every_slot_pair_route_keeps_clear_of_the_walls(cfg, walls):
     assert not low, low
 
 
-def test_legacy_waypoints_still_cross_the_door_frames(cfg, walls):
-    """The same check on route_planner.waypoints (LEGACY, unchanged) finds the 72 room routes over a frame."""
-    slots = _slots(cfg)
-    rooms = {name for name, (zone, _) in slots.items() if g.ZONE_REGIONS[zone] in g.ROOMS}
-    low = set()
-    for s, t in _pairs(cfg):
-        start = cfg.slot_point(*slots[s])
-        clearance, _ = walls.clearance([start, *waypoints(cfg, start, *slots[t])])
-        if clearance < WALL_CLEARANCE_M:
-            low.add((s, t))
-    crossing = {(s, t) for s, t in _pairs(cfg) if (s in rooms or t in rooms) and slots[s][0] != slots[t][0]}
-    assert len(crossing) == 72 and low == crossing
-
-
 def test_door_walk_order_into_out_of_and_between_rooms(cfg):
     walks = door_walks(cfg)
     door_b, room_b = walks[g.ROOM_B]
@@ -166,7 +151,7 @@ def test_route_made_again_mid_walk_does_not_turn_back(cfg):
     past_door = between(door_b, crossroad, 0.1)
     assert cfg.corridor.region_of(past_door) == g.ROOM_B
     assert door_route(cfg, past_door, "D", 1)[0] == crossroad
-    # Once in the corridor nothing is added: the same mouths as route_planner.waypoints.
+    # Once in the corridor nothing is added: the same mouths as plan_graph.waypoints.
     in_corridor = between(door_b, crossroad, 0.5)
     assert door_route(cfg, in_corridor, "D", 1) == waypoints(cfg, in_corridor, "D", 1)
     # Coming in: still before the door middle, between the door and the room point, then past the room point.
@@ -180,11 +165,3 @@ def test_route_made_again_mid_walk_does_not_turn_back(cfg):
     robot.receive("MOVE D1 2", 0.0)
     assert robot.path == door_route(cfg, b2, "D", 1) and robot.via == crossroad
     assert robot.path[-1] == d1
-
-
-def test_room_mode_without_doors_keeps_waypoints(cfg):
-    from dataclasses import replace
-    rooms = replace(cfg, corridor=replace(cfg.corridor, room_mode="ROOM"))
-    assert door_walks(rooms) == {}
-    start = cfg.slot_point("D", 1)
-    assert door_route(rooms, start, "B", 2) == waypoints(rooms, start, "B", 2)

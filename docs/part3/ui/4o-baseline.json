@@ -1,0 +1,161 @@
+{
+  "commit": "b98f6caa7656f637623a719cab218b28d13cc3bb",
+  "tag": "4o-dual-mode",
+  "measured": "2026-11-21, kinematic mock, traffic.mode PLAN, dt 0.2 s (21:45·12:35·12:43 scenes 0.1 s)",
+  "conditions": "무작위 시드 0~299는 프로세스 12개 동시(test_4o_random.run_random_seed). 계획 시간은 그 부하에서의 PLAN_UPDATE plan_ms",
+  "definitions": {
+    "wait_s": "요청부터 그 로봇의 첫 MOVE까지 (초)",
+    "arrive_s": "요청부터 그 로봇의 첫 ARRIVE까지 (초)",
+    "plan_waits / pauses": "요청 뒤 그 로봇의 PLAN_WAIT 기록 수 / PAUSE 명령 수",
+    "follow_plan_waits / follow_pauses": "21:45 장면에서 A가 C2에 닿을 때까지 B의 PLAN_WAIT·PAUSE",
+    "random.pause / plan_wait": "로봇별 PAUSE 명령 수 / PLAN_WAIT 기록 수 (시드 300개 합)",
+    "short_link_loss": "STATE 3.3~4.0초 끊김 뒤 LINK_BACK 가운데 운영자 확인(RESOURCE_UNKNOWN 재기록) 없이 정리된 비율",
+    "proximity_stops_planned": "주입(정지·끊김·침상 이탈 등) 뒤 10초를 뺀 근접 정지"
+  },
+  "scenes": {
+    "11/20 16:05:50": {
+      "robot": "robot_b",
+      "level": 3,
+      "wait_s": 0.2,
+      "arrive_s": 25.2,
+      "plan_waits": 0,
+      "pauses": 0,
+      "prox_stops": 0
+    },
+    "11/20 16:06:32": {
+      "robot": "robot_b",
+      "level": 3,
+      "wait_s": 9.4,
+      "arrive_s": 27.2,
+      "plan_waits": 1,
+      "pauses": 0,
+      "prox_stops": 0
+    },
+    "11/20 16:07:09": {
+      "robot": "robot_b",
+      "level": 3,
+      "wait_s": 0.2,
+      "arrive_s": 21.0,
+      "plan_waits": 0,
+      "pauses": 0,
+      "prox_stops": 0
+    },
+    "11/20 16:09:59 (A 6.8 s)": {
+      "robot": "robot_b",
+      "level": 3,
+      "wait_s": 0.2,
+      "arrive_s": 25.2,
+      "plan_waits": 0,
+      "pauses": 0,
+      "prox_stops": 0
+    },
+    "11/20 16:09:59 (A 9.8 s)": {
+      "robot": "robot_b",
+      "level": 3,
+      "wait_s": 0.2,
+      "arrive_s": 25.2,
+      "plan_waits": 0,
+      "pauses": 0,
+      "prox_stops": 0
+    },
+    "11/20 16:10:49": {
+      "robot": "robot_b",
+      "level": 3,
+      "wait_s": 0.2,
+      "arrive_s": 18.0,
+      "plan_waits": 0,
+      "pauses": 0,
+      "prox_stops": 0
+    },
+    "11/21 12:35:05": {
+      "robot": "robot_b",
+      "level": 3,
+      "wait_s": 0.1,
+      "arrive_s": 25.0,
+      "plan_waits": 0,
+      "pauses": 0,
+      "prox_stops": 0,
+      "link_lost": 0
+    },
+    "11/21 12:38:46": {
+      "robot": "robot_b",
+      "level": 1,
+      "wait_s": 0.2,
+      "arrive_s": 23.8,
+      "plan_waits": 0,
+      "pauses": 0,
+      "prox_stops": 0,
+      "a_commands_before_check": 0
+    },
+    "11/21 12:43:25 (재개 3 s)": {
+      "robot": "robot_a",
+      "level": 2,
+      "wait_s": 0.1,
+      "arrive_s": 30.8,
+      "plan_waits": 0,
+      "pauses": 0,
+      "prox_stops": 0,
+      "b_arrive_after_resume_s": 40.7,
+      "closest_m": 1.05
+    },
+    "11/21 12:43:25 (재개 8.9 s)": {
+      "robot": "robot_a",
+      "level": 2,
+      "wait_s": 0.1,
+      "arrive_s": 30.8,
+      "plan_waits": 0,
+      "pauses": 0,
+      "prox_stops": 0,
+      "b_arrive_after_resume_s": 34.8,
+      "closest_m": 1.05
+    },
+    "11/21 12:43:25 (재개 12 s)": {
+      "robot": "robot_a",
+      "level": 2,
+      "wait_s": 0.1,
+      "arrive_s": 30.8,
+      "plan_waits": 0,
+      "pauses": 0,
+      "prox_stops": 0,
+      "b_arrive_after_resume_s": 29.6,
+      "closest_m": 1.05
+    },
+    "11/21 21:45:40 뒤따르기": {
+      "robot": "robot_b",
+      "level": 3,
+      "wait_s": 0.1,
+      "arrive_s": 40.3,
+      "plan_waits": 2,
+      "pauses": 2,
+      "prox_stops": 0,
+      "follow_plan_waits": 1,
+      "follow_pauses": 1
+    }
+  },
+  "random": {
+    "seeds": 300,
+    "violations": 0,
+    "failed_seeds": [],
+    "missions": 8688,
+    "proximity_stops": 7,
+    "proximity_stops_planned": 0,
+    "pause": {
+      "robot_a": 3283,
+      "robot_b": 2954
+    },
+    "plan_wait": {
+      "robot_a": 5506,
+      "robot_b": 5624
+    },
+    "short_link_loss": {
+      "recoveries": 883,
+      "operator_checks": 0,
+      "auto_ratio": 1.0
+    },
+    "plan_ms": {
+      "count": 173375,
+      "mean": 3.22,
+      "max": 257.6
+    }
+  }
+}

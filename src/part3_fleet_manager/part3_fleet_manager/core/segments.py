@@ -386,7 +386,7 @@ class SegmentBoard:
                     seg.blocked_since = None
 
     def aggregate(self, seg_names, capacity: int, queue=()) -> dict:
-        """Legacy-shaped CORRIDOR / ROOM_B / ROOM_E entry for the screen."""
+        """CORRIDOR / ROOM_B / ROOM_E summary of the segments in them, for the screen."""
         segs = [self.segments[n] for n in seg_names if n in self.segments]
         holders_map: dict[str, tuple[str, int]] = {}
         for s in segs:
@@ -406,9 +406,7 @@ class SegmentBoard:
         decided = max(((s.decided_at, s.reason) for s in segs if s.decided_at is not None), default=(None, None))
         return {
             "state": state, "capacity": capacity, "holders": holders, "holder": holders[0] if holders else None,
-            "give_way": None,
             "holder_detail": [{"robot": r, "state": holders_map[r][0], "direction": holders_map[r][1]} for r in holders],
-            "follow_stop": None,
             "blocked": bool(blocked_robots), "blocked_since": min(blocked_times) if blocked_times else None,
             "blocked_robots": blocked_robots, "reason": decided[1], "decided_at": decided[0],
             "queue_detail": [dict(item) for item in queue],

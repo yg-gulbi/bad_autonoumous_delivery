@@ -7,17 +7,18 @@ import pytest
 
 from kinematic_mock import KinematicSim
 from part3_fleet_manager.core import schemas
-from part3_fleet_manager.core.resource_manager import Leg
+from part3_fleet_manager.core.clearance import resume_distance, stop_distance
+from part3_fleet_manager.core.legs import Leg
 from part3_fleet_manager.core.robot_protocol import RobotProtocol
 from part3_fleet_manager.preflight_checks import running_mode_line, traffic_mode_line
 
 A, B = "robot_a", "robot_b"
 
 
-# --- 1. bed monitor on/off (both modes) ---------------------------------------------------------------------
+# --- 1. bed monitor on/off -------------------------------------------------------------------------------
 
-def _bed_sim(cfg, mode, **kw):
-    sim = KinematicSim(cfg, mode=mode, bed_feed=True, require_at_start=True, **kw)
+def _bed_sim(cfg, **kw):
+    sim = KinematicSim(cfg, bed_feed=True, require_at_start=True, **kw)
     sim.run_until(1.0)
     return sim
 
@@ -26,9 +27,8 @@ def _kinds(sim, after, *kinds):
     return [e for e in sim.all_events if e["ts"] > after and e["type"] in kinds]
 
 
-@pytest.mark.parametrize("mode", ["LEGACY", "PLAN"])
-def test_bed_monitor_off_no_stop_no_card_no_alarm_events(cfg, mode):
-    sim = _bed_sim(cfg, mode)
+def test_bed_monitor_off_no_stop_no_card_no_alarm_events(cfg):
+    sim = _bed_sim(cfg)
     try:
         assert cfg.safety.bed_monitor.enabled is True                 # default: 4M behaviour
         cid = sim.cmd("BED_MONITOR_SET", enabled=False)
@@ -59,9 +59,8 @@ def test_bed_monitor_off_no_stop_no_card_no_alarm_events(cfg, mode):
         sim.close()
 
 
-@pytest.mark.parametrize("mode", ["LEGACY", "PLAN"])
-def test_bed_monitor_off_closes_the_lost_card_and_keeps_existing_stops(cfg, mode):
-    sim = _bed_sim(cfg, mode)
+def test_bed_monitor_off_closes_the_lost_card_and_keeps_existing_stops(cfg):
+    sim = _bed_sim(cfg)
     try:
         sim.submit_patient("C", "A", level=2)
         sim.run_until(sim.now + 2.0)
@@ -92,7 +91,7 @@ def test_bed_monitor_config_launch_and_schema(cfg):
     with pytest.raises(schemas.SchemaError, match="enabled"):
         schemas.parse_operator_cmd(json.dumps({"v": 1, "cmd": "BED_MONITOR_SET", "cmd_id": "c", "by": "n"}))
     off = replace(cfg, safety=replace(cfg.safety, bed_monitor=replace(cfg.safety.bed_monitor, enabled=False)))
-    sim = KinematicSim(off, mode="LEGACY", require_at_start=True)
+    sim = KinematicSim(off, require_at_start=True)
     try:
         sim.run_until(5.0)
         snap = sim.core.snapshot(sim.now)
@@ -102,7 +101,7 @@ def test_bed_monitor_config_launch_and_schema(cfg):
         sim.close()
 
 
-# --- link grace after MOVE / RESUME (both modes) ----------------------------------------------------------------
+# --- link grace after MOVE / RESUME --------------------------------------------------------------------------
 
 def _state(link, stamp, state="IDLE", mission=None):
     return link.receive(json.dumps({"type": "STATE", "robot_id": link.ns, "mission_id": mission, "state": state,
@@ -125,9 +124,8 @@ def test_link_grace_after_move_and_resume_until_the_next_state(cfg):
     assert link.online(22.9) and not link.online(23.01)
 
 
-@pytest.mark.parametrize("mode", ["LEGACY", "PLAN"])
-def test_no_link_loss_while_part04_waits_for_nav2_after_a_move(cfg, mode):
-    sim = KinematicSim(cfg, mode=mode)
+def test_no_link_loss_while_part04_waits_for_nav2_after_a_move(cfg):
+    sim = KinematicSim(cfg)
     try:
         sim.nav_wait(A, 5.0)
         sim.cmd("GO_ZONE", robot=A, zone="C", level=1)
@@ -141,7 +139,7 @@ def test_no_link_loss_while_part04_waits_for_nav2_after_a_move(cfg, mode):
 def test_cancel_of_a_move_that_never_arrived_ends_that_move(cfg):
     """The MOVE was lost in a link drop, the CANCEL meets an idle PART 04 (STATE CANCELED after it): the MOVE is
     over. Before, it was sent again after accept_timeout_s (seed 23 of the 4O random test)."""
-    link = RobotProtocol("robot3", cfg.robot_link, resend_controls=True)
+    link = RobotProtocol("robot3", cfg.robot_link)
     _state(link, 10.0, "CANCELED", "L-0031-2")
     link.go("Y-0-2", "F", 1)
     assert link.step(10.2)[0].startswith("MOVE F")
@@ -160,7 +158,7 @@ def test_cancel_of_a_move_that_never_arrived_ends_that_move(cfg):
 def test_plan_hold_blocks_resume_and_move_whoever_asks(cfg):
     """A robot the plan holds gets no RESUME (operator resume, card retry) and no MOVE (resend) until the plan
     lets it go; PAUSE and CANCEL still go out."""
-    sim = KinematicSim(cfg, mode="PLAN")
+    sim = KinematicSim(cfg)
     try:
         pm, link, unit = sim.core.resources, sim.core.links[A], sim.core.mission.robots[A]
         link.state = "PAUSED"
@@ -172,9 +170,6 @@ def test_plan_hold_blocks_resume_and_move_whoever_asks(cfg):
         assert link.step(sim.now + 1.0, hold=True) == (None, None)
         assert link.step(sim.now + 1.0)[0].startswith("MOVE C")
         assert sim.core.traffic.may_start(A) == (A in pm.go)
-        legacy = KinematicSim(cfg, mode="LEGACY")
-        assert legacy.core.traffic.may_start(A) and legacy.core.traffic.may_start(B)
-        legacy.close()
     finally:
         sim.close()
 
@@ -184,7 +179,7 @@ def test_plan_hold_blocks_resume_and_move_whoever_asks(cfg):
 def test_wait_confirm_robot_is_not_moved_aside(cfg):
     """robot_b waits for its stop confirmation at A2 (the entrance slot of A); robot_a is sent to A. The plan
     does not move robot_b aside (a patient may be getting on); robot_a waits, and goes after the confirmation."""
-    sim = KinematicSim(cfg, mode="PLAN", poses={B: cfg.slot_point("A", 2)})
+    sim = KinematicSim(cfg, poses={B: cfg.slot_point("A", 2)})
     try:
         sim.submit_call("A", level=1)
         sim.run_until(2.0, auto_confirm=False)
@@ -201,24 +196,29 @@ def test_wait_confirm_robot_is_not_moved_aside(cfg):
         sim.close()
 
 
-def test_plan_uses_proximity_stop_m_for_an_offline_or_granted_unstarted_robot(cfg):
-    """collision.stop_distance uses slot_stop_m (0.45 m) only for an online robot at a slot without a granted leg.
-    The plan's standing piece of an offline robot, or of one granted and not started, keeps 0.6 m (D-56)."""
-    sim = KinematicSim(cfg, mode="PLAN")
+def test_plan_and_proximity_stop_use_one_distance_rule(cfg):
+    """clearance.stop_distance (4O 정리): slot_stop_m (0.45 m) for a robot standing still at a slot without a granted
+    leg, online or not; 0.6 m for one granted and not started. The plan's standing piece and collision.py agree."""
+    sim = KinematicSim(cfg)
     try:
         pm, graph = sim.core.resources, sim.core.resources.graph
 
         def standing_piece(robot):
-            agent = pm._agent(robot)
+            agent = pm._agent(robot, {})
             return graph.pieces[graph.routes[agent.starts[0][0]].park]
 
-        assert standing_piece(B).at_slot                                     # online, parked at F1
+        col = sim.core.collision
+        assert standing_piece(B).at_slot and col._still_at_slot(B)          # parked at F1
         pm.reports[B] = replace(pm.reports[B], link_ok=False)
-        assert not standing_piece(B).at_slot                                 # offline
+        pm.robots.reports[B] = pm.reports[B]
+        assert standing_piece(B).at_slot and col._still_at_slot(B)          # offline: still standing there
         pm.reports[B] = replace(pm.reports[B], link_ok=True)
         pm.active[B] = Leg(B, "C", 1, 0.0, "M-0001", False, "CALL")         # granted, MOVE not sent yet
-        assert not standing_piece(B).at_slot
+        assert not standing_piece(B).at_slot and not col._still_at_slot(B)
         del pm.active[B]
+        safety = cfg.safety
+        assert (stop_distance(safety, False, False), resume_distance(safety, False, False)) == (0.6, 0.9)
+        assert stop_distance(safety, True, False) == 0.45 and abs(resume_distance(safety, False, True) - 0.75) < 1e-9
         moving = graph.pieces[graph.routes[graph.route_from(cfg.slot_point("F", 2), "D1")].pieces[0]]
         for parked, limit in ((graph.park["F1"], cfg.safety.slot_stop_m),
                               (graph.parked("F1", slot_rule=False), cfg.safety.proximity_stop_m)):
@@ -228,7 +228,7 @@ def test_plan_uses_proximity_stop_m_for_an_offline_or_granted_unstarted_robot(cf
 
 
 def test_leg_start_of_an_aside_move_names_the_slot_it_goes_to(cfg):
-    sim = KinematicSim(cfg, mode="PLAN")
+    sim = KinematicSim(cfg)
     try:
         pm, link, unit = sim.core.resources, sim.core.links[B], sim.core.mission.robots[B]
         sim.submit_call("E", level=1)
@@ -248,13 +248,11 @@ def test_leg_start_of_an_aside_move_names_the_slot_it_goes_to(cfg):
 
 # --- preflight ---------------------------------------------------------------------------------------------------
 
-def test_preflight_names_the_source_of_the_traffic_mode(cfg):
-    plan = replace(cfg, traffic=replace(cfg.traffic, mode="PLAN"))
-    assert traffic_mode_line(cfg).endswith("· fleet.yaml") and "LEGACY" in traffic_mode_line(cfg)
-    assert traffic_mode_line(plan, "실행 인자 --traffic-mode").startswith("교통 판단 모드 · PLAN")
-    assert "같음" in running_mode_line("PLAN", "PLAN")
-    assert running_mode_line("LEGACY", "PLAN").startswith("경고 · 실행 중인 관제는 PLAN")
-    assert "관제 실행 전" in running_mode_line("PLAN", None)
+def test_preflight_names_the_traffic_judgement_and_an_old_running_control_room(cfg):
+    assert traffic_mode_line(cfg).startswith("교통 판단 · PLAN (정지선 0.8 m") and traffic_mode_line(cfg).endswith("· fleet.yaml")
+    assert "같음" in running_mode_line("PLAN")
+    assert running_mode_line("LEGACY").startswith("경고 · 실행 중인 관제는 LEGACY입니다. 4O 정리 이전 관제")
+    assert "관제 실행 전" in running_mode_line(None)
 
 
 def test_failed_state_stands_for_a_lost_mission_failed(cfg):

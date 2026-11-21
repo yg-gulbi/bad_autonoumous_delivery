@@ -31,7 +31,7 @@ def _scene_1235(cfg, grace):
     """robot_a (L1) D1 -> E, robot_b (L3) F1 -> E2 a second later: robot_a waits for robot_b before the
     crossroad. Its RESUME then meets PART 04's Nav2 server wait (4 s without STATE)."""
     cfg = replace(cfg, robot_link=replace(cfg.robot_link, command_grace_s=grace))
-    sim = KinematicSim(cfg, mode="PLAN")
+    sim = KinematicSim(cfg)
     sim.cmd("GO_ZONE", robot=A, zone="E", level=1)
     sim.run_until(0.5)
     sim.cmd("GO_ZONE", robot=B, zone="E", level=3)
@@ -78,7 +78,7 @@ def test_1235_without_the_grace_the_same_four_segments_go_unknown_and_come_back_
 
 def _standing_drop(cfg, seconds):
     """robot_b stands in E2 (12:35:59) and loses the link."""
-    sim = KinematicSim(cfg, mode="PLAN", poses={B: cfg.slot_point("E", 2)})
+    sim = KinematicSim(cfg, poses={B: cfg.slot_point("E", 2)})
     sim.run_until(2.05)
     board = sim.core.resources.segments
     assert B in board["E2"].holders and board["E2"].holders[B].state == "OCCUPIED"
@@ -116,7 +116,7 @@ def test_long_link_loss_inside_its_own_slot_settles_without_the_operator(cfg):
 def test_link_back_in_a_segment_that_was_not_its_own_needs_the_operator_check(cfg):
     """D-57: robot_b comes back in the door of room E, which it did not hold (pushed away, or Nav2 went another
     way): its UNKNOWN E2 stays for the operator's check."""
-    sim = KinematicSim(cfg, mode="PLAN", poses={B: cfg.slot_point("E", 2)})
+    sim = KinematicSim(cfg, poses={B: cfg.slot_point("E", 2)})
     try:
         sim.run_until(2.05)
         board = sim.core.resources.segments
@@ -142,7 +142,7 @@ def test_short_link_loss_while_driving_keeps_the_segment_it_is_in_and_frees_the_
     """D-57: robot_a drives D1 -> C and loses the link for about a second while it goes from the upper corridor
     into the crossroad. It moved about 0.8 m along its MOVE (the D-52 rule sent this to the operator); now it keeps
     the crossroad and the rest of its route stays planned, the upper corridor it has passed is released."""
-    sim = KinematicSim(cfg, mode="PLAN")
+    sim = KinematicSim(cfg)
     try:
         board = sim.core.resources.segments
         sim.cmd("GO_ZONE", robot=A, zone="C", level=2)
@@ -168,7 +168,7 @@ def test_short_link_loss_while_driving_keeps_the_segment_it_is_in_and_frees_the_
 def _scene_1238(cfg):
     """robot_a stands in F2 (back online), CORRIDOR_TOP·CROSSROAD·DOOR_E·E1 are still UNKNOWN for it (no operator
     check yet), robot_b stands in E2 and gets GO_ZONE A (M-0072, Level 1)."""
-    sim = KinematicSim(cfg, mode="PLAN", poses={A: cfg.slot_point("F", 2), B: cfg.slot_point("E", 2)})
+    sim = KinematicSim(cfg, poses={A: cfg.slot_point("F", 2), B: cfg.slot_point("E", 2)})
     sim.run_until(1.0)
     board = sim.core.resources.segments
     for name in FIELD_UNKNOWN:
@@ -214,7 +214,7 @@ def test_1238_unknown_segments_are_a_fence_and_nobody_moves_aside(cfg):
 def _scene_1243(cfg, resume_after):
     """robot_b leaves E2 for F (its return home), the plan stops it in room E and the operator pauses it; robot_a
     (Level 2) goes C2 -> A2 up through the crossroad; the operator resumes robot_b ``resume_after`` s later."""
-    sim = KinematicSim(cfg, mode="PLAN", poses={A: cfg.slot_point("C", 2), B: cfg.slot_point("E", 2)})
+    sim = KinematicSim(cfg, poses={A: cfg.slot_point("C", 2), B: cfg.slot_point("E", 2)})
     sim.run_until(1.0)
     sim.cmd("GO_ZONE", robot=B, zone="F", level=1)
     paused = resumed = None
@@ -244,7 +244,7 @@ def _scene_1243(cfg, resume_after):
 
 def test_1243_part04_goes_through_the_crossroad_even_inside_room_e(cfg):
     """The plan's route for a MOVE to E2 from inside room E is PART 04's: out to the crossroad and back."""
-    sim = KinematicSim(cfg, mode="PLAN")
+    sim = KinematicSim(cfg)
     try:
         graph = sim.core.resources.graph
         inside = (-0.52, -2.67)                      # where robot_b stood at 12:43 (a little out of E2)

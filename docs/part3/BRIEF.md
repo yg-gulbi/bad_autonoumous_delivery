@@ -126,7 +126,7 @@
 ```
 
 - 모든 노드가 관제 PC에서 띄운 Fast DDS 발견 서버 하나로 서로를 찾는다 (10장).
-- `fleet_manager`는 **ROS 노드 1개**다. 판단 모듈(`mission`, `route_planner`, `resource_manager`, `deadlock`, `stall`, `obstacle`, `decisions`, `safety`, `store`)은 ROS를 모르는 순수 파이썬 클래스다 (`core/`).
+- `fleet_manager`는 **ROS 노드 1개**다. 판단 모듈(`mission`, 교통 판단 `plan_*`·`robot_state`·`clearance`, `collision`, `stall`, `obstacle`, `decisions`, `safety`, `store`)은 ROS를 모르는 순수 파이썬 클래스다 (`core/`).
 - 핵심 규칙: **콜백은 저장만, 판단은 10 Hz tick 한 곳에서.** 구독 콜백은 최신값과 받은 시각만 입력 큐에 넣는다. `tick(now)` 하나가 모든 판단과 발행을 한다. 서비스 콜백도 요청을 큐에 넣고 바로 답할 수 있는 것만 답한다 (4.7절). 그래서 같은 입력을 core에 넣는 것만으로 노드 동작을 테스트할 수 있다.
 
 ---
@@ -337,7 +337,7 @@ PART 04의 ROS 패키지 이름은 `hospital_nav`, 소스 폴더는 `src/part4_a
 | `PAUSE_ROBOT` · `RESUME_ROBOT` | `robot` | 로봇 한 대만 정지·재개 |
 | `PAUSE_ALL` · `RESUME_ALL` | 없음 | 화면의 [안전 정지 요청]·[전체 재개]. `/robot/pause`·`/robot/resume`과 같은 동작·같은 거절 조건이고, `by`를 기록에 남긴다 |
 | `GO_ZONE` | `robot`, `zone`, 선택 `level`(1~3) | 지정 구역으로 보내기 (임무 없는 로봇만. 자원 규칙은 똑같이 적용). `level`이 없으면 `mission.manual_level` |
-| `SET_LEVEL` | `mission_id`, `level`(1~3) | 대기·진행 중 임무의 응급도 변경. PLAN만: 그 임무의 구간을 새 Level로 다시 계획한다. LEGACY는 `E-409` (4O 후속, D-48) |
+| `SET_LEVEL` | `mission_id`, `level`(1~3) | 대기·진행 중 임무의 응급도 변경. 그 임무의 구간을 새 Level로 다시 계획한다 (4O 후속, D-48) |
 | `RESOURCE_CLEAR_CONFIRM` | `resource` | 점유 불명(`UNKNOWN`) 자원을 사람이 확인하고 비움 |
 | `BED_MONITOR_SET` | `enabled`(true/false) | 침상 감시 켜기·끄기 (두 모드, 4O 후속 3, D-51). 끄면 침상 이탈·감시 끊김으로 세우지 않고 경보·카드를 띄우지 않는다. 기록 `BED_MONITOR_ENABLED`·`BED_MONITOR_DISABLED`(`by`) |
 
@@ -346,7 +346,7 @@ PART 04의 ROS 패키지 이름은 `hospital_nav`, 소스 폴더는 `src/part4_a
 ### 4.3 `/ui/decision`
 
 ```json
-{"v": 1, "card_id": "K-0e3a…", "choice": "yield_a", "by": "nurse01"}
+{"v": 1, "card_id": "K-0e3a…", "choice": "self_first", "by": "nurse01"}
 ```
 
 ### 4.4 `/ui/ack`
@@ -363,55 +363,54 @@ PART 04의 ROS 패키지 이름은 `hospital_nav`, 소스 폴더는 `src/part4_a
 ```json
 {"v": 1, "stamp": 1794963604.2,
  "robots": {
-   "robot_a": {"label": "침상형 이송 로봇", "mark": "A", "ns": "robot3", "link_ok": true, "state": "GIVE_WAY", "state_since": 1794963601.5,
+   "robot_a": {"label": "침상형 이송 로봇", "mark": "A", "ns": "robot3", "link_ok": true, "state": "HOLD", "state_since": 1794963601.5,
                "part4_state": "PAUSED", "region": "CORRIDOR", "zone": null, "pose": {"x": -1.62, "y": -2.90},
                "battery_pct": 82, "battery_status": "DISCHARGING", "docked": false, "mission_id": "M-0007", "leg": {"from": "C", "to": "A"},
                "route": [[-1.62, -2.90], [-1.37, -0.55], [-2.20, 0.50]],
-               "wait_reason": "침상형 이송 로봇 복도 양보 중 (약품 운송 로봇 Level 3)", "progress_pct": 38.0,
-               "remaining_m": 3.1, "stall_s": 0, "paused_by": "CORRIDOR_YIELD", "obstacle": null},
+               "wait_reason": "교차로: 약품 운송 로봇이 지나간 뒤", "progress_pct": 38.0,
+               "remaining_m": 3.1, "stall_s": 0, "paused_by": null, "obstacle": null},
    "robot_b": {"...": "같은 형식"}},
  "resources": {
    "CORRIDOR": {"state": "OCCUPIED", "capacity": 2, "holders": ["robot_b", "robot_a"], "holder": "robot_b",
                 "blocked": false, "queue": [], "queue_detail": [],
-                "reason": "복도 비어 있음 + Level 3 > Level 2 → 약품 운송 로봇 허가", "decided_at": 1794963590.0,
-                "give_way": {"yielding": "robot_a", "to": "robot_b", "since": 1794963601.5}},
-   "ROOM_B": {"state": "FREE", "capacity": 1, "holders": [], "holder": null, "blocked": false, "queue": [], "give_way": null},
+                "reason": "약품 운송 로봇 복도 위쪽 진입", "decided_at": 1794963590.0},
+   "ROOM_B": {"state": "FREE", "capacity": 1, "holders": [], "holder": null, "blocked": false, "queue": []},
    "ROOM_E": {"state": "GRANTED", "capacity": 1, "holders": ["robot_b"], "holder": "robot_b", "blocked": false,
-              "queue": [], "give_way": null}},
+              "queue": []}},
+ "traffic": {"mode": "PLAN", "stop_margin_m": 0.8, "segments": {"...": "아래"}, "stop_line_waits": {"...": "아래"},
+             "plans": {"...": "아래"}, "plan": {"at": 1794963600.0, "ms": 2.4, "reason": "새 구간 요청"}},
  "missions": [{"mission_id": "M-0007", "type": "PATIENT_TRANSPORT", "level": 2, "robot": "robot_a",
                "status": "ACTIVE", "stops": ["A", "C"], "stop_index": 0}],
- "last_decision": {"type": "RESOURCE_GRANT", "ts": 1794963590.0, "robot": "robot_b", "detail": {"...": "4.8절"}},
  "open_cards": ["K-0e3a…"],
  "bed_exit": {"value": false, "since": 1794963000.0,
                "monitor": {"state": "OK", "last_rx": 1794963604.1, "rate_hz": 29.8, "since": 1794963000.0, "bypass": false}},
- "kpi": {"hold_count": 3, "deadlock_count": 1, "deadlock_resolve_s_avg": 14.2, "pause_count": 0}}
+ "kpi": {"hold_count": 3, "pause_count": 0}}
 ```
 
 화면이 쓰는 필드:
 
 - `bed_exit.value`는 관제가 확정한 이탈 여부이고 `since`는 그 값의 확정 시각이다. 첫 값 확정 전에는 둘 다 null이다. 이탈은 즉시, 정상은 5.6절의 연속 수신 조건을 충족한 프레임에서 확정한다.
 - `robots.<id>.mark`는 지도 표시 한 글자, `pause_causes`는 동시에 걸린 안전 정지 사유 목록이다.
-- `resources.CORRIDOR.holder_detail`은 로봇별 `{robot, state, direction}` 목록이다. `direction`은 TOP → BOTTOM이면 +1, 역방향이면 −1, 횡단·미확인이면 0이다. `holders`는 기존 ID 목록이다. `follow_stop`은 `{front, rear, since}` 또는 null이다.
+- `resources.CORRIDOR.holder_detail`은 로봇별 `{robot, state, direction}` 목록이다. `direction`은 TOP → BOTTOM이면 +1, 역방향이면 −1, 횡단·미확인이면 0이다. `holders`는 ID 목록이다. `CORRIDOR`·`ROOM_B`·`ROOM_E`는 그 안 칸(`traffic.segments`)을 모은 요약이다.
 - `robots.<id>.route`: 지금 구간의 남은 계획 경로 `[[x, y], ...]` (map 좌표). 지금 위치 → 지나갈 입구 중심점(`mouths`) → 목적지 구역. 구간이 없으면 `[]`.
 - `robots.<id>.state_since`: 지금 상태가 된 시각. "진입 전 대기 · 00:18" 같은 경과 시간에 쓴다.
 - `robots.<id>.obstacle`: 이번 멈춤에서 받은 장애물 분류. 멈춤이 없으면 `null`. `{"kind": "PERSON"|"OBJECT"|"NONE"|"UNKNOWN", "labels": ["person"], "detections": [{"label", "confidence", "pose"}], "at": …}`
-- `resources.<id>.reason`·`decided_at`: 그 자원에 대한 가장 최근 판단 문장과 시각 (허가·대기·양보·점유 불명·해제). `resource_manager`가 만든 문장을 그대로 넣는다.
-- `resources.<id>.queue_detail`: `[{"robot": "robot_a", "level": 1, "mission_id": "M-0005", "since": …}]`. `queue`(이름 목록)도 그대로 둔다.
+- `resources.<id>.reason`·`decided_at`: 그 안 칸에 대한 가장 최근 칸 판 문장과 시각 (진입·해제·점유 불명·현장 확인).
+- `resources.CORRIDOR.queue_detail`: 정지선에서 계획 순서를 기다리는 구간 `[{"robot": "robot_a", "level": 1, "mission_id": "M-0005", "since": …}]`. `queue`(이름 목록)도 그대로 둔다.
 - `missions[]`: 위 필드에 `patient`, `items`(정류장별 품목), `requested_by`, `created_at`, `finished_at`, `wait_reason`이 더 있다. 끝난 임무도 최근 `publish.finished_mission_limit`건까지 넣는다 (기본 20, `status`로 구분).
-- `last_decision`: 가장 최근 통행 판단 하나. 4.8절 판단 이벤트의 `type`, `ts`, `robot`, `detail`을 그대로 담는다. 없으면 `null`.
+- `kpi`: `hold_count`(구간마다 한 번 센 정지선·출발 대기), `pause_count`(PAUSE 수).
 
-4H부터 로봇별로 `zone_wait`(상대 `peer`, 목적지 `zone`, `since`, `reason`), `proximity`(상대, 시각, 사유), `returning`을 보낸다. 해당 대기가 없으면 대기 필드는 null이다. 대기는 HOLD로 표시하고 안전 정지가 우선한다. 복도 `follow_stop.rule`은 FOLLOW 또는 GAP이다.
+로봇별로 `zone_wait`(출발 전 0.9 m 확인: 상대 `peer`, 구역 `zone`, `rule: NEAR_START`, `since`, `reason`), `proximity`(상대, 시각, 사유), `returning`을 보낸다. 해당 대기가 없으면 null이다. 대기는 HOLD로 표시하고 안전 정지가 우선한다.
 
 4J 필드:
 
 - `robots.<id>.slot`: 지금 서 있는 구역의 자리(1·2). 구역 밖이면 null. `leg.slot`: 이번 구간 목적지 자리.
 - `robots.<id>.via`: 이번 구간이 교차로를 지나면 `{"point": "교차로", "passed": false|true}`, 아니면 null. `route`는 `VIA_PASSED` 전까지 교차로를 거친다.
 - `robots.<id>.obstacle.text`: report 모드 판별 문장 (예: "의료용 상자가 길을 막고 있음 (로봇 앞 약 0.4 m)"). `obstacle_pending`은 사진 판별을 기다리는 동안 true.
-- `resources.ROOM_B|ROOM_E.holder_detail[].door`: `IN`(들어가는 중) 또는 `OUT`(나오는 중). DOOR 모드에서만 있다.
 
-4O 필드 `traffic` (5.3a절):
+4O 필드 `traffic` (5.3절):
 
-- `traffic.mode`: `LEGACY` 또는 `PLAN`. LEGACY에서는 `segments`·`stop_line_waits`가 빈 객체다.
+- `traffic.mode`: 언제나 `PLAN`(4O 정리 뒤 교통 판단은 하나). preflight가 실행 중인 관제가 정리 이전(`LEGACY`) 코드인지 보는 데 쓴다.
 - `traffic.segments.<칸>`: `{kind, label, state, direction, holders: [{robot, state, direction}]}`. 상태는 `FREE`·`GRANTED`·`OCCUPIED`·`UNKNOWN`이다.
 - `traffic.stop_line_waits.<로봇>`: 계획 순서 때문에 서 있는 로봇. `{segment, segment_label, by, since, paused, reason}`. `reason` 예: "교차로: 약품 운송 로봇이 지나간 뒤".
 - `traffic.plans.<로봇>`: `{points, labels, route, targets, wait, aside}`. `route`는 지도에 그리는 계획 경로, `aside`는 길을 비켜 주는 이동이다. `traffic.plan`은 마지막 계획의 `{at, ms, cost, method, reason, fallback}`이다.
@@ -419,11 +418,11 @@ PART 04의 ROS 패키지 이름은 `hospital_nav`, 소스 폴더는 `src/part4_a
 ### 4.6 `/fleet/decision_req`
 
 ```json
-{"v": 1, "card_id": "K-0e3a…", "kind": "DEADLOCK", "robots": ["robot_a", "robot_b"],
- "title": "교착: 서로 상대 방으로 가려고 함",
- "reason": "침상형 이송 로봇는 B방에서 E방으로, 약품 운송 로봇는 E방에서 B방으로 가려 함. 서로 상대가 쥔 방을 기다림",
- "options": [{"id": "yield_a", "label": "A가 간호 스테이션(D)으로 비킴"}, {"id": "yield_b", "label": "B가 조제실(F)으로 비킴"}],
- "recommended": "yield_a", "timeout_s": 20, "default": "yield_a", "created_at": 1794963604.2}
+{"v": 1, "card_id": "K-0e3a…", "kind": "BLOCKED", "context": "PROXIMITY", "robots": ["robot_a"],
+ "title": "경로 막힘", "reason": "약품 운송 로봇과 너무 가까움 → 정지",
+ "options": [{"id": "retry", "label": "다시 확인"}, {"id": "return", "label": "되돌아가기"}, {"id": "hold", "label": "보류"},
+             {"id": "self_first", "label": "이 로봇 먼저 보내기"}, {"id": "peer_first", "label": "약품 운송 로봇 먼저 보내기"}],
+ "recommended": null, "timeout_s": null, "default": null, "created_at": 1794963604.2}
 ```
 
 - 카드 ID는 `K-` 뒤에 UUID다.
@@ -440,11 +439,13 @@ PART 04의 ROS 패키지 이름은 `hospital_nav`, 소스 폴더는 `src/part4_a
 ### 4.8 `/mission/event`
 
 ```json
-{"v": 1, "ts": 1794963604.2, "type": "RESOURCE_GRANT", "robot": "robot_b", "mission_id": "M-0006",
- "detail": {"resources": ["CORRIDOR", "ROOM_E"], "reason": "복도 비어 있음 + Level 3 > Level 2 → 약품 운송 로봇 허가"}}
+{"v": 1, "ts": 1794963604.2, "type": "PLAN_WAIT", "robot": "robot_a", "mission_id": "M-0006",
+ "detail": {"reason": "교차로: 약품 운송 로봇이 지나간 뒤", "peer": "robot_b", "point": "CROSSROAD"}}
 ```
 
-이벤트 종류: `MISSION_CREATED`, `MISSION_REJECTED`, `LEG_START`, `ARRIVE`, `CONFIRM_STEP`, `MISSION_DONE`, `MISSION_CANCELED`, `RESOURCE_REQUEST`, `RESOURCE_GRANT`, `RESOURCE_HOLD`, `RESOURCE_ENTER`, `RESOURCE_RELEASE`, `RESOURCE_UNKNOWN`, `RESOURCE_CLEAR_CONFIRM`, `DEADLOCK_DETECTED`, `YIELD_START`, `YIELD_DONE`, `CORRIDOR_YIELD_START`, `CORRIDOR_YIELD_END`, `CORRIDOR_YIELD_TIMEOUT`, `CORRIDOR_FOLLOW_STOP`, `CORRIDOR_FOLLOW_CLEAR`, `ZONE_OCCUPIED_HOLD`, `ZONE_OCCUPIED_CLEAR`, `PROXIMITY_STOP`, `PROXIMITY_CLEAR`, `STALL_SHORT`, `STALL_LONG`, `BLOCKED`, `UNBLOCKED`, `PAUSE`, `RESUME`, `RESUME_REJECTED`, `BED_EXIT`, `BED_EXIT_CLEAR`, `BUMP`, `MOVE_REJECTED`, `NAV_FAILED`, `FAULT`, `CARD_OPEN`, `CARD_CLOSED`, `LINK_LOST`, `LINK_BACK`, `WARNING`, `BED_MONITOR_WARN`, `BED_MONITOR_LOST`, `BED_MONITOR_BACK`, `BED_MONITOR_BYPASS`, `OBSTACLE_INSPECT`, `OBSTACLE_RESULT`, `OBSTACLE_REPORT`, `OBSTACLE_RETRY`, `STOP_RESENT`, `STOP_UNCONFIRMED`, `ARRIVED_FROM_STATE`, `PLAN_UPDATE`, `PLAN_WAIT`, `PLAN_YIELD_MOVE`, `LEVEL_CHANGE`, `BED_MONITOR_ENABLED`, `BED_MONITOR_DISABLED`.
+이벤트 종류: `MISSION_CREATED`, `MISSION_REJECTED`, `LEG_START`, `ARRIVE`, `CONFIRM_STEP`, `MISSION_DONE`, `MISSION_CANCELED`, `RESOURCE_REQUEST`, `RESOURCE_ENTER`, `RESOURCE_RELEASE`, `RESOURCE_UNKNOWN`, `RESOURCE_CLEAR_CONFIRM`, `ZONE_OCCUPIED_HOLD`, `ZONE_OCCUPIED_CLEAR`, `PROXIMITY_STOP`, `PROXIMITY_CLEAR`, `STALL_SHORT`, `STALL_LONG`, `BLOCKED`, `UNBLOCKED`, `PAUSE`, `RESUME`, `RESUME_REJECTED`, `BED_EXIT`, `BED_EXIT_CLEAR`, `BUMP`, `MOVE_REJECTED`, `NAV_FAILED`, `FAULT`, `CARD_OPEN`, `CARD_CLOSED`, `LINK_LOST`, `LINK_BACK`, `WARNING`, `BED_MONITOR_WARN`, `BED_MONITOR_LOST`, `BED_MONITOR_BACK`, `BED_MONITOR_BYPASS`, `OBSTACLE_INSPECT`, `OBSTACLE_RESULT`, `OBSTACLE_REPORT`, `OBSTACLE_RETRY`, `STOP_RESENT`, `STOP_UNCONFIRMED`, `ARRIVED_FROM_STATE`, `PLAN_UPDATE`, `PLAN_WAIT`, `PLAN_YIELD_MOVE`, `LEVEL_CHANGE`, `BED_MONITOR_ENABLED`, `BED_MONITOR_DISABLED`.
+
+4O 정리에서 LEGACY 전용 이벤트(자원 허가·대기, 교착, 복도 양보·뒤따르기 정지)는 없어졌다. 그 전 DB에 남은 기록은 기록 화면에 "관제 기록"으로 보인다.
 
 - 4O PLAN: `PLAN_UPDATE`는 다시 계획한 이유·시간·비용 (`reason_code`, `plan_ms`, `cost`, `method`, `fallback`, `plans`). `PLAN_WAIT`는 계획 순서 때문에 지점 앞에서 기다림 (`point`, `peer`). `PLAN_YIELD_MOVE`는 길을 비켜 주려고 다른 자리로 가는 MOVE와 그 도착 (`target`, `arrived`). 비켜 주는 자리 도착은 정류장 도착이 아니어서 확인 대기·정지 기록을 남기지 않는다.
 
@@ -460,22 +461,9 @@ PART 04의 ROS 패키지 이름은 `hospital_nav`, 소스 폴더는 `src/part4_a
 - 자원은 "복도", "{구역 이름} 출입"으로 쓴다. "통로"·"공용도로"는 쓰지 않는다.
 - 이 규칙은 `/ui/ack`의 `message`, 카드 제목·이유, `wait_reason`에도 똑같이 쓴다.
 
-통행 판단 이벤트(`RESOURCE_GRANT`, `RESOURCE_HOLD`, `CORRIDOR_YIELD_START`, `CORRIDOR_FOLLOW_STOP`)의 `detail`에는 판단 근거를 같이 넣는다:
-
-```json
-{"resources": ["CORRIDOR"], "reason": "복도 비어 있음 + Level 3 > Level 1 → 약품 운송 로봇 허가",
- "rule": "LEVEL", "state_before": "FREE",
- "contenders": [{"robot": "robot_b", "level": 3, "mission_id": "M-0006", "type": "MED_ROUND", "requested_at": 1794963590.0},
-                {"robot": "robot_a", "level": 1, "mission_id": "M-0005", "type": "PATIENT_TRANSPORT", "requested_at": 1794963588.2}]}
-```
-
-- `rule`: 순서를 정한 기준. `ONLY`(경쟁 없음), `LEVEL`, `REQUEST_TIME`, `SUBMIT_ORDER`, `ENTRY_ORDER`(복도 양보: 나중에 들어온 쪽), `ROBOT_ID`(마지막 동점 처리), `CAPACITY`(자리 없음), `DIRECTION`(복도 반대 방향 통행 중), `NO_PREEMPT`(이미 허가된 로봇 보호), `BLOCKED`, `UNKNOWN`, `CROSSROAD`(교차로에 다른 로봇, 5.3절 2c).
-- `FOLLOW`는 같은 방향 선행 로봇 정지다. `CORRIDOR_FOLLOW_STOP`과 `CORRIDOR_FOLLOW_CLEAR`의 `robot`은 뒤 로봇, `detail.front`는 앞 로봇이다. 해제 이벤트는 뒤 로봇의 별도 정지 해제를 뜻하지 않는다.
-- 같은 방향 간격 때문에 정지하면 `CORRIDOR_FOLLOW_STOP`의 `detail.rule`은 `GAP`, `gap_m`은 판단 당시 간격(m)이다. 정지 보고가 먼저면 `FOLLOW`다.
-- `ZONE_OCCUPIED_HOLD` / `ZONE_OCCUPIED_CLEAR`에는 기다린 로봇, `detail.peer`(점유·예약한 로봇), `detail.destination`을 남긴다. 구간 취소로 대기가 끝나도 CLEAR를 남긴다. 출입 대기는 `detail.zone`에 해당 구역, `rule`에 NEAR_START(가까운 주행 로봇), INBOUND(도착 먼저), OUTBOUND(출발 먼저)를 기록한다.
+- `ZONE_OCCUPIED_HOLD` / `ZONE_OCCUPIED_CLEAR`는 출발 전 0.9 m 확인이다: 기다린 로봇, `detail.peer`(가까이 움직이는 로봇), `detail.destination`, `detail.zone`, `rule: NEAR_START`. 구간 취소로 대기가 끝나도 CLEAR를 남긴다.
 - `PROXIMITY_STOP` / `PROXIMITY_CLEAR`는 로봇별로 기록한다. `detail.peer`는 상대 로봇, 정지 시 `distance_m`은 중심 간 거리다. 먼저 보내기로 해제한 경우에도 사유를 기록한다.
-- `state_before`: 판단 직전 그 자원의 상태.
-- 문장(`reason`)은 `resource_manager`가 만든다. 화면은 문장을 고치지 않는다.
+- 문장(`reason`)은 관제(PART 03)가 만든다. 화면은 문장을 고치지 않는다.
 
 ---
 
@@ -484,15 +472,13 @@ PART 04의 ROS 패키지 이름은 `hospital_nav`, 소스 폴더는 `src/part4_a
 ### 5.0 tick 순서 (10 Hz)
 
 1. 입력 큐 비우기: 화면 요청, 서비스 요청, 로봇 상태, bed_exit, 장애물 분류 결과를 반영한다
-2. 침상 이탈·침상 감시 끊김·수동 정지·범퍼를 먼저 반영하고, 위치와 STATE로 근접 정지를 판정한다.
+2. 침상 이탈·침상 감시 끊김·수동 정지·범퍼를 먼저 반영하고, 위치와 STATE로 근접 정지를 판정한다 (`clearance.py` 거리, 5.3절 7).
 3. `stall`: 진행 없음 시간 갱신 → (inspect 모드) 장애물 촬영 요청 → 잠깐 막힘 기록 / 오래 막힘이면 막힘 표시 + 카드. report 모드의 사진 판별은 4번의 로봇 보고 처리 직후에 한다 (5.5절)
-4. `mission`: 로봇별 상태머신 진행 (배정, 도착, 확인, 다음 구간, 복귀)
-5. `route_planner`: 다음 구간에 필요한 자원 계산
-6. 자원 진입·해제와 목적지 점유 확인 → 대기 요청 중 허가 → 같은 방향 간격·선행 정지 및 복도 양보 판정 (5.3절)
-7. `deadlock`: 대기 그래프에 순환이 있으면 비킬 로봇을 정함
-8. `decisions`: 카드 시간 초과 처리
-9. 각 로봇의 정지 사유를 합치고 미출발 구간의 목적지를 재확인한 뒤 `robot_link`로 한 가지 명령을 보낸다.
-10. `store`: 이벤트·지표 기록, `/fleet/state`는 5 Hz로 발행
+4. `mission`: 로봇별 상태머신 진행 (배정, 도착, 확인, 다음 구간, 복귀). 구간은 한 번에 하나씩 교통 판단에 요청한다.
+5. 교통 판단 (`traffic.Traffic` → `plan_traffic.PlanManager`, 5.3절): 로봇 상태 층이 STATE·위치를 정리하고, 칸 판이 진입·해제·점유 불명을 갱신한다. 다시 계획할 일이 있으면 계획 작업을 계획 스레드에 넘기고(결과는 다음 tick에 반영), 지금 계획의 순서(ADG)대로 정지선 대기·MOVE·RESUME을 정한다.
+6. `decisions`: 카드 시간 초과 처리, 근접 정지 카드
+7. 각 로봇의 정지 사유를 합치고, 실행기가 허가한 로봇에게만 MOVE·RESUME을, 누구에게나 PAUSE·CANCEL을 `robot_link`로 한 가지 보낸다. 첫 MOVE 직전에 출발 전 0.9 m 확인을 한다.
+8. `store`: 이벤트·지표 기록, `/fleet/state`는 5 Hz로 발행
 
 모든 모듈은 `now`를 인자로 받는다 (테스트에서 가짜 시계를 쓰기 위해서). 모듈 안에서 `time.time()`을 직접 부르지 않는다.
 
@@ -504,12 +490,10 @@ PART 04의 ROS 패키지 이름은 `hospital_nav`, 소스 폴더는 `src/part4_a
 |---|---|
 | `IDLE` | 임무 없음 |
 | `RETURNING` | 임무를 마치고 홈 구역으로 가는 중. 새 임무를 받을 수 있다 |
-| `HOLD` | 다음 구간 자원을 기다림 (`wait_reason` 표시) |
+| `HOLD` | 다음 구간을 계획 순서·출발 전 확인 때문에 기다림 (`wait_reason` 표시) |
 | `SENDING` | `MOVE`를 보냈고 `MISSION_ACCEPTED`를 기다림 |
 | `MOVING` | 주행 중 |
 | `WAIT_CONFIRM` | 정류장 도착, 화면 확인 대기 |
-| `YIELDING` | 교착 해소를 위해 비키는 중 |
-| `GIVE_WAY` | 복도에서 마주 오는 우선 로봇을 위해 잠깐 멈춤 (5.3절 11번) |
 | `SAFE_PAUSE` | 침상 이탈·침상 감시 끊김·수동 정지·범퍼로 멈춤 |
 | `FAULT` | 실패. 카드로 사람 판단 대기 |
 | `OFFLINE` | STATE가 `link_timeout_s` 넘게 안 옴 (MOVE·DOCK·RESUME 뒤 첫 STATE까지는 + `command_grace_s`) |
@@ -521,7 +505,7 @@ PART 04의 ROS 패키지 이름은 `hospital_nav`, 소스 폴더는 `src/part4_a
     - 고르는 순서: 배터리 많은 로봇 → 배터리를 모르는 로봇은 뒤로 → 같으면 첫 정류장에 가까운 로봇 → 그래도 같으면 `robots` 설정에서 앞선 로봇(기본 `robot_a`).
     - 배정 가능한 로봇이 없으면 대기열에 그대로 둔다 (`wait_reason`: "쉬는 로봇 없음").
   - `ROLE` (기본): 임무 종류로 로봇을 정한다 (`type_to_robot`). 그 로봇이 바쁘면 그 로봇 대기열에서 기다린다. 다른 로봇이 놀고 있어도 대신 가지 않는다.
-- **구간(leg)**: 지금 구역 → 다음 정류장. 구간마다 `route_planner`로 필요한 자원을 구하고, 자원이 필요 없으면 바로 `MOVE`, 필요하면 `HOLD`에서 요청 → 허가 → `MOVE`.
+- **구간(leg)**: 지금 구역 → 다음 정류장. 구간마다 교통 판단에 요청하고(`HOLD`), 계획이 출발을 허가하면 `MOVE` (5.3절).
 - **보내기**: `MOVE <구역> <level>` → `SENDING`. `accept_timeout_s`(3초) 안에 `MISSION_ACCEPTED`가 오면 `MOVING`. 안 오면 한 번 다시 보낸다. 그래도 안 오면 `MOVE_REJECTED` 이벤트 + `FAULT` + 카드.
   - 로봇 쪽 상태가 `PAUSED`면 먼저 `CANCEL`을 보내고 `CANCELED`를 확인한 뒤 `MOVE`를 보낸다.
 - **도착**: `ARRIVED` 이벤트(목적지 일치) → `WAIT_CONFIRM`. 화면이 `CONFIRM_STEP OK`를 보내면 다음 구간. 마지막이면 `MISSION_DONE` → 복귀.
@@ -547,22 +531,17 @@ PART 04의 ROS 패키지 이름은 `hospital_nav`, 소스 폴더는 `src/part4_a
   - 예외: `FAULT`인 로봇은 취소를 허용하고 잠금은 유지한다. 사람이 로봇을 꺼내 위치가 복도 밖으로 나가면 일반 해제 규칙으로 풀린다.
   - 취소된 임무의 로봇은 홈으로 복귀한다.
 
-### 5.2 맵·구역·자원 (`route_planner`)
+### 5.2 맵·구역·칸
 
-구역 표시는 응급실(A), 102호 병실(B), 수술실(C), 간호 스테이션(D), 101호 병실(E), 조제실(F)로 한다. 2번 자리는 “수술실(C) 2번 자리”, 문 자원은 “102호 병실(B) 출입”으로 쓴다. 명령·DB의 구역 코드는 A~F다.
+구역 표시는 응급실(A), 102호 병실(B), 수술실(C), 간호 스테이션(D), 101호 병실(E), 조제실(F)로 한다. 2번 자리는 “수술실(C) 2번 자리”, 문 칸은 “102호 병실(B) 문”으로 쓴다. 명령·DB의 구역 코드는 A~F다.
 
 `main_map/main_maps.pgm` 분석 결과다.
 
 - 맵이 map 좌표축에 대해 약 4°(화면용 자동 보정값 4.1°) 기울어 있다. 영역 판정은 축 정렬 사각형이 아니라 **기울어진 다각형**(점-다각형 포함)으로 한다. 다각형 판정과 여유 거리(`clear_margin_m`)는 shapely로 한다 (`Polygon.contains`, `buffer`).
-- 영역 사이 연결(TOP·BOTTOM·ROOM_B·ROOM_E가 CORRIDOR로 이어짐)은 networkx 그래프로 두고, 구간에 필요한 자원은 그래프 경로로 구한다. 아래 표는 그 결과를 확인하는 테스트 기준이다.
 - 위쪽 홀(A·D)과 아래쪽 홀(C·F)은 각각 칸막이 없는 한 공간이다.
-- B·E 방은 복도 옆 문으로만 드나드는 막다른 방이다. 같은 홀 안 이동(A↔D, C↔F) 말고는 전부 복도를 지난다.
-- 복도 폭은 벽에서 벽까지 약 0.9 m다. TurtleBot4(지름 약 0.34 m) 두 대가 마주 보고 비켜 갈 틈은 거의 없다. 11/18 실제 시험에서 복도 안에 멈춘 로봇 옆을 다른 로봇이 20초 동안 비집고 지나가며 밀었다 (`DECISIONS.md` D-22).
-- 그래서 복도 기본 모드는 **방향별 공유**다 (`corridor.mode: DIRECTIONAL`). 같은 방향으로 가는 로봇은 함께 들어가고, 반대 방향 로봇은 복도 밖(홀이나 지금 있는 방 안)에서 기다린다 (5.3절 2a). 마주칠 일 자체를 만들지 않는다.
-- 다른 모드는 설정으로 남긴다: `SHARED_YIELD`(두 대 같이 들어가고, 마주 오면 낮은 쪽이 그 자리에 멈춤. 5.3절 11번), `EXCLUSIVE`(한 대씩).
-- B·E 문이 복도 한가운데에 있어서 모든 복도 이동이 가운데를 지난다. 복도는 둘로 쪼개지 않고 자원 하나(`CORRIDOR`)로 둔다.
-- 자원마다 동시에 쓸 수 있는 대수(`capacity`)가 있다. `CORRIDOR`는 `DIRECTIONAL`·`SHARED_YIELD`면 2, `EXCLUSIVE`면 1이다 (`DIRECTIONAL`은 같은 방향일 때만 2). `ROOM_B`·`ROOM_E`는 항상 1이다.
-- 4J부터 `ROOM_B`·`ROOM_E`는 **방 점유가 아니라 문 통과**다 (`corridor.room_mode: DOOR`, D-30). 방 안에는 자리 2개에 두 대가 있을 수 있고, 문과 교차로만 한 번에 한 대가 지난다 (5.3절 2c). 4I 방식(방 하나에 한 대, 서 있는 로봇이 방을 쥠)은 `room_mode: ROOM`으로 남긴다.
+- B·E 방은 복도 옆 문으로만 드나드는 막다른 방이다. 같은 홀 안 이동(A↔D, C↔F) 말고는 전부 복도를 지난다. 방 안에는 자리 2개에 두 대가 있을 수 있고, 문과 교차로는 한 번에 한 대만 지난다(D-30).
+- 복도 폭은 벽에서 벽까지 약 0.9 m다. TurtleBot4(지름 약 0.34 m) 두 대가 마주 보고 비켜 갈 틈은 거의 없다. 11/18 실제 시험에서 복도 안에 멈춘 로봇 옆을 다른 로봇이 20초 동안 비집고 지나가며 밀었다 (`DECISIONS.md` D-22). 그래서 복도는 방향이 있는 칸(`one_way`)이고, 마주칠 일 자체를 계획에서 만들지 않는다 (5.3절).
+- 칸 지도(`traffic.segments`·`traffic.links`, `segments.py`)가 영역을 칸으로 나눈다: 위·아래 홀과 B·E 방 안(`shared`), 복도 위쪽·아래쪽(`one_way`), 교차로·B·E 문·자리 12개(`single`). 4O 정리 전의 자원 `CORRIDOR`·`ROOM_B`·`ROOM_E`(LEGACY `route_planner`·`resource_manager`)는 없어졌고, `/fleet/state`의 같은 이름은 그 안 칸의 요약이다.
 
 영역 판정 (복도 다각형 네 변을 연장한 직선으로 나눈다):
 
@@ -585,118 +564,54 @@ PART 04의 ROS 패키지 이름은 `hospital_nav`, 소스 폴더는 `src/part4_a
 - 교차로 `corridor.crossroad` = (-1.500, -2.180) (PART 04 `CROSSROAD`). 교차로 사용 범위는 중심에서 `corridor.crossroad_clear_m`(0.6 m)이다. B·E 문 중심은 교차로에서 0.43~0.47 m라 이 범위 안에 있다.
 - 화면 평면도는 1번 자리를 점으로, 2번 자리를 작은 점으로 그린다.
 
-**자원 3개**: `CORRIDOR`, `ROOM_B`, `ROOM_E` (홀 TOP·BOTTOM은 여러 대가 있어도 되므로 자원이 아니다)
+### 5.3 교통 판단 — 두 로봇 함께 계획하기 (4O, D-43~)
 
-구간에 필요한 자원 = 출발 영역과 도착 영역 사이에 지나는 것 전부:
+두 로봇의 경로와 순서를 함께 계획하고, 달리는 동안 그 순서를 지킨다. 4O 정리(D-62)부터 이것이 유일한 교통 판단이다. 그 전의 허가 비교·선점·복도 방향·양보·뒤따르기 정지·목적지·출구 대기(LEGACY, `traffic.mode`)는 태그 `4o-dual-mode`(b98f6ca)에 남아 있다. main은 아직 LEGACY이고, `feat/part3-segments`를 합치면 main도 PLAN 하나가 된다.
 
-| 출발 → 도착 | 필요한 자원 |
+코드 (`core/`):
+
+| 파일 | 역할 |
 |---|---|
-| 같은 홀 안 (A↔D, C↔F) | 없음 |
-| TOP ↔ BOTTOM | `CORRIDOR` |
-| 홀 ↔ B방 | `CORRIDOR`, `ROOM_B` |
-| 홀 ↔ E방 | `CORRIDOR`, `ROOM_E` |
-| B방 ↔ E방 | `CORRIDOR`, `ROOM_B`, `ROOM_E` |
-
-- 출발 영역은 지금 위치로 판정한다. 로봇이 `CORRIDOR` 안에서 새 구간을 시작하면(예: 재시도) 이미 쥔 `CORRIDOR`를 그대로 쓴다.
-
-### 5.3 `resource_manager` — 예약과 허가
-
-자원마다 쥔 로봇 목록(`holders`, 최대 `capacity`대)과 로봇별 상태(`GRANTED` 허가만 받음 / `OCCUPIED` 들어감)를 둔다. 자원 상태 표시는 쥔 로봇이 없으면 `FREE`, 하나라도 들어가 있으면 `OCCUPIED`, 허가만 있으면 `GRANTED`, 점유 불명이면 `UNKNOWN`이다. 별도 플래그 `blocked`(5.5절).
-
-1. **요청**: `HOLD`에 들어갈 때 필요한 자원 집합으로 요청한다.
-2. **한꺼번에 허가 (all-or-nothing)**: 필요한 자원이 **전부** 자리가 남아 있을 때만(쥔 로봇 수 < `capacity`) 전부 허가한다. 일부만 주지 않는다. 대기 중에는 아무것도 쥐지 않으므로 복도를 사이에 둔 교착이 생기지 않는다.
-   - 단, 로봇이 **지금 서 있는 방**(`ROOM_B`·`ROOM_E`)은 몸이 거기 있으니 계속 쥐고 있다. 이것 때문에 교착이 생길 수 있다 (5.4절).
-2a. **복도 방향 (`DIRECTIONAL` 모드)**
-   - 구간의 복도 방향: 목적지 영역이 TOP이면 `UP`, BOTTOM이면 `DOWN`. B·E 방이 목적지면 출발 위치에서 그 방 문(`mouths`) 쪽이다 (복도 중심선 TOP 입구 → BOTTOM 입구에 투영해서 정한다. 11번 "마주 옴 판정"과 같은 계산). B방↔E방 가로지르기처럼 방향을 정할 수 없는 구간은 `ANY`다.
-   - `CORRIDOR` 허가 조건: 지금 복도를 쥔 로봇(허가 또는 점유)이 없거나, 쥔 로봇이 모두 같은 방향이고 자리가 남아 있을 때. `ANY` 구간은 혼자일 때만 허가한다.
-   - 반대 방향이면 `HOLD`. 사유는 "약품 운송 로봇 복도 반대 방향 통행 중 → 침상형 이송 로봇 복도 밖 대기", `rule: DIRECTION`. 방 안에 있던 로봇은 방을 쥔 채 방 안에서 기다린다 (방이 대피 공간이 된다).
-   - 순서(3번), 선점 금지(4번), 한꺼번에 허가(2번)는 그대로다. 막 들어간 같은 방향 로봇을 뒤따라 들어가는 것은 허가한다.
-   - 같은 방향으로 허가된 두 대는 복도 축의 진행 방향 위치로 앞뒤를 정한다. 앞 로봇의 안전·운영자 정지, 막힘(`stall.window_s` 동안 진전 없음), 장애 또는 연결 끊김 때 뒤 로봇도 멈춘다. 허가만 받은 뒤 로봇의 첫 MOVE도 보류한다. 선행 로봇의 복도 이탈 또는 진행 재확인(복도 축으로 `stall.move_m` 이상 전진) 뒤, 별도 정지 사유가 없는 뒤 로봇만 재개한다.
-   - 두 대가 같은 방향으로 복도를 쓰면 매 tick 복도 축에 투영한 간격을 잰다. `follow_gap_m`(1.0 m) 이하면 앞 로봇의 STATE가 MOVING이어도 뒤 로봇을 즉시 세운다. 뒤 로봇이 복도 밖이면 그쪽 입구에서 앞 로봇까지 재고 첫 MOVE를 보류한다. `follow_resume_m`(1.4 m) 이상 벌어지거나 앞 로봇이 복도를 비워야 해제한다. 중간 거리에서는 이전 판정을 유지한다. 두 정지 조건이 겹치면 모두 풀려야 재개한다.
-   - 그래도 반대 방향 두 대가 복도 안에 함께 있게 되면 (시작할 때 이미 안에 있음, 점유 불명을 사람이 푼 뒤 등) 11번 복도 양보 규칙을 그대로 쓴다.
-2b. **목적지 점유**. 모든 모드와 A~F 전체 구역에 적용한다. 구간 허가 전과 미출발 MOVE 직전에 목적지 중심 `resources.zone_occupied_m`(0.6 m) 안에 다른 로봇이 있거나 이미 그곳을 향하는 구간이 있는지 확인한다. 대기 구간은 새 자원을 선점하지 않는다. 출발 보류 중에도 앞서 받은 허가와 현재 위치 점유는 유지한다. 목적지가 비면 자동으로 출발한다. 홈 복귀·직접 이동·대피에도 같은 규칙을 적용한다.
-   - 대기 30초에 `BLOCKED` 카드가 열린다. [다시 확인]은 조건을 다시 확인하고, [되돌아가기]는 이전 구역에 대해 출발 조건을 다시 검사한다. [보류]는 운영자가 재시도할 때까지 임무를 멈춘다.
-   - **자리 고르기 (4J, D-30)**. 여섯 구역 모두 같다.
-     - 1번 자리에 다른 로봇이 없고(그 로봇에게 가장 가까운 자리가 1번이고 중심 `zone_occupied_m` 안), 다른 로봇의 진행 구간이 그 1번 자리를 향하지 않으면 → 1번 자리 (`MOVE F 3`).
-     - 아니면 2번 자리가 같은 조건으로 비어 있으면 → `MOVE F2 3`. 앞 로봇이 쉬는 중이든 정류장 확인 대기 중이든 기다리지 않는다.
-     - 둘 다 차 있으면 지금처럼 대기하고 30초에 카드.
-     - 자리는 출발 직전까지 다시 고른다. 로봇에게 보낸 뒤에는 바꾸지 않는다. 도크 복귀 구간은 4I처럼 그 구역 전체를 본다.
-     - 2번 자리 도착도 그 구역 도착이다. 정류장 확인, 운영 기록, 화면 문구는 "조제실(F) 2번 자리"로 쓴다.
-     - STATE에 `slot` 키가 한 번도 안 온 로봇에는 자리 번호를 붙이지 않는다. 그 로봇은 1번 자리가 차면 지금처럼 대기한다.
-   - **출구 막힘 (4L, D-37)**. `zones.<구역>.slot2_blocks_exit`가 참이면 1번 자리에 있는 로봇은 2번 자리가 빌 때까지 MOVE를 보류한다. F·A·C에 적용하며 좌표가 바뀌면 담당자가 표시를 조정한다. 2번 자리 로봇이 이동을 수락해도 실제 위치가 비어야 1번이 출발한다. 2번의 출발에는 이 조건을 적용하지 않는다. 대기 30초에, Level 3은 즉시, [다시 확인] [그대로 출발(근접 규칙 유지)] [보류]를 표시한다. 그대로 출발은 해당 구간의 해당 상대에 대한 출구 대기만 해제한다.
-   - **4N 출발과 도착 순서 (D-41)**. 출발 직전 상대가 재개 거리(0.9 m) 안에서 움직이면 “가까이 움직이는 로봇 대기”로 MOVE를 보류한다. 해당 구역으로 이동 중인 로봇이 어느 자리에서든 2.0 m 이내에 먼저 들어오면 출발 로봇은 그 도착을 기다린 뒤 출구와 간격을 다시 확인한다. 반대로 출발 로봇이 먼저 출구를 사용 중이면 도착 로봇은 반경 밖에서 일시정지하고 출구가 비면 재개한다.
-   - 1번 자리에서 가장 가까운 복도 입구까지의 선분과 2번 자리의 거리를 계산한다. 거리가 `slot_stop_m + 0.10` 미만인데 출구 막힘 표시가 꺼져 있으면 시작 로그와 preflight에 경고한다.
-   - **4N 근접 정지 (D-42)**. 최근 0.5초 위치에서 두 로봇이 계속 멀어지는 동안에는 새 근접 정지를 걸지 않는다. 접근으로 바뀌면 즉시 검사한다. 이미 걸린 정지는 0.9 m 확보나 운영자 선택으로만 해제한다. 먼저 보내기를 골랐는데 거리가 줄어 다시 정지하면 한 쌍에 마주 봄 카드 한 장을 연다. 나중에 출발한 로봇의 [되돌아가기]를 추천하며 [보류]도 선택할 수 있다. 자동 선택은 없다.
-
-2c. **문과 교차로 (DOOR 모드, 4J, D-30)**
-   - B·E 방은 자리 고르기(2b)로 두 대까지 들어간다. 문과 교차로는 한 번에 한 대만 지난다.
-   - `ROOM_B`·`ROOM_E`는 문 통과 허가다. 들어가는 구간(`IN`)은 교차로를 향해 출발할 때(허가 때) 잡고 자리 도착(`ARRIVED`)에서 놓는다. 나오는 구간(`OUT`)은 출발할 때 잡고, `VIA_PASSED` 뒤 로봇이 교차로 중심에서 0.6 m 벗어나면 놓는다. `VIA_PASSED`를 보내지 않는 예전 PART 04는 교차로 범위에 들어왔다가 벗어나면 놓는다. 구간이 중간에 끝나면 로봇이 교차로 범위를 벗어날 때 놓는다.
-   - 방 안에 서 있는 로봇은 문을 쥐지 않는다. 그래서 4I의 B방↔E방 맞바꾸기 교착이 생기지 않는다 (5.4절).
-   - 교차로는 B·E 공용이다. 다른 로봇이 교차로 중심 0.6 m 안에 있거나, B·E 구간을 허가받고 아직 교차로에 닿지 않았으면(교차로를 향하는 중) 다음 B·E 구간은 허가하지 않는다. 기다리는 로봇은 지금 있는 곳(교차로 밖)에 선다. 사유는 "교차로에 약품 운송 로봇 있음 → 침상형 이송 로봇 대기", `rule: CROSSROAD`.
-   - 복도(`CORRIDOR`) 규칙은 그대로 함께 적용한다. 화면 경로선은 교차로를 거쳐 그리고, 로봇 카드에 "교차로 경유"를 보인다.
-3. **순서**: 대기 요청 중 level이 높은 로봇이 먼저, 같으면 먼저 요청한 로봇이 먼저, 요청 시각까지 같으면 접수한 순서. `aging_s`(기본 0 = 끔)를 켜면 그 시간마다 대기 로봇의 실효 level을 1씩 올린다.
-   - 복도가 빈 직후나 첫 요청 뒤에는 `decision_window_s`(1초) 동안 경쟁 요청을 모은 뒤 정한다.
-4. **선점 금지**: 이미 준 허가는 level이 더 높은 요청이 와도 회수하지 않는다.
-5. **진입**: 허가받은 로봇 위치가 자원 다각형 안에 들어오면 `OCCUPIED`.
-6. **해제**: 아래 둘 다 맞으면 `FREE`로 바꾸고 대기 요청을 다시 평가한다.
-   - 점유 로봇이 자원 다각형을 `clear_margin_m`(0.20 m)만큼 넓힌 범위 밖에 `clear_hold_s`(1초) 동안 연속으로 있다
-   - 그 로봇의 연결이 살아 있다 (`link_ok`)
-   - 허가만 받고 들어가지 않은 채 구간이 끝나거나 취소되면 바로 반납한다.
-7. **점유 불명**: 점유·허가 로봇이 `OFFLINE`이 되면 `UNKNOWN`. 자원 안에 있는 로봇 수가 `capacity`를 넘거나, 자리가 다 찬 자원에 허가 없는 로봇이 들어와 있어도 `UNKNOWN`이다 (`SHARED_YIELD`에서 복도 안 두 대는 정상). 새 허가를 내지 않고 경고(`E-423`)를 띄운다. 운영자의 `RESOURCE_CLEAR_CONFIRM`으로만 `FREE`가 된다. 누가 눌렀는지 기록한다. 화면은 점유 불명 자원마다 버튼을 두고 그 자원 이름(`CORRIDOR`·`ROOM_B`·`ROOM_E`)을 그대로 보낸다 (4K, D-33).
-   - 공유 자원의 `UNKNOWN`을 운영자가 풀 때 다른 로봇의 확인된 허가·점유는 그대로 둔다. 지금 보고가 여전히 `capacity`를 넘으면 `E-423`을 유지한다.
-8. **시작 시**: 이미 자원 안에 있는 로봇은 그 자원의 점유자로 본다.
-9. **멈춘 로봇**: `SAFE_PAUSE` 로봇은 허가 후보에서 뺀다 (요청은 대기열에 남긴다). 이미 쥔 자원은 그대로 유지한다.
-10. **기록**: 모든 결정에 사유 문장과 후보 목록을 붙여 이벤트로 남긴다 (4.8절).
-    - 예: "복도 비어 있음 + Level 3 > Level 1 → 약품 운송 로봇 허가"
-    - 예: "침상형 이송 로봇 복도 점유 중 → 약품 운송 로봇 대기 (선점 금지)"
-11. **복도 양보 (`SHARED_YIELD` 모드, `DIRECTIONAL`에서는 반대 방향 두 대가 이미 안에 있을 때만)**: 복도에서 두 로봇이 마주 오면 우선순위가 낮은 쪽을 잠깐 세운다. 0.9 m 복도에서는 서 있는 로봇 옆을 지나가기 어렵다 (5.2절). 그래서 기본 모드에서는 이 상황 자체를 2a로 막는다.
-    - **마주 옴 판정**: 아래가 모두 맞을 때
-      - 두 로봇 모두 `CORRIDOR`를 쥐고 있다 (허가 또는 점유)
-      - 이번 구간의 복도 방향이 서로 반대다. 목적지 영역이 TOP이면 위쪽, BOTTOM이면 아래쪽, B·E 방이면 지금 위치에서 그 방 문(`mouths`) 쪽이다. B방↔E방 가로지르기는 방향이 없으므로 판정에서 뺀다
-      - 서로를 향해 오고 있다. 로봇 위치를 복도 중심선(TOP 입구 → BOTTOM 입구)에 투영했을 때 위로 가는 로봇이 아래로 가는 로봇보다 아래에 있다
-      - 두 로봇 거리가 `yield_trigger_m`(1.2 m) 이하다
-    - **설 로봇**: level 낮은 쪽 → 같으면 복도에 나중에 들어온 쪽 → 같으면 `robots` 설정에서 뒤의 로봇(기본 `robot_b`)
-      - "나중에 들어온 쪽"의 진입 시각은 위치가 처음 `OCCUPIED`로 관측된 tick이다. 같은 level에서 한 대만 들어와 있으면 아직 안 들어온 로봇이 선다.
-    - **동작**: 설 로봇에 `PAUSE`를 보내고 관제 상태를 `GIVE_WAY`로 바꾼다. 사유는 "약품 운송 로봇 복도 양보 중 (침상형 이송 로봇 Level 3)" 형식이다. 이벤트 `CORRIDOR_YIELD_START`.
-    - **해제**: 우선 로봇이 지나갔으면(중심선 위 순서가 바뀌고 거리가 `yield_release_m` 0.5 m 이상) 또는 복도를 나갔으면 `RESUME`을 보내고 원래 상태로 돌아간다. 이벤트 `CORRIDOR_YIELD_END`.
-    - **안전장치**: 양보를 시작한 뒤 `yield_timeout_s`(10초) 동안 우선 로봇이 진행하지 못하면 양보를 풀고(`RESUME`) 둘 다 Nav2에 맡긴다. 이벤트 `CORRIDOR_YIELD_TIMEOUT`. 그 뒤로는 5.5절 멈춤 규칙을 적용한다.
-      - 우선 로봇이 중심선 위에서 이전 최장 위치를 넘어 나아가면 10초 타이머를 다시 센다. 시간 초과 뒤에는 같은 두 구간 사이에서 `PAUSE`를 다시 내지 않는다.
-    - 같은 방향으로 가는 두 로봇은 건드리지 않는다 (뒤따라가기).
-    - `SAFE_PAUSE`가 양보보다 우선이다. 안전 정지 중에는 양보 쪽에서 `RESUME`을 내지 않는다. 재개하면 양보가 필요한지 다시 판단한다.
-    - PART 04가 나중에 로봇 쪽에서 우선순위 양보를 직접 하게 되면 `corridor.yield_enabled: false`로 끈다.
-    - 거리값은 시험 영상을 보고 정한 시작값이다. 리허설에서 조정한다.
-
-### 5.3a PLAN 모드 — 두 로봇 함께 계획하기 (4O, D-43~D-47)
-
-`traffic.mode: PLAN`(실행 인자 `traffic_mode:=PLAN`)이면 5.3절의 허가 비교와 선점 대신 두 로봇의 경로와 순서를 함께 계획한다. 기본값은 `LEGACY`이고 LEGACY 동작은 바뀌지 않는다.
+| `robot_state.py` | 로봇 상태 층: PART 04·연결 상태를 연결됨·주행 중·멈춤·취소 중·끊긴 채 주행 같은 정리된 상태(`RobotView`)로, 끊김·복구 시각과 선 자리를 기억 |
+| `plan_traffic.py` | `PlanManager`: 구간 요청·종료, tick(관찰 → 계획 → 실행)을 묶음 |
+| `plan_replan.py` | 다시 계획할 때 판단, 계획기 입력(에이전트), 계획 탐색, 결과를 로봇 계획과 ADG 의존으로 |
+| `plan_exec.py` | ADG 실행: 충돌 종류와 "순서를 지켰다" 표(`ORDER_KEPT`), 정지선, MOVE·RESUME 허가 |
+| `plan_board.py` | 칸 판 사용: 쥔 칸·쓸 수 있는 칸, `UNKNOWN` 울타리, 연결 복구 정리 |
+| `plan_view.py` | 화면 문장과 `/fleet/state`의 `resources`·`traffic` |
+| `plan_runner.py` | 계획 탐색을 tick 밖(계획 스레드)에서 돌리고 결과를 다음 tick에 반영 |
+| `clearance.py` | 근접 정지 거리 하나: 계획의 충돌 거리와 근접 정지·재개 거리 |
+| `plan_graph.py`, `planner.py`, `segments.py` | 지점 그래프·경로, 시공간 A*, 칸 판 |
 
 1. **칸 연결** (`traffic.links`, 4O 후속 5, D-60): 구역 자리 연결은 적지 않고 `zones.<구역>.slot2_blocks_exit`에서 만든다. true면 홀 → 2번 → 1번, false면 홀 → 1번, 홀 → 2번이다(홀 = 그 구역 영역의 shared 칸, 자리가 하나면 홀 → 1번). `traffic.links`에는 나머지 연결만 적는다. 자리 연결을 적으면 만든 것과 같아야 하고, 다르면 설정 오류다.
 1. **지점 그래프** (`traffic.graph`): 자리 12개, 약품 운송 로봇 도크, 교차로, B·E 문, B·E 방 안, 위·아래 홀 입구, 그리고 복도 칸(`cell_m` 0.5 m로 자동 분할)이다. 지점 사이 경로는 `plan_graph.door_route` 선(`route_planner` 경로에 B·E 방을 드나들 때 교차로 → 문 가운데 → 방 안 지점 → 자리를 넣은 선)을 지점 영역으로 자른 실제 선이다. 걸리는 시간은 거리 ÷ `plan_speed_mps`(기본 mock 속도)다.
-2. **충돌 쌍**: 두 위치의 선 사이 거리가 근접 정지 거리보다 짧으면 동시에 쓸 수 없다. 둘 다 움직이면 `proximity_stop_m`, 한쪽이 자리에 서 있으면 `slot_stop_m`, 둘 다 서 있으면 충돌이 아니다. 복도·교차로·문은 대수 제한(single, 복도는 방향별 one_way)도 같이 본다.
+2. **충돌 쌍**: 두 위치의 선 사이 거리가 근접 정지 거리(`clearance.stop_distance`, 7번)보다 짧으면 동시에 쓸 수 없다. 둘 다 서 있으면 충돌이 아니다. 복도·교차로·문은 대수 제한(single, 복도는 방향별 one_way)도 같이 본다.
 3. **계획**: 상태는 (A 위치, B 위치, 시간), 한 단계 `plan_step_s`(0.5초)다. 행동은 다음 지점으로 가기, 기다리기, 서 있을 때 다른 자리로 가는 새 MOVE다. 충돌 쌍과 자리 맞바꾸기는 허용하지 않는다. 비용은 Σ `level_weights[Level]` × 도착 시각이고, 임무 없는 로봇은 지금 자리를 목표로 `idle_weight`를 쓴다. 목표 자리는 1번과 2번 모두 후보이고 같으면 1번이다. 정지선(`stop_margin_m`) 안의 지점은 이미 정해진 것으로 두고, 지나온 지점으로 되돌리지 않는다. 멈춘(`PAUSED`) 로봇은 선 자리에서 기다릴 수 있다(경로를 0.05 m 앞에서 자름, D-58). 시간 한도(`plan_limit_ms`)를 넘거나 세 대 이상이면 Level 순서로 한 대씩 계획하고 `PLAN_UPDATE`에 적는다.
-4. **실행 (ADG)**: 계획의 순서를 충돌 쌍마다 "앞 로봇이 지점을 `clear_margin_m`만큼 지나 `clear_hold_s` 동안 벗어남"으로 바꿔 지킨다. 다음 지점이 아직 막혀 있으면 정지선에서 `PAUSE`, 풀리면 `RESUME`. PART 04에는 MOVE·PAUSE·RESUME·CANCEL만 보낸다. 다른 자리로 가는 MOVE는 "길 비켜 주는 중"이고, 그 MOVE의 `LEG_START`는 가는 자리(`target`·`target_slot`, `aside: true`)와 구간 목적지(`destination`)를 함께 적는다.
-   - **뒤따르기** (4O 후속 5, D-59): 충돌 쌍이 같은 길을 같은 방향으로 지나는 경우(뒤 로봇의 앞으로 지날 지점에 앞 로봇의 지금 지점과 다음 지점이 같은 순서로 있음)는, 앞 로봇이 그 지점까지 가서 계속 달리는 중(STATE `MOVING`, 보낸 PAUSE 없음, 계획 대기·안전 정지 아님)이고 두 로봇 간격이 `corridor.follow_gap_m`(1.0 m) 이상이면 순서를 지킨 것으로 본다. 이미 그 앞 로봇을 기다리는 중이면 `follow_resume_m`(1.4 m)부터다. 그 지점에서 기다리는 로봇은 앞 로봇이 자기 길의 한 대 칸 안에 있는 동안에는 풀지 않는다. 간격은 이 판정과 근접 정지가 지킨다. 앞 로봇이 멈추면 뒤 로봇은 정지선에서 멈춘다. 교차로·문처럼 한 대만 쓰는 칸은 지금처럼 앞 로봇이 반납한 뒤에 들어간다. 엇갈림·마주침은 위 규칙 그대로다.
+4. **실행 (ADG)**: 충돌 쌍마다 계획에서 뒤에 지나는 로봇의 그 위치는 앞 로봇의 위치에 의존한다. 의존에는 충돌 종류가 붙고, "순서를 지켰다"는 조건은 종류마다 아래 표 하나로만 정한다(`plan_exec.ORDER_KEPT`, D-64). 정지선 안의 다음 위치 가운데 순서가 지켜지지 않은 것이 있으면 정지선에서 `PAUSE`, 풀리면 `RESUME`.
+
+   | 종류 | 두 길 | 뒤 로봇이 달리는 중 | 그 위치에서 기다리는 중 | 앞 위치에서 기다리는 중 |
+   |---|---|---|---|---|
+   | 엇갈림 (`cross`) | 서로 지나거나 근접 거리 안으로 스침 | 지나감 | 지나감 | 지나감 |
+   | 마주침 (`meet`) | 같은 길, 반대 방향 | 지나감 | 지나감 | 지나감 |
+   | 뒤따르기 (`follow`, D-59) | 같은 길, 같은 방향, 뒤 로봇이 뒤 | 지나감, 또는 앞 로봇 계속 주행 + 간격 ≥ `follow_gap_m` | 지나감, 또는 앞 로봇 계속 주행 + 앞 로봇이 내 길의 한 대 칸 안에 없음 + 간격 ≥ `follow_resume_m` | 지나감, 또는 앞 로봇 계속 주행 + 간격 ≥ `follow_resume_m` |
+
+   - 모든 칸에 공통: 앞 로봇이 두 위치가 함께 쓰는 대수 칸을 아직 쥐고 있으면 지켜지지 않았다.
+   - "지나감": 앞 로봇이 그 위치를 `clear_margin_m`만큼 벗어나 `clear_hold_s` 동안 유지. "계속 주행": 연결됨, STATE `MOVING`, 보낸 PAUSE 없음, 계획 대기·안전 정지·멈춤·취소 아님, 첫 MOVE로 그 위치까지 감. PART 04에는 MOVE·PAUSE·RESUME·CANCEL만 보낸다. 다른 자리로 가는 MOVE는 "길 비켜 주는 중"이고, 그 MOVE의 `LEG_START`는 가는 자리(`target`·`target_slot`, `aside: true`)와 구간 목적지(`destination`)를 함께 적는다.
+   - 뒤따르기에서 간격은 이 판정과 근접 정지가 지킨다. 앞 로봇이 멈추면 뒤 로봇은 정지선에서 멈춘다. 교차로·문처럼 한 대만 쓰는 칸은 앞 로봇이 반납한 뒤에 들어간다(칸 판).
+   - 지금 달리는 위치에서는 아직 지나갈 칸만 쥔다. 그 위치 안에서 이미 지나 칸 판이 놓은 칸은 다시 주지 않는다(D-66).
    - **출발 허가** (4O 후속 3, D-55): PART 04로 가는 MOVE(첫 전송·재전송)·DOCK·RESUME은 그 tick에 실행기가 허가한 로봇(`PlanManager.go`: 정지선 판단을 지난 로봇)에게만 나간다. 운영자 재개, 카드 선택, 재시도는 자기 정지만 풀고, 계획이 기다리라고 하면 로봇은 멈춘 채로 있다. PAUSE·CANCEL은 언제나 나간다. 한 로봇에는 tick마다 명령이 하나뿐이라 비켜서기 MOVE와 구간 MOVE가 같이 나가지 않는다.
    - **B·E 방 안 이동**: PART 04는 목적지가 B·E인 MOVE를 그 방 안에서 받아도 교차로를 먼저 거친다(`dest in VIA_ROOMS`). 계획 그래프와 두 mock도 그렇게 걷는다: 방 안에서 같은 방 자리로 가는 MOVE는 방 안 지점 → 문 → 교차로 → 문 → 방 안 지점 → 자리다. 교차로를 지난 뒤(`VIA_PASSED`)에만 방 안에서 바로 간다.
-5. **다시 계획**: 새 구간 요청, 취소, Level 상향 재접수, 응급도 변경(`SET_LEVEL`), 구간 도착, 계획보다 `replan_delay_s` 넘게 늦음, 안전 정지 해제, 연결 끊김·복구 때. 들어간 지점은 바꾸지 않는다. 취소는 새 목표다(복귀, `return_after_cancel` 기본 true). 연결이 끊긴 로봇은 지금 지점과 남은 MOVE 경로를 막은 것으로 두고 칸은 `UNKNOWN`이 된다. 주행 중 끊기면 남은 MOVE 경로의 빈 칸도 그 로봇 몫(`UNKNOWN`)이다. 이것은 끊겨 있는 동안만이다. 응급도 변경은 그 구간의 Level 가중치만 바꾼다(D-48·D-49).
+5. **다시 계획**: 새 구간 요청, 취소, Level 상향 재접수, 응급도 변경(`SET_LEVEL`), 구간 도착, 계획보다 `replan_delay_s` 넘게 늦음, 안전 정지 해제, 연결 끊김·복구, 현장 확인 때. 들어간 지점은 바꾸지 않는다. 취소는 새 목표다(언제나 홈 복귀, D-46).
+   - **계획 스레드** (D-65, `plan_runner.py`): 그 tick은 로봇 상태로 계획 작업만 만들고, 탐색(`plan_limit_ms` 200 ms까지)은 계획 스레드가 한다. 결과는 다음 tick에 반영한다. 그사이 로봇은 가진 계획의 순서를 그대로 지키되(정지선·PAUSE), 새로 출발·방향 바꾸기·재개(MOVE·RESUME)는 하지 않는다. 작업을 만든 뒤 계획을 다시 세울 일이 또 생기면 그 결과는 버리고 그때 상태로 다시 계획한다. 그래서 근접 정지 같은 안전 판단은 계획 시간에 막히지 않는다. 시험과 kinematic mock은 탐색을 tick 안에서 돌리되 결과는 똑같이 다음 tick에 쓴다. 연결이 끊긴 로봇은 지금 지점과 남은 MOVE 경로를 막은 것으로 두고 칸은 `UNKNOWN`이 된다. 주행 중 끊기면 남은 MOVE 경로의 빈 칸도 그 로봇 몫(`UNKNOWN`)이다. 이것은 끊겨 있는 동안만이다. 응급도 변경은 그 구간의 Level 가중치만 바꾼다(D-48·D-49).
    - **다시 연결되면** (D-52, D-57): `LINK_BACK`의 새 위치로 그 로봇의 `UNKNOWN` 칸을 정리한다. 로봇은 끊겨도 받은 MOVE 경로로만 가고, 그 경로의 빈 칸은 끊긴 동안 그 로봇 몫이었다. 그래서 새 위치가 그 로봇이 쥔 칸(남은 MOVE 경로 포함) 안이면, 안에 있는 칸만 남기고 지나간 칸은 자동으로 반납한다(`RESOURCE_RELEASE`, `auto: true`). 새 위치가 그 로봇 몫이 아닌 칸에 걸칠 때만 운영자 현장 확인(`RESOURCE_CLEAR_CONFIRM`)을 기다린다(`RESOURCE_UNKNOWN` "다시 받은 위치가 이 로봇 몫이 아닌 …에 걸쳐 현장 확인이 필요합니다", `foreign`). 좁은 칸은 모양으로, 자리 칸은 가장 가까운 자리이면서 그 로봇이 출발·도착하는 자리일 때 걸친 것으로 본다. 이 판정은 칸 판이 새 위치를 반영하기 전에 한다. 끊긴 시간(`lost_s`)과 움직인 거리(`moved_m`)는 기록에만 남긴다.
    - **`UNKNOWN` 칸** (D-54): 계획에서는 어느 로봇의 위치도 아니고 아무도 지나갈 수 없는 칸이다. 길이 그 칸을 지나야만 하는 로봇은 비켜서기 없이 제자리에서 기다리고("교차로·101호 병실(E) 문: 현장 확인 필요"), 다른 로봇을 그 로봇 때문에 비켜 세우지 않는다. 현장 확인이 끝나면 다시 계획한다.
-   - **움직이지 않는 로봇** (D-56): 정류장 확인을 기다리는 로봇(`WAIT_CONFIRM`)은 계획에서 움직일 수 없는 로봇이다(환자를 태우는 중일 수 있다). 연결이 끊긴 로봇과 허가가 났지만 출발 전인 로봇이 자리에 서 있어도 계획의 근접 거리는 0.6 m다(`collision.py`가 그렇게 본다).
-6. 근접 정지, 0.9 m 출발 확인, 침상 이탈, 장애물, 정지 확인, 멈춤, 도크, 정면·교착 카드는 LEGACY와 같다.
+   - **움직이지 않는 로봇** (D-56): 정류장 확인을 기다리는 로봇(`WAIT_CONFIRM`)은 계획에서 움직일 수 없는 로봇이다(환자를 태우는 중일 수 있다).
+6. **로봇 상태 층** (`robot_state.py`): 계획 쪽은 STATE 이름이나 Move를 직접 보지 않고 `RobotView`(연결됨·위치·주행 중·바퀴 도는 중·멈춤·정지 요청 중·취소 중·끊긴 채 주행·MOVE 목적지)만 본다. PART 04 특이 동작은 `robot_protocol.py`(MOVE·RESUME 뒤 STATE 지연 유예, 답 없는 RESUME·CANCEL 재전송, 받지 않은 MOVE의 CANCEL, STATE `COMPLETE`·`FAILED`로 대신 받기)와 이 층(끊김·복구, 선 자리, 방 안 이동도 교차로 경유 `uses_crossroad`)에만 있다.
+7. **근접 정지 거리** (`clearance.py`, D-63): 중심 거리 `proximity_stop_m`(0.6 m) 미만이면 달리는 로봇을 세우고, 정지 거리 + 0.3 m(`proximity_resume_m − proximity_stop_m`)부터 푼다. 한쪽이 자리에 가만히 서 있으면(허가된 구간 없음, STATE 완료·PAUSED, 자리 위) 정지 거리는 `slot_stop_m`(0.45 m), 재개는 0.75 m다. 연결이 끊겨도 가만히 서 있던 로봇은 그대로 서 있는 것으로 본다. 계획의 충돌 거리(2번)와 근접 정지가 같은 함수를 쓴다. 출발 전 확인은 움직이는 상대와 0.9 m(두 대 다 움직일 때의 재개 거리)다.
+8. 근접 정지 카드(먼저 보내기·마주 봄), 출발 전 0.9 m 확인, 침상 이탈·감시(켜기·끄기), 장애물·PART 06, 정지 확인·재전송, 막힘, 도크, 결정 카드, 점유 불명 해제는 공통 안전장치다(5.5~5.7절).
 
-### 5.4 `deadlock` — 교착 감지와 해소
+### 5.4 교착
 
-- **대기 그래프**: 로봇 X가 기다리는 자원을 로봇 Y가 쥐고 있으면 X → Y. 매 tick networkx `DiGraph`로 만들고 `find_cycle`로 순환을 찾는다.
-  - 간선은 **자리가 다 찬 자원**의 보유 로봇들로만 잇는다. `SHARED_YIELD`에서 복도에 한 대만 있으면 복도를 기다리는 간선은 생기지 않는다.
-- **생기는 경우**: 자원을 한꺼번에 허가해도, 로봇이 서 있는 방은 계속 쥐고 있어서 생긴다. 4J 기본(`room_mode: DOOR`)에서는 서 있는 로봇이 문을 쥐지 않으므로 아래 맞바꾸기 순환이 생기지 않는다. 이 절은 `room_mode: ROOM`과 3대 이상에서 그대로 동작한다.
-  - 예: Robot A가 B방에 있고 E방으로 가야 함, Robot B가 E방에 있고 B방으로 가야 함 → A는 `ROOM_E`(B가 쥠)를, B는 `ROOM_B`(A가 쥠)를 기다린다 → 순환.
-- **비킬 로봇 정하기**: ① level이 낮은 쪽 ② 같으면 나중에 요청한 쪽 ③ 같으면 환자를 태우지 않은 쪽(`PATIENT_TRANSPORT`의 픽업 전) ④ 그래도 같으면 `robots` 설정에서 뒤의 로봇(기본 `robot_b`).
-- **해소**: 순환을 처음 본 뒤 `deadlock.confirm_s`(2초) 동안 계속되면 `DEADLOCK_DETECTED`. 카드 `DEADLOCK`을 띄운다 (추천 = 위 규칙, `timeout_s: 20`, `default` = 추천). 시간 안에 사람이 고르면 그대로, 아니면 추천대로 한다.
-  - 비키는 로봇은 `YIELDING`이 되고, 가장 가까운 홀 구역(`yield_zones`: `ROOM_B → D`, `ROOM_E → F`)으로 보낸다. 이 이동도 자원 규칙을 똑같이 따른다 (보통 `CORRIDOR`만 필요하고 비어 있다).
-  - 비키는 로봇이 방을 나가면 `ROOM_x`가 풀리고, 기다리던 로봇이 허가를 받는다.
-  - 비킨 로봇은 도착하면(`YIELD_DONE`) 원래 구간을 다시 요청한다.
-- 2대뿐이라 순환 길이는 2지만, 코드는 N대에서도 돌게 일반 그래프로 짠다.
-- 지표: 교착 횟수, 해소 시간. 해소 시간은 교착 확정부터 비킨 로봇이 원래 방 점유를 실제로 해제한 tick까지다.
+LEGACY의 교착 카드(`deadlock.py`: 대기 그래프 순환, 비킬 로봇 선택)는 4O 정리에서 없앴다. 두 로봇을 함께 계획하므로 서로를 기다리는 순환을 계획이 만들지 않고, PLAN 시험 전체와 무작위 50개에서 교착 카드가 한 번도 열리지 않았다(coverage, D-62). 서로 근접 거리 안에서 마주 본 경우는 근접 정지의 마주 봄 카드가 맡는다.
 
 ### 5.5 `stall` — 멈춤 판단 (시간 + PART 06 장애물 분류)
 
@@ -782,7 +697,6 @@ PART 04 사진 + PART 06 1번 프로그램으로 판별한다. 관제는 촬영 
 
 | kind | 언제 | 선택지 (ID) | 기본값 |
 |---|---|---|---|
-| `DEADLOCK` | 교착 확정 | 어느 로봇이 비킬지 (`yield_a`·`yield_b`) | 추천안, 20초 |
 | `BLOCKED` | 30초 이상 막힘, 또는 물건 감지 | 다시 출발·되돌아가기·보류 (`retry`·`return`·`hold`) | 없음 |
 | `NAV_FAILED` | 주행 실패 | 다시 시도·되돌아가기·취소 (`retry`·`return`·`cancel`) | 없음 |
 | `MOVE_REJECTED` | 로봇이 명령을 안 받음 | 다시 보내기·취소 (`retry`·`cancel`) | 없음 |
@@ -822,7 +736,9 @@ src/part3_fleet_manager/
 │  ├─ preflight.py, preflight_checks.py   # 실제 연결 점검 도구 (10장). 명령을 보내지 않는다
 │  └─ core/                               # ROS import 금지
 │     ├─ config.py, geometry.py, schemas.py
-│     ├─ mission.py, route_planner.py, resource_manager.py, deadlock.py
+│     ├─ mission.py, collision.py, clearance.py, legs.py
+│     ├─ traffic.py, plan_traffic.py, plan_replan.py, plan_exec.py, plan_board.py, plan_view.py, plan_runner.py
+│     ├─ robot_state.py, plan_graph.py, planner.py, segments.py
 │     ├─ stall.py, obstacle.py, obstacle_report.py, decisions.py, safety.py, store.py
 │     ├─ robot_protocol.py                # PART 04 명령 규칙 (3.4절)
 │     └─ fleet_core.py                    # tick(now) 순서(5.0절)대로 모듈을 부르는 곳
@@ -908,37 +824,22 @@ zones:                          # PART 04 goal_manager.py SLOTS와 같은 값. x
   F: {x: -1.400, y: -5.400, slot2: {x: -1.350, y: -4.700}, slot2_blocks_exit: true, name: "조제실"}
 
 corridor:
-  mode: DIRECTIONAL
-  follow_gap_m: 1.0              # 복도 축 간격이 이 값 이하면 뒤 로봇 정지
-  follow_resume_m: 1.4           # 이 간격 이상으로 벌어져야 후행 재개
-  yield_enabled: true
-  yield_trigger_m: 1.2
-  yield_release_m: 0.5
-  yield_timeout_s: 10.0
+  follow_gap_m: 1.0              # 같은 길·같은 방향 뒤따르기: 앞 로봇이 달리는 동안 지킬 간격 (D-59)
+  follow_resume_m: 1.4           # 정지선에서 기다리던 뒤 로봇은 이 간격이 생겨야 다시 출발 (D-59)
   include_boundary: true        # 통로 경계의 위치도 통로로 판정
   polygon: [[-1.89, -0.51], [-1.00, -0.58], [-1.26, -4.23], [-2.16, -4.17]]   # [TL, TR, BR, BL]. 단계 3D-2: 맵의 통로 벽 안쪽 면에 맞춤 (폭 0.90 m)
-  # 이전 값(손으로 잡음, 벽보다 약 1.3° 틀어짐): [[-1.79, -0.50], [-0.95, -0.60], [-1.24, -4.25], [-2.19, -4.15]]
   mouths:                       # mock 경로용 입구·문 중심점
     TOP:    {x: -1.37, y: -0.55}
     BOTTOM: {x: -1.72, y: -4.20}
     ROOM_B: {x: -1.96, y: -2.10}
     ROOM_E: {x: -1.08, y: -2.25}
-  crossroad: {x: -1.500, y: -2.180}   # PART 04 goal_manager.CROSSROAD. B·E 방을 드나들 때 먼저 서는 점
+  crossroad: {x: -1.500, y: -2.180}   # PART 04 goal_manager.CROSSROAD. B·E 방을 드나들 때 먼저 서는 점 (필수)
   crossroad_clear_m: 0.6         # 교차로 중심에서 이 거리 안이면 교차로를 쓰는 중
-  room_mode: DOOR                # DOOR(문·교차로 한 대씩, 방 안 두 대) | ROOM(방 하나에 한 대, 4J 이전)
 
 resources:
-  zone_arrival_clear_m: 2.0      # 같은 구역의 각 자리 중심 출입 반경
-  zone_occupied_m: 0.6           # 목적지 중심에서 다른 로봇까지의 점유 반경
-  clear_margin_m: 0.20
-  clear_hold_s: 1.0
-  decision_window_s: 1.0
-  aging_s: 0                    # 0 = 끔
-
-deadlock:
-  confirm_s: 2.0
-  card_timeout_s: 20
-  yield_zones: {ROOM_B: D, ROOM_E: F}
+  zone_occupied_m: 0.6           # 자리 중심에서 이 거리 안이면 그 자리에 선 것으로 본다
+  clear_margin_m: 0.20           # 칸을 지나간 로봇이 칸 밖으로 이만큼 벗어나고
+  clear_hold_s: 1.0              # 이 시간 동안 유지되면 칸을 놓는다
 
 stall:
   window_s: 5.0
@@ -1004,6 +905,11 @@ mock:
   supports_request_id: false     # 로봇별 launch 인자로 R1 반영 전후를 섞어 시험 가능
 ```
 
+### 8.x 4O 정리 뒤 설정 (D-62)
+
+- 지금 `fleet.yaml` 형식만 읽는다. 모든 구역에 `slot2`와 `slot2_blocks_exit`, 복도에 `crossroad`, `traffic`에 `segments`·`links`·`graph`가 있어야 한다. 없으면 설정 오류다(예전처럼 자리 하나·`ROOM` 방식으로 넘어가지 않는다).
+- LEGACY 설정 `traffic.mode`, `corridor.mode`·`yield_*`·`room_mode`, `resources.decision_window_s`·`aging_s`·`zone_arrival_clear_m`, `mission.return_after_cancel`, `deadlock:` 절이 남아 있으면 "없어진 설정입니다 (교통 판단은 PLAN 하나, 4O 정리)"로 거절한다. 실행 인자 `traffic_mode:=`·`corridor_mode:=`, preflight `--traffic-mode`도 없어졌다.
+
 ## 9. 테스트 (pytest, ROS 없이, 가짜 시계)
 
 `fleet_core`에 가짜 로봇 보고를 넣고 tick을 돌려 결과(보낸 명령, 이벤트, 카드, 상태)를 확인한다. 화면(PART 01) 테스트도 이 목록에 같이 둔다.
@@ -1013,37 +919,37 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH=src/part1_ui_dashboard:s
   python3 -m pytest -p no:cacheprovider -q src/part1_ui_dashboard/test src/part3_fleet_manager/test
 ```
 
-1. `EXCLUSIVE` 모드: 두 로봇이 동시에 복도가 필요하면 하나만 허가, 다른 하나는 `HOLD` + 사유 문장. `SHARED_YIELD` 모드: 둘 다 허가 (B·E 방이 겹치지 않을 때). `DIRECTIONAL`은 44번
-2. 둘 다 대기면 level 높은 쪽 먼저, 같으면 먼저 요청한 쪽
-3. 허가 후 더 높은 level이 와도 회수하지 않음
-4. Robot A가 B방에 있을 때 Robot B의 B방행 구간은 대기 (`room_mode: ROOM`. DOOR는 56번)
-5. B방↔E방 맞바꾸기: 순환 감지 → 카드 → 시간 초과 시 추천 로봇이 홀로 비킴 → 둘 다 완료 (`room_mode: ROOM`)
-6. 한꺼번에 허가: 필요한 자원 중 하나라도 잡혀 있으면 아무것도 허가하지 않음
-7. 해제: 복도+여유 밖 1초 연속 + 연결 살아 있음일 때만 `FREE`
+1. [지움·LEGACY, 4O 정리] `EXCLUSIVE` 모드: 두 로봇이 동시에 복도가 필요하면 하나만 허가, 다른 하나는 `HOLD` + 사유 문장. `SHARED_YIELD` 모드: 둘 다 허가 (B·E 방이 겹치지 않을 때). `DIRECTIONAL`은 44번
+2. [지움·LEGACY, 4O 정리] 둘 다 대기면 level 높은 쪽 먼저, 같으면 먼저 요청한 쪽
+3. [지움·LEGACY, 4O 정리] 허가 후 더 높은 level이 와도 회수하지 않음
+4. [지움·LEGACY, 4O 정리] Robot A가 B방에 있을 때 Robot B의 B방행 구간은 대기 (`room_mode: ROOM`. DOOR는 56번)
+5. [지움·LEGACY, 4O 정리] B방↔E방 맞바꾸기: 순환 감지 → 카드 → 시간 초과 시 추천 로봇이 홀로 비킴 → 둘 다 완료 (`room_mode: ROOM`)
+6. [지움·LEGACY, 4O 정리] 한꺼번에 허가: 필요한 자원 중 하나라도 잡혀 있으면 아무것도 허가하지 않음
+7. [지움·LEGACY, 4O 정리] 해제: 복도+여유 밖 1초 연속 + 연결 살아 있음일 때만 `FREE`
 8. 연결 끊김 → `UNKNOWN`, 새 허가 없음, `RESOURCE_CLEAR_CONFIRM` 후 `FREE`
 9. 10초 멈춤은 기록만, 30초 멈춤은 `blocked` + 카드 + 다른 로봇 허가 막힘, 다시 움직이면 해제
 10. 침상 이탈 → 대상 로봇 `PAUSE`, 이탈 중 재개 거절, 해제 후 재개 → `RESUME` 전송
 11. `MOVE` 후 3초 안에 `MISSION_ACCEPTED` 없음 → 한 번 재전송 → 또 없음 → `FAULT` + 카드
 12. 로봇 쪽 `PAUSED`에서 새 구역으로 보낼 때 `CANCEL` → `CANCELED` 확인 → `MOVE` 순서
 13. `MISSION_FAILED` → `FAULT` + 카드, [다시 시도]로 같은 구간 재전송 (inspect 모드. report 모드는 60번)
-14. 복도 안 점유 중 임무 취소 → `E-423` 거절, `FAULT`면 허용 + 잠금 유지
+14. [지움·LEGACY, 4O 정리] 복도 안 점유 중 임무 취소 → `E-423` 거절, `FAULT`면 허용 + 잠금 유지
 15. 픽업 이송: 픽업 도착 → 확인 → 목적지 → 확인 → 완료
 16. 약품 운송 [불일치] → 그 자리 보류 + 카드
 17. JSON 형식: 4장 예시가 그대로 파싱·검증되고, 잘못된 요청은 `E-400`
 18. `core/`에 `rclpy` import 없음
 19. `request_id: auto`: `id=`를 버리는 옛 로봇 → 3초 뒤 `id=` 없이 재전송 → 이후 그 로봇에는 `id=` 안 붙임. `id=`를 받는 로봇 → 계속 붙임
 20. 범퍼 구독을 켠 상태에서 범퍼(`BUMP`) 새로 감지 → 그 로봇 `SAFE_PAUSE` + `PAUSE` 전송 + 경고, `RESUME_ROBOT`으로 재개
-21. 복도 양보: 마주 오며 1.2 m 안 → level 낮은 쪽만 `PAUSE` + `GIVE_WAY` → 우선 로봇이 지나가 0.5 m 벌어지면 `RESUME`
-22. 복도 양보: level이 같으면 복도에 나중에 들어온 쪽이 섬
-23. 복도 양보: 같은 방향 두 로봇, B방↔E방 가로지르기, 거리 1.2 m 초과는 아무것도 안 함
-24. 복도 양보 안전장치: 우선 로봇이 10초 진행 못 하면 `RESUME` + `CORRIDOR_YIELD_TIMEOUT`
-25. 복도 양보 중 침상 이탈 → `SAFE_PAUSE` 우선, 재개 후 양보 다시 판단
+21. [지움·LEGACY, 4O 정리] 복도 양보: 마주 오며 1.2 m 안 → level 낮은 쪽만 `PAUSE` + `GIVE_WAY` → 우선 로봇이 지나가 0.5 m 벌어지면 `RESUME`
+22. [지움·LEGACY, 4O 정리] 복도 양보: level이 같으면 복도에 나중에 들어온 쪽이 섬
+23. [지움·LEGACY, 4O 정리] 복도 양보: 같은 방향 두 로봇, B방↔E방 가로지르기, 거리 1.2 m 초과는 아무것도 안 함
+24. [지움·LEGACY, 4O 정리] 복도 양보 안전장치: 우선 로봇이 10초 진행 못 하면 `RESUME` + `CORRIDOR_YIELD_TIMEOUT`
+25. [지움·LEGACY, 4O 정리] 복도 양보 중 침상 이탈 → `SAFE_PAUSE` 우선, 재개 후 양보 다시 판단
 26. **두 로봇 동시 임무** (`assignment.mode: ROLE`, `room_mode: ROOM`으로 고정해서 시험. DOOR 기본값은 61번 시연 시험): Robot A가 환자 이송(C → A)을 하는 동안 Robot B가 약품 운송(F → E → B)을 하고, 그 사이 두 로봇 모두에 새 임무가 대기열로 들어온다. 두 임무가 끝까지 같이 진행되고, 복도 양보와 B·E 방 규칙이 지켜지고, 대기열 임무가 이어서 시작된다
 27. **배터리 배정 (`IDLE_BEST_BATTERY`)**: `CALL` 두 건이 연달아 오면 배터리 많은 로봇부터 배정, 둘 다 바쁘면 세 번째는 "쉬는 로봇 없음"으로 대기, 배터리 20% 이하 로봇은 건너뜀, 배터리를 모르는 로봇은 뒤로
 28. **복귀**: 마지막 [수령 완료] → `MISSION_DONE` → 홈 구역 `MOVE` → `RETURNING` → 도착 시 `IDLE`. 복귀 중 새 임무가 오면 `CANCEL` → `CANCELED` 확인 → 새 임무 `MOVE`
 29. **복귀-취소 경합**: 복귀 중 새 임무 → `CANCEL` 직후 복귀 구간 `ARRIVED`만 옴 → 카드 없이 바로 새 임무 `MOVE`. STATE `COMPLETE`만 와도 같다. 3초 동안 셋 다 없으면 `NAV_FAILED` 카드
 30. **화면용 상태 필드**: 주행 중 `route`의 끝점이 목적지 구역이고 복도를 지나면 입구 중심점을 거친다. 대기 중 `queue_detail`에 level·since가 있다. 복도 판단 직후 `resources.CORRIDOR.reason`과 `last_decision.detail.reason`이 그 판단 문장과 같다. 끝난 임무가 `missions`에 최근 20건 남는다
-31. **판단 근거**: 두 로봇이 동시에 복도를 요청하면 `RESOURCE_GRANT`·`RESOURCE_HOLD`의 `detail.rule`이 `LEVEL`(level 다를 때)·`REQUEST_TIME`(같을 때)이고 `contenders`에 두 로봇이 있다. 허가 뒤 더 높은 level이 오면 그 로봇의 `RESOURCE_HOLD`에 `NO_PREEMPT`. 양보는 `CORRIDOR_YIELD_START`에 `LEVEL` 또는 `ENTRY_ORDER`
+31. [지움·LEGACY, 4O 정리] **판단 근거**: 두 로봇이 동시에 복도를 요청하면 `RESOURCE_GRANT`·`RESOURCE_HOLD`의 `detail.rule`이 `LEVEL`(level 다를 때)·`REQUEST_TIME`(같을 때)이고 `contenders`에 두 로봇이 있다. 허가 뒤 더 높은 level이 오면 그 로봇의 `RESOURCE_HOLD`에 `NO_PREEMPT`. 양보는 `CORRIDOR_YIELD_START`에 `LEVEL` 또는 `ENTRY_ORDER`
 32. **화면 문장** (`ui_api`): 4.8절 이벤트 종류 전부와 5.1절 로봇 상태 전부에 한국어 문장이 있다. 하나라도 빠지면 실패 (이 문서를 직접 읽는다)
 33. **화면 지도** (`ui_api`, 실제 맵 파일이 없으면 건너뜀)
     - 자동 기울기가 3.6°~4.6° 사이다.
@@ -1061,12 +967,12 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH=src/part1_ui_dashboard:s
 41. **기록 문장** (PART 01·03): 4.8절 이벤트 종류마다 관제가 실제로 만드는 이벤트를 화면 문장 함수에 넣으면, 제목과 보조 문장에 `robot_a`·`robot_b`, `OK`·`MISMATCH`·`DONE` 같은 대문자 코드 값, `selected`·`timeout`·`resolved`가 나오지 않는다. 같은 이벤트를 시험용 `bad.db`에 쓰고 기록 조회로 읽어 그려도 실시간과 같은 문장이다. 옛 형식(`reason`이 코드 값)의 행도 `WEB_DB_DESIGN.md` 화면 문장대로 바뀐다
 42. **전체 정지·재개 기록**: 화면의 [안전 정지 요청]·[전체 재개]가 `PAUSE_ALL`·`RESUME_ALL`과 조작자 이름을 보내고 `events.by`에 그 이름이 남는다. 침상 이탈·감시 끊김 중 `RESUME_ALL`은 `/robot/resume`과 같이 거절되고 `RESUME_REJECTED`에 이름이 남는다. `/robot/pause`·`/robot/resume` 서비스는 그대로 동작하고 `by`는 "ROS 서비스"
 43. **연결 점검** (`preflight`): PART 04 `goal_manager.py`의 좌표를 실행하지 않고 읽는다. 구역 좌표 차이 0.05 m 경계에서 경고가 맞게 나뉜다. 발견 서버 주소·포트·소유 프로세스가 틀리면 "실제 실행 안 됨"이다. 점검 중 로봇 명령은 0건이다
-44. **복도 방향별 공유** (`DIRECTIONAL`): 같은 방향 두 대(D → C, A → F)는 둘 다 허가되어 같이 지난다. 반대 방향(D → C 진행 중에 F → A 요청)은 `HOLD`, `rule: DIRECTION`, 사유 문장에 "반대 방향". 11/18 상황 재현: Robot A가 E방에서 나와 D로, Robot B가 복도를 지나 C로 → A는 E방 안에서 기다리고(`CORRIDOR` 허가 없음. `room_mode: ROOM`이면 `ROOM_E` 유지, `DOOR`면 문 허가도 없음) B가 복도를 나간 뒤 허가된다. `GIVE_WAY`가 한 번도 생기지 않는다. B방↔E방 가로지르기는 복도에 아무도 없을 때만 허가. Level이 높아도 이미 들어간 반대 방향 로봇은 회수하지 않는다(선점 금지)
+44. [지움·LEGACY, 4O 정리] **복도 방향별 공유** (`DIRECTIONAL`): 같은 방향 두 대(D → C, A → F)는 둘 다 허가되어 같이 지난다. 반대 방향(D → C 진행 중에 F → A 요청)은 `HOLD`, `rule: DIRECTION`, 사유 문장에 "반대 방향". 11/18 상황 재현: Robot A가 E방에서 나와 D로, Robot B가 복도를 지나 C로 → A는 E방 안에서 기다리고(`CORRIDOR` 허가 없음. `room_mode: ROOM`이면 `ROOM_E` 유지, `DOOR`면 문 허가도 없음) B가 복도를 나간 뒤 허가된다. `GIVE_WAY`가 한 번도 생기지 않는다. B방↔E방 가로지르기는 복도에 아무도 없을 때만 허가. Level이 높아도 이미 들어간 반대 방향 로봇은 회수하지 않는다(선점 금지)
     같은 순간 반대 방향 요청도 한 대만 복도를 받는다(레벨 높은 쪽).
 45. **범퍼 이웃 정지** (`use_hazard_topic: true`): Robot A에 `BUMP` → Robot A와, A에서 1.0 m 안에 있는 Robot B가 둘 다 `SAFE_PAUSE` + `PAUSE` 전송, `BUMP` 이벤트 `detail`에 둘 다. 1.0 m 밖이면 A만. 재개는 로봇마다 `RESUME_ROBOT`
-46. **테스트가 모드를 직접 정함**: 복도 양보·교착·장애물 등 기존 테스트는 필요한 `corridor.mode`를 테스트 안에서 직접 정한다. 저장소 기본값(`DIRECTIONAL`)을 바꿔도 다른 테스트가 깨지지 않는다
-47. **같은 방향 후행 정지**: 앞 로봇이 멈추면 뒤도 멈춘다. 복도 밖에서는 첫 MOVE를 보류한다. 진행 또는 이탈을 확인하면 재개하고, 뒤 로봇의 별도 정지는 유지한다. 반대 방향 요청은 기존 DIRECTION 규칙으로 기다린다. MOVING인 선행 로봇과 0.8 m이면 바로 멈추고, 1.0~1.4 m 사이에서 흔들려도 정지를 유지하며 1.5 m에서 재개한다.
-48. **목적지 점유**. 정차한 로봇의 구역, 다른 로봇이 이동 중인 목적지, 점유된 홈으로 가는 MOVE를 보류한다. 비키면 자동 출발하며, 미출발 허가도 다시 확인한다. 30초 카드와 각 선택지를 확인한다.
+46. [지움·LEGACY, 4O 정리] **테스트가 모드를 직접 정함**: 복도 양보·교착·장애물 등 기존 테스트는 필요한 `corridor.mode`를 테스트 안에서 직접 정한다. 저장소 기본값(`DIRECTIONAL`)을 바꿔도 다른 테스트가 깨지지 않는다
+47. [지움·LEGACY, 4O 정리] **같은 방향 후행 정지**: 앞 로봇이 멈추면 뒤도 멈춘다. 복도 밖에서는 첫 MOVE를 보류한다. 진행 또는 이탈을 확인하면 재개하고, 뒤 로봇의 별도 정지는 유지한다. 반대 방향 요청은 기존 DIRECTION 규칙으로 기다린다. MOVING인 선행 로봇과 0.8 m이면 바로 멈추고, 1.0~1.4 m 사이에서 흔들려도 정지를 유지하며 1.5 m에서 재개한다.
+48. [지움·LEGACY, 4O 정리] **목적지 점유**. 정차한 로봇의 구역, 다른 로봇이 이동 중인 목적지, 점유된 홈으로 가는 MOVE를 보류한다. 비키면 자동 출발하며, 미출발 허가도 다시 확인한다. 30초 카드와 각 선택지를 확인한다.
 49. **근접 정지**. 0.5 m에서 주행 중인 한 대 또는 두 대만 정지하고 0.9 m 이상일 때 재개한다. 10초 카드와 한 대 먼저 보내기, 범퍼·운영자·후행 정지 중첩, 한 규칙만 풀렸을 때 RESUME가 나가지 않는지 확인한다.
 
 50. **도크 출발**. 언독과 LOCALIZING 동안 막힘 시간·촬영·카드가 생기지 않는다. NAVIGATING 뒤에 도착하며, 준비 시간 초과는 CANCEL과 NAV_FAILED 한 건이다. 위치 준비 중인 로봇에 접근하는 주행 로봇은 근접 정지한다.
@@ -1075,7 +981,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH=src/part1_ui_dashboard:s
 53. **범퍼 기본 미사용**. BUMP 입력을 무시하고 같은 운행에서 위치 기반 근접 정지는 동작한다. 범퍼를 켠 경우는 20·45번을 적용한다.
 54. **STATE 기반 점검**. 최신 STATE의 상태·배터리·위치·도킹 값을 각각 검사한다. 격리 mock으로 도크 출발 → 임무 확인 → 홈 구역 복귀까지 확인한다.
 55. **자리 2개** (4J, `test_4j_slots_doors.py`·`test_robot_protocol.py`). 11/19 실기 기록 재현: 15:30 A가 F로 가는데 B가 F에서 쉬는 중 → `MOVE F2`, 대기 없음, "조제실(F) 2번 자리 도착"·확인 기록에 `slot: 2`. 15:32·15:36 A가 홈 D로 복귀하는데 B가 D에 있음 → `MOVE D2`. 정류장 확인 대기 중인 로봇이 1번 자리에 있으면 오는 로봇은 2번 자리. 두 자리 다 차면 대기와 30초 카드. C 두 자리(0.55 m)와 조제실(F) 1번 자리에서 [그대로 출발]을 선택한 로봇은 서 있는 로봇 옆에서 근접 정지하지 않고 0.45 m 안에서는 선다. 둘 다 움직이면 0.6 m. STATE에 `slot`이 없는 로봇에는 자리 번호를 붙이지 않고, 로봇마다 따로 판단한다. 슬롯 1에는 번호를 붙이지 않는다
-56. **문과 교차로** (DOOR). B방 1번 자리에 로봇이 있을 때 다른 로봇은 B2로 들어가고(`door: IN`), 나가려는 로봇은 들어오는 로봇의 자리 도착까지 기다린다. 같은 쪽에서 B와 E로 동시에 출발하면 뒤 로봇은 앞 로봇이 `VIA_PASSED` 뒤 교차로 0.6 m를 벗어날 때까지 교차로 밖에서 기다린다(`rule: CROSSROAD`). B방에서 나오는 로봇이 있으면 들어가려는 로봇은 대기하고, 나오는 로봇이 교차로 0.6 m 밖으로 가면 `ROOM_B`가 풀린다. `VIA_PASSED`를 보내지 않는 예전 PART 04도 교차로 범위를 지나면 문이 풀린다. `VIA_PASSED`는 도착·멈춤·실패가 아니고, 경로선은 그 전까지 교차로를 거친다. 처음 보는 STATUS 이벤트는 `WARNING`만 남기고 멈추지 않는다
+56. [지움·LEGACY, 4O 정리] **문과 교차로** (DOOR). B방 1번 자리에 로봇이 있을 때 다른 로봇은 B2로 들어가고(`door: IN`), 나가려는 로봇은 들어오는 로봇의 자리 도착까지 기다린다. 같은 쪽에서 B와 E로 동시에 출발하면 뒤 로봇은 앞 로봇이 `VIA_PASSED` 뒤 교차로 0.6 m를 벗어날 때까지 교차로 밖에서 기다린다(`rule: CROSSROAD`). B방에서 나오는 로봇이 있으면 들어가려는 로봇은 대기하고, 나오는 로봇이 교차로 0.6 m 밖으로 가면 `ROOM_B`가 풀린다. `VIA_PASSED`를 보내지 않는 예전 PART 04도 교차로 범위를 지나면 문이 풀린다. `VIA_PASSED`는 도착·멈춤·실패가 아니고, 경로선은 그 전까지 교차로를 거친다. 처음 보는 STATUS 이벤트는 `WARNING`만 남기고 멈추지 않는다
 57. **상자 판별** (report). FAILED + OBSTACLE + `medical_box` → 상자 카드(이유·버튼 문구·`obstacle` 칸), 복도 `blocked`, 다른 로봇 허가 보류, [치웠음, 다시 출발]로 해제·재전송. [되돌아가기] 뒤 다시 움직이면 해제
 58. **NONE·판별 불가**. (`retry_if_clear: true`로 정해서 시험. 기본 false는 67번) NONE → 3초 뒤 자동 재출발 1회, 두 번째 실패는 카드만. 결과 없음(6초)·`processing_error` → "장애물 판별 불가" 카드, 자동 재출발 없음, 막힘 없음
 59. **늦은·이른 결과**. 6초가 지난 결과는 기록만(`applied: false`). 실패 뒤 `OBSTACLE`보다 먼저 온 결과는 그 사진의 판별로 쓴다
@@ -1090,16 +996,17 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH=src/part1_ui_dashboard:s
 
 68. **YOLO 정보 보고**. 기록 문장, 카드·정지 0건, 최근 감지와 사진의 30초 만료. 뒤이어 같은 임무가 포기하면 포기 사진의 PART 06 결과로 카드 1장.
 69. **정차 상대와 우선 출발**. D1 옆 0.58 m 통과, 0.40 m 정지. 상대가 후행 대기면 이 로봇을 먼저 보내고 거리 회복 뒤 상대가 출발한다. 다시 가까워지면 재정지한다.
-70. **같은 구역 출구**. F1의 첫 MOVE 보류, 일반 요청은 30초·Level 3은 즉시 카드, F2가 실제로 떠난 뒤 F1 출발. 그대로 출발을 골라도 근접 거리 안이면 첫 MOVE 보류.
+70. [지움·LEGACY, 4O 정리] **같은 구역 출구**. F1의 첫 MOVE 보류, 일반 요청은 30초·Level 3은 즉시 카드, F2가 실제로 떠난 뒤 F1 출발. 그대로 출발을 골라도 근접 거리 안이면 첫 MOVE 보류.
 71. **침상 이탈 신호 깜빡임**. 3분간 0.1~0.5초 간격으로 이탈과 정상을 반복한다. 이탈·정지 각 1회, 짧은 정상 중 화면·서비스 재개 거절, 정상 1초 뒤 해제 1회와 운영자 재개를 확인한다.
 72. **경보 중복**. 같은 종류·대상은 팝업 하나의 시각만 갱신한다. 확인 후 같은 원인의 새 PAUSE 때 다시 열리며, BACK은 미확인 LOST를 제거한다. WARN 토스트는 문구별 30초 간격이다.
-73. **구역 출입**. 15:02:26과 15:03:38의 근접 정지 0회, 수술실(C) 2번 자리 도착·출구 대기·출발 순서, 출구 선분 경고. 반대 순서에서는 반경 밖 PAUSE 뒤 RESUME.
+73. [지움·LEGACY, 4O 정리] **구역 출입**. 15:02:26과 15:03:38의 근접 정지 0회, 수술실(C) 2번 자리 도착·출구 대기·출발 순서, 출구 선분 경고. 반대 순서에서는 반경 밖 PAUSE 뒤 RESUME.
 74. **마주 봄과 이격**. 최근 0.5초 이격 중 무정지, 다시 접근하면 정지. 먼저 보내기 두 선택의 실패, 후발 로봇 추천 및 복귀, 상대 재개를 검증한다.
 75. **구역 이름**. 화면·과거 DB 조회·카드의 수술실(C) 2번 자리, MOVE C2와 DB 문자 C를 검증한다.
 76. **PLAN 계획기** (`test_4o_plan.py`). 낮은 Level의 대기·비켜서기·통과가 비용에서만 나온다. 모든 자리 쌍 × Level 조합에서 충돌 쌍과 맞바꾸기가 없고, 평균 계획 시간 `plan_budget_ms` 이하, 최대 `plan_limit_ms` 근처다. LEGACY는 재전송·끼어들기 조건이 그대로다.
-77. **11/20 재현** (`test_4o_1120_replay.py`). 다섯 장면(16:09:59는 두 변형)에서 Level 3 로봇의 출발·도착이 LEGACY보다 늦지 않고 근접 정지 0회. 4N 15:02:26·15:03:38도 PLAN에서 근접 정지 0회.
+77. **11/20 재현** (`test_4o_1120_replay.py`). 다섯 장면(16:09:59는 두 변형)에서 Level 3 로봇의 출발·도착이 `4o-baseline.json`(b98f6ca) + 0.5 s 안이고 근접 정지 0회. 4N 15:02:26·15:03:38도 PLAN에서 근접 정지 0회.
 78. **무작위 시험** (`test_4o_random.py`, 기본 50개, `PLAN_RANDOM_SEEDS=300`). 칸 대수·방향, 예약 없는 진입, 정지·출발 지연, 끝난 뒤 홈 복귀 다섯 가지 검사. 시드 39는 따로 이름 붙인 시험이다.
 79. **PLAN 화면** (`test_4o_ui.py`·`test_event_sentences.py`). 계획 경로 선, 대기 이유, `PLAN_*` 이벤트 문장과 기록 필터.
+80. **4O 정리** (`test_4o_cleanup.py`). 충돌 종류(엇갈림·마주침·뒤따르기)와 `ORDER_KEPT` 표가 종류·뒤 로봇 상태마다 빠짐없음, 로봇 상태 층(`RobotView`)이 주행·끊김·복구를 알려 줌, 계획 결과가 다음 tick에 쓰임, 그사이 바뀌면 버리고 다시 계획, 계획 스레드에서 0.3 s 탐색이 tick을 막지 않음, 무작위 시드 34·173(지나간 칸을 다시 GRANTED로 쥐지 않음). `test_4l.py::test_passing_a_parked_robot_whose_link_drops_keeps_the_slot_distance`: 자리에 선 로봇 옆 0.5 m를 지나는 중 그 로봇 연결이 끊겨도 정지하지 않음(시드 54·248, D-63).
 
 - 화면 라우트 테스트 (Flask test client): 버튼마다 가짜 publisher에 올바른 토픽과 JSON이 넘어간다. `dev_tools: false`면 시험 도구 라우트가 403이다. `/map/meta`·`/map/image`가 맵이 있을 때와 없을 때 맞게 답한다.
 - 화면 확인은 mock 2대로 시나리오 1~5(`stage3-scenarios.md`)를 **화면 클릭만으로** 끝까지 진행하고, 캡처를 `docs/part3/ui/screens/`에 남긴다. 녹화는 사람이 한다.
@@ -1114,9 +1021,9 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH=src/part1_ui_dashboard:s
   - mock 시험용 `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`·격리 도메인은 실제 실행에서 쓰지 않는다. 반대로 mock은 반드시 격리해서 띄운다 (mock 로봇도 `/robot2`·`/robot3` 이름을 쓴다).
 - **PART 04 `keyboard_control`과 같이 띄우지 않는다.** 그것도 `/<ns>/hospital_nav/command`로 명령을 보내는 시험용 관제다. 둘이 같이 돌면 한 로봇에 명령이 두 군데서 간다.
 - 관제 PC는 팀 Python 가상환경(`rokey_venv`)을 켠 터미널에서 실행한다. 코드가 venv 밖 경로를 가정하지 않는다.
-- **실행 파일** `ros2 launch part1_ui_dashboard real.launch.py`: 관제 + 화면만 띄운다 (mock 로봇·mock 분류기 없음, 시험 도구 끔, "실기 모드" 표시). 인자: `config_file`, `map_yaml`, `db_path`(기본 `~/.bad/bad_real.db`), `bed_monitor_require_at_start`(비우면 `fleet.yaml` 값), `bed_monitor_enabled`(비우면 `fleet.yaml` 값, `false`면 침상 감시 꺼짐), `traffic_mode`(비우면 `fleet.yaml` 값), `corridor_mode`(비우면 `fleet.yaml` 값. 현장에서 `EXCLUSIVE` 등으로 바로 바꿀 때), `ui_config`.
+- **실행 파일** `ros2 launch part1_ui_dashboard real.launch.py`: 관제 + 화면만 띄운다 (mock 로봇·mock 분류기 없음, 시험 도구 끔, "실기 모드" 표시). 인자: `config_file`, `map_yaml`, `db_path`(기본 `~/.bad/bad_real.db`), `bed_monitor_require_at_start`(비우면 `fleet.yaml` 값), `bed_monitor_enabled`(비우면 `fleet.yaml` 값, `false`면 침상 감시 꺼짐), `ui_config`. (`traffic_mode`·`corridor_mode`는 4O 정리에서 없어졌다.)
 - **연결 점검 도구** `ros2 run part3_fleet_manager preflight`: 읽기만 하고 명령·주행 목표·서비스 호출·촬영 요청을 하나도 보내지 않는다.
-  - 교통 판단 모드: `--traffic-mode PLAN|LEGACY`(관제를 띄울 `traffic_mode:=` 값)가 있으면 그 값, 없으면 `fleet.yaml`이다. 줄 끝에 어디서 온 값인지 적는다. 관측하는 10초 안에 실행 중인 관제의 `/fleet/state`가 오면 그 모드를 함께 보이고, 다르면 경고한다(4O 후속 3).
+  - 교통 판단: `교통 판단 · PLAN (정지선 …, 복도 칸 …, 계획 한도 …) · fleet.yaml`. 실행 중인 관제의 `/fleet/state` `traffic.mode`가 PLAN이 아니면(4O 정리 이전 관제) 경고한다. 줄 끝에 어디서 온 값인지 적는다. 관측하는 10초 안에 실행 중인 관제의 `/fleet/state`가 오면 그 모드를 함께 보이고, 다르면 경고한다(4O 후속 3).
   - 셸 환경 출력: `ROS_DOMAIN_ID`, `ROS_DISCOVERY_SERVER`, `ROS_SUPER_CLIENT`, `ROS_AUTOMATIC_DISCOVERY_RANGE`, `RMW_IMPLEMENTATION`. LOCALHOST 범위거나 `ROS_DISCOVERY_SERVER`가 비어 있으면 경고.
   - 발견 서버: 지정한 주소·포트가 이 PC의 Fast DDS 서버 프로세스 것인지 확인한다. 서버를 다른 PC에서 띄우면 이 줄은 "확인 불가"로 나온다. 그때 로봇 줄이 모두 OK면 실행해도 된다.
   - 두 로봇을 10초간 동시에 관측한다. 최신 STATE의 알려진 상태명, 유효한 battery·pose·docked가 로봇별 필수 항목이다. 원본 배터리·도크·AMCL·Nav2 그래프는 참고로 표시한다. 범퍼 구독이 꺼져 있으면 ‘사용 안 함’이다.
@@ -1173,7 +1080,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH=src/part1_ui_dashboard:s
 
 | 패키지 | 어디에 | 대신하는 것 |
 |---|---|---|
-| networkx (`python3-networkx`) | `route_planner` 영역 그래프, `deadlock` 대기 그래프 순환 탐지(`find_cycle`) | 직접 짠 그래프 탐색·DFS |
+| networkx (`python3-networkx`) | 칸 지도 연결 그래프(`segments.py`) | 직접 짠 그래프 탐색 |
 | shapely (`python3-shapely`) | `geometry` 영역 판정(`Polygon.contains`), 해제 여유 거리(`buffer`) | 직접 짠 점-다각형 판정 |
 | Flask (`python3-flask`) | 관제 화면 서버 | — |
 | psutil (`python3-psutil`) | preflight의 발견 서버 포트 소유 프로세스 확인 | — |

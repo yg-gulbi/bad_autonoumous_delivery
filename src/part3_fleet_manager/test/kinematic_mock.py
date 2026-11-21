@@ -298,14 +298,13 @@ class KinematicSim:
     ``docked``: robots that start on their dock. ``bed_feed``: publish /patient/bed_exit (``bed_value``) three
     times per step, as the PART 05 webcam node does at >= min_rate_hz."""
 
-    def __init__(self, cfg, *, mode: str = "PLAN", speed_mps: float = 0.2, poses: dict | None = None,
+    def __init__(self, cfg, *, speed_mps: float = 0.2, poses: dict | None = None,
                  require_at_start: bool = False, docked=(), bed_feed: bool = False):
         monitor = replace(cfg.safety.bed_monitor, require_at_start=require_at_start)
         cfg = replace(
             cfg,
             db_path=":memory:",
             safety=replace(cfg.safety, bed_monitor=monitor),
-            traffic=replace(cfg.traffic, mode=mode),
         )
         self.cfg = cfg
         self.core = FleetCore(cfg)

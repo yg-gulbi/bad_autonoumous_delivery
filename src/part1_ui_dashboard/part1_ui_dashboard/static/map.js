@@ -167,14 +167,12 @@ function paint() {
         ctx.fillStyle = palette["white"];
         ctx.fill();
     }
-    const corridor = S?.resources.CORRIDOR;
     const corners = cfg.polygon.map(p => screen(...p));
     path(corners);
     ctx.closePath();
     ctx.fillStyle = palette.lane;
     ctx.fill();
-    const isSegments = S?.traffic?.mode === "PLAN" && cfg.segments;
-    if (isSegments) {
+    if (cfg.segments) {
         const mapSegOrder = ["CORRIDOR_TOP", "CORRIDOR_BOTTOM", "DOOR_B", "DOOR_E", "CROSSROAD"];
         for (const segKey of mapSegOrder) {
             const spec = cfg.segments[segKey];
@@ -233,27 +231,6 @@ function paint() {
             }
             ctx.restore();
         }
-    } else {
-        const headings = new Set((corridor?.holder_detail || []).map(claim => claim.direction));
-        if (headings.size === 1 && !headings.has(0)) {
-            const [heading] = headings;
-            const ends = [[0,1],[2,3]].map(([a,b]) => corners[a].map((v,i) => (v + corners[b][i])/2));
-            if (heading < 0) ends.reverse();
-            const dx = ends[1][0]-ends[0][0], dy = ends[1][1]-ends[0][1];
-            ctx.save();
-            ctx.strokeStyle = palette.arrow;
-            ctx.lineWidth = 4;
-            for (const fraction of [.2,.4,.6,.8]) {
-                ctx.save();
-                ctx.translate(ends[0][0]+dx*fraction,ends[0][1]+dy*fraction);
-                ctx.rotate(Math.atan2(dy,dx));
-                ctx.translate(0,heading * Math.hypot(corners[0][0]-corners[1][0], corners[0][1]-corners[1][1])/4);
-                path([[-8,-8],[0,0],[-8,8]]);
-                ctx.stroke();
-                ctx.restore();
-            }
-            ctx.restore();
-        }
     }
     if (raster && (overlay || !plan)) {
         ctx.save();
@@ -279,9 +256,9 @@ function paint() {
     }
     const routes = [];
     const units = Object.entries(S?.robots || {});
-    if (S?.traffic?.mode === "PLAN") {
+    {
         // D-45: the joint plan's way for each robot, including a move aside, as a thin line.
-        for (const [id, plan] of Object.entries(S.traffic.plans || {})) {
+        for (const [id, plan] of Object.entries(S?.traffic?.plans || {})) {
             if (!plan.route?.length || plan.route.length < 2) continue;
             path(plan.route.map(p => screen(...p)));
             ctx.lineJoin = "round";
@@ -441,6 +418,7 @@ function paint() {
     ctx.font = palette["map-caption-font"];
     const slot = place(candidates,ctx.measureText(caption).width/2,8,true);
     if (slot) {
+        const corridor = S?.resources.CORRIDOR;
         ctx.fillStyle = corridor?.blocked || corridor?.state === "UNKNOWN" ? palette["danger"] : palette["muted"];
         ctx.fillText(caption,slot.x,slot.y);
     }

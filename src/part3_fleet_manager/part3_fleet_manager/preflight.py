@@ -1,6 +1,5 @@
 """Observe the control room's ROS graph for ten seconds. No robot or camera commands."""
 import argparse
-from dataclasses import replace
 import json
 from functools import partial
 from math import isfinite
@@ -20,7 +19,7 @@ from rclpy.utilities import remove_ros_args
 from sensor_msgs.msg import BatteryState
 from std_msgs.msg import Bool, String
 
-from .core.config import TRAFFIC_MODES, ConfigError, load_config
+from .core.config import ConfigError, load_config
 from .preflight_checks import (classifier_line, compare_points, discovery_ports, find_goal_file, goal_points,
                                running_mode_line, slot_line, state_rows, traffic_mode_line)
 from .robot_link import AMCL_QOS, DockStatus, HazardDetectionVector
@@ -88,7 +87,7 @@ class Observations(Node):
         except (ValueError, RecursionError):
             return
         mode = (state.get("traffic") or {}).get("mode") if isinstance(state, dict) else None
-        if mode in TRAFFIC_MODES:
+        if isinstance(mode, str):
             self.running_mode = mode
 
     def status(self, ns, msg):
@@ -168,7 +167,7 @@ class Observations(Node):
             print(f"  {result} · " + ("발행자 있음" if found else fallback))
         text = "없음" if self.bed_value is None else "이탈" if self.bed_value else "정상"
         print(f"\n/patient/bed_exit · {self.bed_samples/duration:.1f} Hz ({self.bed_samples}건, 마지막 값 {text})")
-        print(running_mode_line(self.config.traffic.mode, self.running_mode))
+        print(running_mode_line(self.running_mode))
         if DockStatus is None:
             topics = "dock_status·hazard_detection" if self.config.safety.use_hazard_topic else "dock_status"
             print(f"참고 · irobot_create_msgs 미설치로 {topics} 원본 구독 생략")
@@ -181,8 +180,6 @@ def main(args=None):
     default = get_package_share_path("part3_fleet_manager") / "config/fleet.yaml"
     parser.add_argument("--config-file", default=str(default), help="관제가 사용할 fleet.yaml")
     parser.add_argument("--goals-file", help="PART 04 goal_manager.py (기본은 워크스페이스에서 탐색)")
-    parser.add_argument("--traffic-mode", choices=TRAFFIC_MODES,
-                        help="관제를 띄울 때의 traffic_mode:= 값 (없으면 fleet.yaml의 traffic.mode)")
     options = parser.parse_args(remove_ros_args(argv)[1:])
     problems = inspect_environment()
     try:
@@ -190,11 +187,7 @@ def main(args=None):
     except ConfigError as exc:
         print(f"설정 오류 · {exc}\n실제 실행 안 됨")
         return 1
-    source = "fleet.yaml"
-    if options.traffic_mode:
-        config = replace(config, traffic=replace(config.traffic, mode=options.traffic_mode))
-        source = "실행 인자 --traffic-mode"
-    print(traffic_mode_line(config, source))
+    print(traffic_mode_line(config))
     for warning in config.exit_warnings():
         print("경고 · " + warning)
     goals = Path(options.goals_file).expanduser() if options.goals_file else find_goal_file(options.config_file)

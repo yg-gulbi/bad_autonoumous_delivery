@@ -627,3 +627,115 @@ mock 기록 `/tmp/bad_mock.db`(11/21 21:44~)에서 본 장면:
 - PART 01은 100개 통과다.
 - main(b10f669)의 PART 03 원래 시험은 새 코드에서 475개 통과다.
 - `colcon build --packages-select part3_fleet_manager part1_ui_dashboard` 성공.
+
+## 16. 4O 정리: PLAN 하나로, 구조 정리 (b98f6ca 이후)
+
+동작은 바꾸지 않고 구조만 정리했다. 시작 전 b98f6ca에 태그 `4o-dual-mode`를 달아 두 모드 코드를 남겼다. **main은 아직 LEGACY다. 이 브랜치(`feat/part3-segments`)를 합치면 main도 PLAN 하나가 된다.**
+
+### 16.1 LEGACY 제거 (D-62)
+
+지울 것은 coverage로 정했다. 태그 트리를 PLAN으로 고정하고, LEGACY를 직접 만드는 시험 5개 파일과 PART 01 `test_event_sentences.py`를 뺀 PART 01·03 시험 전체(무작위 50개 포함)를 파일별로 나눠 coverage로 돌렸다.
+
+| 파일 | PLAN에서 실행된 비율 | 처리 |
+|---|---:|---|
+| `resource_manager.py` (복도·문 자원, 방향·양보·뒤따르기 허가) | 13% (import 줄뿐) | 지움. PLAN이 쓰던 자료형 4개는 `legs.py`로 |
+| `zone_traffic.py` (자리 출입 순서) | 17% | 지움. `AccessWait`·`Departure`·`IN_MOTION`은 `collision.py`로 |
+| `route_planner.py` (자원 경로) | 다른 모듈의 `waypoints`만 | 지움. 문 경유 `waypoints`는 `plan_graph.py`로, PART 04 교차로 규칙 `uses_crossroad`는 `robot_state.py`로 |
+| `deadlock.py` (교착 카드) | 47% (매 tick 대기 그래프만, 카드는 한 번도 안 열림) | 지움 |
+| `traffic.py` `LegacyTraffic`·`create_traffic` | 0% | 지움. `Traffic` 하나 |
+| `collision.py` 목적지·출구 대기, ZONE·EXIT 카드 | 0% | 지움. 근접 정지·카드·출발 전 0.9 m는 남김 |
+
+- 설정: `traffic.mode`, `corridor.mode`·`yield_*`·`room_mode`, `resources.decision_window_s`·`aging_s`·`zone_arrival_clear_m`, `mission.return_after_cancel`(언제나 복귀), `deadlock:` 절을 지웠다. 남아 있으면 "없어진 설정입니다"로 거절한다. 2번 자리·`slot2_blocks_exit`·교차로·칸 지도가 없으면 설정 오류다(예전 형식 호환 없음).
+- 실행 인자 `traffic_mode:=`·`corridor_mode:=`(launch 3개, 노드), preflight `--traffic-mode`를 지웠다. preflight는 실행 중인 관제가 PLAN이 아니면(정리 이전 관제) 경고한다.
+- LEGACY 전용 거절: E-423(복도 안 취소), E-409(LEGACY 응급도 변경)을 지웠다. RESUME·CANCEL 재전송은 언제나 켜져 있다.
+- 화면: 복도 사용 방향 화살표, 재개 조건 체크(`resume_checks`), 복도 양보·뒤따르기 정지·교착 표시와 카드 문구, `GIVE_WAY`·`YIELDING` 상태, 판단 근거 창의 경쟁 로봇·규칙(`last_decision`), 교착 KPI를 지웠다. `/fleet/state`에서 `last_decision`·`give_way`·`follow_stop`을, KPI에서 `deadlock_count`·`deadlock_resolve_s_avg`를 뺐다. 그 전 DB의 LEGACY 이벤트는 기록 화면에 "관제 기록"으로 보인다.
+- KPI의 대기 횟수는 이제 `PLAN_WAIT`·`ZONE_OCCUPIED_HOLD`를 구간마다 한 번 센다(LEGACY `RESOURCE_HOLD`는 PLAN에서 0이었다). 관제와 기록 화면이 같은 셈(`store.Metrics`)을 쓴다.
+- 남긴 공통 안전장치: 근접 정지와 먼저 보내기·마주 봄 카드, 출발 전 0.9 m 확인, 침상 감시(켜기·끄기), 장애물·PART 06, 정지 확인·재전송, 막힘, 도크, 결정 카드, 점유 불명 해제.
+
+### 16.2 구조 정리
+
+- **로봇 상태 층** (`robot_state.py`): `RobotView`(연결됨·위치·주행 중·바퀴 도는 중·멈춤·정지 요청 중·취소 중·끊긴 채 주행·MOVE 목적지)와 `RobotStates`(끊김·복구 시각과 위치, 선 자리, MOVE를 시작한 자리). 계획 쪽은 STATE 이름이나 Move를 직접 보지 않는다. PART 04 특이 동작은 `robot_protocol.py`(유예·재전송·STATE로 대신 받기)와 이 층에만 있다.
+- **근접 정지 거리 하나** (`clearance.py`, D-63): 계획의 충돌 거리와 `collision.py`의 정지·재개 거리가 같은 함수다. 가만히 서 있던 로봇은 연결이 끊겨도 서 있는 것으로 본다. 시드 54·248 장면(자리에 선 로봇 옆 0.5 m를 지나는 중 그 로봇 연결 끊김)을 시험으로 만들었다: 태그 트리에서는 끊긴 뒤 PAUSE가 나가고, 지금은 나가지 않는다(`test_4l.py::test_passing_a_parked_robot_whose_link_drops_keeps_the_slot_distance`). 무작위 300개의 근접 정지도 7 → 0이다.
+- **충돌 종류 한 곳** (`plan_exec.py`, D-64): 엇갈림·마주침·뒤따르기를 ADG 의존마다 붙이고, "순서를 지켰다" 조건은 `ORDER_KEPT` 표 하나다(BRIEF 5.3절 4번 표). 뒤따르기 조건(달리는 중 간격만, 기다리는 중 `follow_resume_m`, 그 위치에서 기다리면 한 대 칸 확인)도 표에 있다.
+- **plan_traffic 나누기**: `plan_replan.py`(다시 계획할 때 판단·에이전트·탐색·결과), `plan_exec.py`(ADG 실행), `plan_board.py`(칸 판·UNKNOWN·연결 복구), `plan_view.py`(화면 내보내기). `plan_traffic.py`는 묶는 곳만 남았다.
+- **계획을 tick 밖에서** (`plan_runner.py`, D-65): 탐색은 계획 스레드에서 하고 결과는 다음 tick에 쓴다. 그사이 로봇은 가진 계획의 순서를 지키고 새로 출발·재개하지 않는다. 그사이 다시 계획할 일이 생기면 결과를 버리고 다시 계획한다(무작위 300개에서 8,352번, 계획 작업의 약 19%). 시험에서 0.3 s 걸리는 탐색 중에도 tick은 0.1 s 안에 끝난다(`test_4o_cleanup.py`).
+
+### 16.3 0번 기준과 비교 (`docs/part3/ui/4o-baseline.json`)
+
+같은 측정 스크립트로 태그 트리와 정리 뒤 트리를 쟀다(재현 장면은 dt 0.2 s, 12:35·12:43·21:45는 0.1 s).
+
+| 장면 (Level 3 로봇, 12:43은 A) | 대기 태그 → 정리 뒤 (s) | 도착 태그 → 정리 뒤 (s) | PLAN_WAIT / PAUSE |
+|---|---|---|---|
+| 11/20 16:05:50 | 0.2 → 0.4 | 25.2 → 25.4 | 0/0 → 0/0 |
+| 11/20 16:06:32 | 9.4 → 9.6 | 27.2 → 27.4 | 1/0 → 1/0 |
+| 11/20 16:07:09 | 0.2 → 0.4 | 21.0 → 21.2 | 0/0 → 0/0 |
+| 11/20 16:09:59 (A 6.8 s) | 0.2 → 0.4 | 25.2 → 25.4 | 0/0 → 0/0 |
+| 11/20 16:09:59 (A 9.8 s) | 0.2 → 0.4 | 25.2 → 25.4 | 0/0 → 0/0 |
+| 11/20 16:10:49 | 0.2 → 0.4 | 18.0 → 18.2 | 0/0 → 0/0 |
+| 11/21 12:35:05 | 0.2 → 0.3 | 25.1 → 25.2 | 0/0 → 0/0, 연결 끊김 0 |
+| 11/21 12:38:46 (현장 확인 뒤) | 0.2 → 0.4 | 23.8 → 24.0 | 0/0 → 0/0 |
+| 11/21 12:43:25 재개 3 s | 0.0 → 0.1 | 30.7 → 30.8 (B 40.7 → 40.8) | 0/0 → 0/0, 최소 1.05 m |
+| 11/21 12:43:25 재개 8.9 s | 0.0 → 0.1 | 30.7 → 30.8 (B 34.8 → 34.9) | 0/0 → 0/0 |
+| 11/21 12:43:25 재개 12 s | 0.0 → 0.1 | 30.7 → 30.8 (B 29.6 → 29.7) | 0/0 → 0/0 |
+| 11/21 21:45:40 뒤따르기 | 0.1 → 0.2 | 40.3 → **40.7** | 2/2 → 2/2 (A 도착까지 1/1 → 1/1) |
+
+- 모두 ±0.5 s 안이다. 늦어진 0.1~0.4 s는 계획 결과를 다음 tick에 쓰기 때문이다(한 번 다시 계획할 때마다 한 tick). 21:45 장면이 +0.4 s로 가장 크다.
+- 태그 트리 값이 `4o-baseline.json`과 0.1 s 다른 장면(12:35, 12:43)은 측정 스크립트를 다시 만들며 시작 시각 기준이 조금 바뀐 탓이다. 비교는 같은 스크립트로 잰 두 트리끼리 했다.
+
+| 무작위 시드 0~299 (프로세스 10개 동시) | 태그 (같은 스크립트) | 정리 뒤 |
+|---|---:|---:|
+| 위반 (검사 1~5, 더한 검사) | 0 | **0** |
+| 임무 | 8,677 | 8,960 |
+| 근접 정지 | 7 (시드 77·80·167·259·289) | **0** |
+| PAUSE robot_a / robot_b | 3,283 / 2,956 | **3,052 / 2,646** |
+| PLAN_WAIT robot_a / robot_b | 5,515 / 5,633 | **4,695 / 4,667** |
+| 짧은 끊김(3.0~4.6 s) 뒤 복구 / 운영자 확인 | 70 / 0 (100%) | 85 / 0 (**100%**) |
+| 계획 시간 평균 / 최대 (반영된 계획) | 2.91 / 298.4 ms | 2.80 / 213.8 ms |
+| 버린 계획 결과 | - | 8,352 |
+
+- 근접 정지·PAUSE·PLAN_WAIT 모두 같거나 적다. 짧은 끊김은 `4o-baseline.json`의 정의(883건)와 셈이 다르다(이번 스크립트는 LINK_LOST~LINK_BACK 3.0~4.6 s만 센다). 두 트리 모두 운영자 확인 0건이다.
+- 처음 300개에서 위반 2건(시드 34·173: 지나온 복도 칸이 시험 끝까지 GRANTED)이 나왔다. 다음 tick 반영이 드러낸 b98f6ca의 문제였고(D-66), 지금 위치에서는 남은 칸만 쥐게 고친 뒤 0건이다. 시험 `test_4o_cleanup.py`에 두 시드를 넣었다(`docs/troubleshooting/2026-11-22-part3-4o-passed-segment-regrant.md`).
+
+### 16.4 파일별 줄 수와 조건문 수 (PART 01·03 소스, 시험 제외)
+
+조건문 = Python `if`·조건식·`while`·`and`/`or`·컴프리헨션 `if`, JS `if`·`while`·`?:`·`&&`·`||`.
+
+| 파일 | 정리 전 (b98f6ca) 줄 / 조건 | 정리 뒤 줄 / 조건 |
+|---|---:|---:|
+| `plan_traffic.py` (1b565ba 951줄) | **1,155 / 370** | **231 / 38** |
+| `plan_replan.py` (새) | - | 352 / 115 |
+| `plan_exec.py` (새) | - | 433 / 99 |
+| `plan_board.py` (새) | - | 170 / 46 |
+| `plan_view.py` (새) | - | 73 / 15 |
+| `plan_runner.py` (새) | - | 64 / 6 |
+| `robot_state.py` (새) | - | 183 / 54 |
+| `clearance.py`, `legs.py` (새) | - | 28 / 2, 48 / 1 |
+| `resource_manager.py` | 801 / 260 | 지움 |
+| `deadlock.py` | 190 / 27 | 지움 |
+| `zone_traffic.py` | 150 / 49 | 지움 |
+| `route_planner.py` | 72 / 14 | 지움 |
+| `traffic.py` | 181 / 25 | 78 / 6 |
+| `collision.py` | 425 / 153 | 329 / 95 |
+| `config.py` | 814 / 139 | 748 / 115 |
+| `fleet_core.py` | 590 / 212 | 571 / 197 |
+| `mission.py` | 583 / 193 | 558 / 179 |
+| `schemas.py` | 425 / 102 | 395 / 91 |
+| `store.py` | 278 / 58 | 259 / 49 |
+| `ui_api.py` | 357 / 101 | 316 / 85 |
+| `app.js` | 574 / 298 | 555 / 283 |
+| `map.js` | 447 / 120 | 425 / 114 |
+| `pages/dashboard.js` | 204 / 141 | 189 / 115 |
+| **합계 (파일 46 → 50)** | **12,457 / 3,640** | **11,179 / 3,075** |
+
+- 계획 쪽(`plan_traffic`이 하던 일 + 로봇 상태 층 + 계획 스레드)만 보면 1,155줄 → 1,506줄로 늘었다. 충돌 종류 표·상태 층·스레드·문서 주석이 새로 들어갔기 때문이다. 대신 한 파일의 조건문은 줄었다(가장 큰 파일 `plan_exec.py` 99).
+
+### 16.5 시험
+
+- 지운 시험(LEGACY 규칙만 확인): `test_resource_manager.py` 25, `test_corridor_yield.py` 19, `test_field_traffic.py` 77, `test_route_planner.py` 10, `test_deadlock.py` 9개 전부. 함수 단위로 지운 것과 PLAN으로 다시 쓴 것, 그 이유는 아래 목록이다.
+  - `test_4n.py` 6개(출구·진입 반경, INBOUND·OUTBOUND, 출구 막힘), `test_4l.py` 4개(LEGACY 뒤따르기 정지, EXIT 카드), `test_4j_slots_doors.py` 4개(ZONE 카드, 방 출입 자원·RESOURCE_HOLD CROSSROAD), `test_fleet_core.py` 7개(ROOM 방식, 교착 KPI, E-423, 복도 양보 2개, 허가 순서, 자원 규칙), `test_4o_level.py`(LEGACY E-409), `test_4o_door_walk.py` 2개(LEGACY 경로·ROOM 모드).
+  - 다시 쓴 것: `test_4j_demo.py`(손으로 짠 LEGACY 시연 → kinematic mock 다섯 막), `test_4k_stop_arrive.py::test_65`(ROOM 자원 → 칸 UNKNOWN 해제), `test_config.py` 3개(옛 형식 호환 → 필수 키·없어진 키 거절), `test_4o_plan.py` 3개(모드 비교 → PLAN 하나), `test_docking.py::test_52`(도크 복귀 대기 부분), `test_4o_1120_replay.py`(LEGACY 비교 → 기준 + 0.5 s), PART 01 `test_event_sentences.py`(LEGACY 자원·교착 관리 직접 구성 → PLAN 장면), `test_4k_screen.py`·`test_history.py`·`test_ui_api.py`(칸 기준 비움 버튼, PLAN KPI, 재개 조건 없음).
+  - 미션·안전·화면·프로토콜 시험은 PLAN으로 돈다. 시험 하네스 `fleet_simulation.Simulation`은 계획 작업이 진행 중이면 같은 시각에 한 tick을 더 돌린다(`settle_plan`, 계획 시점과 무관한 시험용).
+- 새 시험: `test_4o_cleanup.py` 8개, `test_4l.py` 1개(시드 54·248 장면).
+- **찾았지만 고치지 않은 것** (정리는 동작 변경 금지, b98f6ca PLAN부터 같음): 막힘(BLOCKED) 카드에서 [다시 출발]·[되돌아가기]를 골라도 막힌 로봇이 계획에서 빠진 채 다시 계획되지 않아 움직이지 않는다. 시험 3개를 사유와 함께 `xfail(strict=True)`로 두었다(`docs/troubleshooting/2026-11-22-part3-4o-blocked-robot-not-replanned.md`). 또, 서로 0.6 m 안에서 마주 본 두 로봇에 [되돌아가기]를 고르면 계획이 경로를 찾지 못해 둘 다 제자리에 선다(`test_4n.py`가 그 동작을 확인한다).
+- PART 03 시험 615개 → 439개(통과 436, `xfail` 3), PART 01 시험 100개 모두 통과. `colcon build --symlink-install` 성공(6개 패키지).
+- 격리 mock(ROS_DOMAIN_ID=81, LOCALHOST, 발견 서버 없음)으로 관제와 화면을 띄워 로봇 A를 수술실(C)로 보냈다. 계획 경로선과 칸 띠(복도 아래쪽 → A 점유)가 움직였고, 확인 뒤 mock을 껐다.

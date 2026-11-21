@@ -131,7 +131,7 @@ def compare_points(config, part4):
     """Both slots of every zone and the crossroad, against fleet.yaml (0.05 m)."""
     warnings = compare_zones(dict(config.zones), {z: points[0] for z, points in part4["slots"].items()}, config.zone_names)
     for zone in sorted(set(config.slots) | set(part4["slots"])):
-        mine = (config.slots.get(zone) or ())[1:2]
+        mine = config.slots.get(zone, ())[1:2]
         theirs = part4["slots"].get(zone, [])[1:2]
         if not mine and not theirs:
             continue
@@ -140,33 +140,30 @@ def compare_points(config, part4):
         if far:
             suffix = "" if delta is None else f" (거리 {delta:.3f} m)"
             warnings.append(f"{config.zone_names.get(zone, zone)} 2번 자리 · 관제 {left} / PART 04 {right}{suffix}".replace("None", "없음"))
-    if part4["format"] == "SLOTS" or config.corridor.crossroad is not None:
-        far, delta = _far(config.corridor.crossroad, part4["crossroad"])
-        if far:
-            suffix = "" if delta is None else f" (거리 {delta:.3f} m)"
-            warnings.append(f"교차로 · 관제 {config.corridor.crossroad} / PART 04 {part4['crossroad']}{suffix}"
-                            .replace("None", "없음"))
+    far, delta = _far(config.corridor.crossroad, part4["crossroad"])
+    if far:
+        suffix = "" if delta is None else f" (거리 {delta:.3f} m)"
+        warnings.append(f"교차로 · 관제 {config.corridor.crossroad} / PART 04 {part4['crossroad']}{suffix}"
+                        .replace("None", "없음"))
     return warnings
 
 
-def traffic_mode_line(config, source="fleet.yaml"):
-    """One-line summary of the active traffic engine mode for preflight output. ``source`` says where the mode
-    came from: fleet.yaml, the --traffic-mode argument (as launch traffic_mode:=), or the running control room."""
-    if config.traffic.mode == "PLAN":
-        graph = config.traffic.graph
-        extra = (f"정지선 {config.traffic.stop_margin_m:g} m, 복도 칸 {graph.cell_m:g} m, "
-                 f"계획 한도 {graph.plan_limit_ms:g} ms")
-        return f"교통 판단 모드 · PLAN ({extra}) · {source}"
-    return f"교통 판단 모드 · LEGACY (복도 {config.corridor.mode}) · {source}"
+def traffic_mode_line(config):
+    """One-line summary of the traffic judgement settings for preflight output (PLAN only since the 4O 정리)."""
+    graph = config.traffic.graph
+    extra = (f"정지선 {config.traffic.stop_margin_m:g} m, 복도 칸 {graph.cell_m:g} m, "
+             f"계획 한도 {graph.plan_limit_ms:g} ms")
+    return f"교통 판단 · PLAN ({extra}) · fleet.yaml"
 
 
-def running_mode_line(expected, running):
-    """The mode the running control room publishes in /fleet/state (traffic.mode), against the one checked."""
+def running_mode_line(running):
+    """The traffic judgement the running control room publishes in /fleet/state (traffic.mode). Anything but
+    PLAN is a control room built before the 4O 정리 (e.g. main with LEGACY)."""
     if running is None:
         return "실행 중인 관제 · /fleet/state 없음 (관제 실행 전이면 정상)"
-    if running != expected:
-        return f"경고 · 실행 중인 관제는 {running}입니다. 점검한 모드 {expected}와 다릅니다 (실행 인자 traffic_mode:= 확인)"
-    return f"실행 중인 관제 · {running} (같음)"
+    if running != "PLAN":
+        return f"경고 · 실행 중인 관제는 {running}입니다. 4O 정리 이전 관제가 떠 있습니다 (다시 빌드·실행 확인)"
+    return "실행 중인 관제 · PLAN (같음)"
 
 
 def slot_line(seen):

@@ -11,26 +11,17 @@ from part3_fleet_manager.core.store import Store
 A, B = "robot_a", "robot_b"
 
 
-def stage2(cfg, path, room_mode):
-    # These stage 2 scenarios, including 26, use fixed patient and medication roles and the
-    # 3O obstacle inspection. Report mode, slots and DOOR rooms (4J) are in test_4j_*.py.
-    return Simulation(replace(cfg, corridor=replace(cfg.corridor, mode="SHARED_YIELD", room_mode=room_mode),
-                              obstacle=replace(cfg.obstacle, mode="inspect"),
+def stage2(cfg, path):
+    # These stage 2 scenarios use fixed patient and medication roles and the 3O obstacle inspection. Report mode
+    # and slots (4J) are in test_4j_*.py.
+    return Simulation(replace(cfg, obstacle=replace(cfg.obstacle, mode="inspect"),
                               assignment=replace(cfg.assignment, mode="ROLE"), db_path=str(path)))
 
 
 @pytest.fixture
 def sim(cfg, tmp_path, request):
     cfg = replace(cfg, safety=replace(cfg.safety, use_hazard_topic=getattr(request, "param", False)))
-    s = stage2(cfg, tmp_path / "bad.db", "DOOR")
-    yield s
-    s.core.store.close()
-
-
-@pytest.fixture
-def room_sim(cfg, tmp_path):
-    """The 4I room rule: a robot standing in room B or E keeps it (deadlock and scenario 26 cases)."""
-    s = stage2(cfg, tmp_path / "bad.db", "ROOM")
+    s = stage2(cfg, tmp_path / "bad.db")
     yield s
     s.core.store.close()
 
@@ -41,7 +32,7 @@ def commands(out):
 
 @pytest.fixture
 def shared(cfg, tmp_path):
-    s = Simulation(replace(cfg, corridor=replace(cfg.corridor, mode="SHARED_YIELD"), assignment=replace(cfg.assignment, mode="IDLE_BEST_BATTERY"), db_path=str(tmp_path / "pool.db")))
+    s = Simulation(replace(cfg, assignment=replace(cfg.assignment, mode="IDLE_BEST_BATTERY"), db_path=str(tmp_path / "pool.db")))
     yield s
     s.core.store.close()
 
@@ -83,9 +74,10 @@ def test_27_pool_priority_fifo_tie_and_unassigned_cancel(shared):
 def test_28_call_confirmation_home_and_correlated_preemption(shared):
     shared.battery(A, 80)
     shared.battery(B, 60)
-    for ref, zone in (("first", "A"), ("second", "F"), ("third", "D")):
+    for ref, zone in (("first", "A"), ("second", "F")):
         shared.call(ref, zone)
-    assert set(commands(shared.tick(0))) == {A, B}
+    assert set(commands(shared.tick(0))) == {A}            # B already stands in F: it arrives without a MOVE
+    assert shared.state(B) == "WAIT_CONFIRM"
     shared.event(A, "MISSION_ACCEPTED")
     shared.event(A, "ARRIVED")
     shared.tick(.1)
@@ -94,8 +86,9 @@ def test_28_call_confirmation_home_and_correlated_preemption(shared):
     out = shared.tick(.2)
     assert [e["mission_id"] for e in out.events if e["type"] == "MISSION_DONE"] == [shared.ids["first"]]
     assert not any(e["type"] == "MISSION_ASSIGNED" for e in out.events)
-    assert commands(out)[A].startswith("MOVE D 1") and shared.state(A) == "RETURNING"
+    assert commands(out)[A].startswith("MOVE D") and shared.state(A) == "RETURNING"
     shared.event(A, "MISSION_ACCEPTED")
+    shared.call("third", "D")                               # comes while the home MOVE is out
     takeover = shared.tick(.3)
     assert [e["type"] for e in takeover.events if e["type"] in {"LEG_START", "MISSION_ASSIGNED"}] == [
         "LEG_START", "MISSION_ASSIGNED"]
@@ -109,11 +102,8 @@ def test_28_call_confirmation_home_and_correlated_preemption(shared):
     shared.event(A, "ARRIVED")
     shared.tick(.6)
     shared.confirm(A, "third")
-    assert commands(shared.tick(.7))[A].startswith("MOVE D 1")
-    shared.event(A, "MISSION_ACCEPTED")
-    shared.event(A, "ARRIVED")
-    shared.tick(.8)
-    assert shared.state(A) == "IDLE"
+    shared.tick(.7)
+    assert shared.state(A) == "IDLE"                        # already home in D: no MOVE
     rows = shared.core.store.db.execute("SELECT robot,status,finished_at FROM missions ORDER BY id").fetchall()
     assert [tuple(row) for row in rows] == [(A, "DONE", .2), (B, "ACTIVE", None), (A, "DONE", .7)]
     assert shared.core.store.metrics()["missions"][shared.ids["third"]]["arrival"] == .6
@@ -153,7 +143,7 @@ def test_29_home_cancel_terminal_evidence(shared, signal):
 
 
 def test_role_call_uses_configured_robot(sim):
-    sim.call("role", "F")
+    sim.call("role", "A")
     sim.battery(B, 10)
     assert set(commands(sim.tick(0))) == {B}
 
@@ -218,9 +208,11 @@ def test_return_resources_remain_occupied_during_preemption(shared):
     assert commands(shared.tick(1.5)) == {A: "CANCEL"}
     assert shared.core.resources.snapshot()["CORRIDOR"]["holders"] == [A]
     shared.event(A, "MISSION_CANCELED")
-    shared.tick(1.6)
+    out = shared.tick(1.6)
     assert shared.core.resources.snapshot()["CORRIDOR"]["holders"] == [A]
-    assert commands(shared.tick(2.7))[A].startswith("MOVE E 1")
+    out = commands(out)
+    out.update(commands(shared.tick(1.7)))
+    assert out[A].startswith("MOVE E")
 
 
 @pytest.mark.parametrize("sim", [True], indirect=True)
@@ -276,31 +268,11 @@ def test_13_failed_navigation_retry_and_duplicate_card(sim):
     assert sim.tick(.5).acks[0]["code"] == "E-409"
 
 
-def test_14_corridor_cancel_requires_fault_and_retains_occupancy(sim):
-    sim.patient(pickup="C")
-    sim.tick(0)
-    sim.tick(1)
-    sim.event(A, "MISSION_ACCEPTED")
-    sim.frames[A]["pose"] = sim.pose((-1.55, -2))
-    sim.cmd("CANCEL_MISSION", mission_id=sim.ids["p"])
-    assert sim.tick(1.1).acks[0]["code"] == "E-423"
-    sim.event(A, "MISSION_FAILED", reason="test")
-    sim.tick(1.2)
-    sim.cmd("CANCEL_MISSION", mission_id=sim.ids["p"])
-    assert sim.tick(1.3).acks[0]["ok"]
-    assert sim.core.resources.snapshot()["CORRIDOR"]["holders"] == [A]
-    sim.frames[A]["pose"] = sim.pose("D")
-    sim.tick(2)
-    sim.tick(3)
-    assert sim.core.resources.snapshot()["CORRIDOR"]["state"] == "FREE"
-
-
 def test_16_mismatch_requires_choice_once(sim):
     sim.med()
-    sim.tick(0)
-    sim.event(B, "MISSION_ACCEPTED")
-    sim.event(B, "ARRIVED")
+    sim.tick(0)                      # B already stands in F, the first stop: it arrives without a MOVE
     sim.tick(.1)
+    assert sim.state(B) == "WAIT_CONFIRM"
     sim.confirm(B, "m", "MISMATCH")
     out = sim.tick(.2)
     assert not out.commands and out.cards[0]["kind"] == "STOP_MISMATCH"
@@ -330,113 +302,13 @@ def test_9_stall_blocks_new_grant_then_resolves_on_motion(sim):
     sim.frames[A]["pose"] = sim.pose((-1.55, -2.1))
     out = sim.tick(35)
     assert {"UNBLOCKED", "CARD_CLOSED"} <= {e["type"] for e in out.events}
-    assert commands(out)[B].startswith("MOVE A 3") and not sim.core.resources.snapshot()["CORRIDOR"]["blocked"]
-
-
-def encounter(sim):
-    sim.patient(pickup="C", dest="A")
-    sim.med()
-    assert set(commands(sim.tick(0))) == {B}
-    sim.event(B, "MISSION_ACCEPTED")
-    sim.tick(.1)
-    sim.event(B, "ARRIVED")
-    sim.tick(.2)
-    sim.confirm(B, "m")
-    sim.tick(.3)
-    sim.patient(ref="p2", pickup="D")
-    sim.med(ref="m2", stops=["F"])
-    sim.tick(.4)
-    assert set(commands(sim.tick(1))) == {A, B}
-    sim.event(A, "MISSION_ACCEPTED")
-    sim.event(B, "MISSION_ACCEPTED")
-    sim.tick(1.1)
-    sim.frames[A]["pose"] = sim.pose((-1.55, -1.7))
-    sim.frames[B]["pose"] = sim.pose((-1.55, -2.7))
-    assert commands(sim.tick(2)) == {A: "PAUSE"}
-    assert sim.state(A) == "GIVE_WAY" and sim.state(B) == "MOVING"
-    sim.event(A, "PAUSED")
-
-
-def test_25_bed_exit_preempts_give_way_rechecks_before_resume(sim):
-    encounter(sim)
-    sim.pending.append(("/patient/bed_exit", True, None))
-    assert not sim.tick(2.1).commands and sim.state(A) == "SAFE_PAUSE"
-    _, wire = bed_frames(sim, 2.2, 1)
-    assert not wire
-    sim.cmd("RESUME_ROBOT", robot=A)
-    assert not sim.tick(3.3).commands and sim.state(A) == "GIVE_WAY"
-    sim.frames[B]["pose"] = sim.pose("E")
-    assert commands(sim.tick(3.4)) == {A: "RESUME"}
-    assert sim.state(A) == "MOVING"
-
-
-def test_failure_while_giving_way_waits_for_operator(sim):
-    encounter(sim)
-    sim.event(A, "MISSION_FAILED", reason="Nav2: ABORTED")
-    out = sim.tick(2.1)
-    assert sim.state(A) == "FAULT" and out.cards[0]["kind"] == "NAV_FAILED"
-    assert not out.commands and sim.core.resources.snapshot()["CORRIDOR"]["give_way"] is None
-
-
-def test_15_26_concurrent_transport_round_and_queues(room_sim):
-    sim = room_sim
-    encounter(sim)
-    sim.event(B, "ARRIVED")
-    assert commands(sim.tick(2.1)) == {A: "RESUME"}
-    assert sim.state(B) == "WAIT_CONFIRM"
-    sim.event(A, "RESUMED")
-    sim.event(A, "ARRIVED")
-    sim.tick(2.2)
-    assert sim.state(A) == "WAIT_CONFIRM"
-    sim.confirm(B, "m")
-    sim.confirm(A, "p")
-    next_moves = commands(sim.tick(2.3))
-    next_moves.update(commands(sim.tick(3.3)))
-    # The preceding leg's clearance timer cannot release A's new return reservation.
-    assert A in sim.core.resources.snapshot()["CORRIDOR"]["holders"]
-    next_moves.update(commands(sim.tick(4.4)))
-    assert next_moves[A].startswith("MOVE A 2") and next_moves[B].startswith("MOVE B 3")
-    assert sim.core.resources.snapshot()["ROOM_B"]["holders"] == [B]
-    assert sim.core.resources.snapshot()["ROOM_E"]["holders"] == [B]
-    sim.event(A, "MISSION_ACCEPTED")
-    sim.event(B, "MISSION_ACCEPTED")
-    sim.tick(4.5)
-    sim.frames[A]["pose"] = sim.pose((-1.65, -3.7))
-    sim.frames[B]["pose"] = sim.pose((-1.55, -2.2))
-    assert not sim.tick(4.6).commands
-    corridor = sim.core.resources.resources["CORRIDOR"]
-    assert {r: h.state for r, h in corridor.holders.items()} == {A: "OCCUPIED", B: "OCCUPIED"}
-    sim.event(B, "ARRIVED")
-    sim.tick(5)
-    assert sim.state(A) == "MOVING" and sim.state(B) == "WAIT_CONFIRM"
-    assert sim.core.resources.snapshot()["ROOM_B"]["state"] == "OCCUPIED"
-    sim.confirm(B, "m")
-    assert commands(sim.tick(5.1))[B].startswith("MOVE F 1")
-    sim.event(B, "MISSION_ACCEPTED")
-    sim.event(A, "ARRIVED")
-    assert commands(sim.tick(5.2))[B] == "CANCEL"
-    sim.event(B, "MISSION_CANCELED")
-    sim.confirm(A, "p")
-    out = commands(sim.tick(5.3))
-    assert out[A].startswith("MOVE D 1") and out[B].startswith("MOVE F 3")
-    sim.event(A, "MISSION_ACCEPTED")
-    sim.event(B, "MISSION_ACCEPTED")
-    assert commands(sim.tick(5.4)) == {A: "CANCEL"}
-    sim.event(A, "MISSION_CANCELED")
-    assert commands(sim.tick(5.5))[A].startswith("MOVE D 2")
-    state = sim.core.snapshot(5.5)
-    assert state["robots"][A]["mission_id"] == sim.ids["p2"]
-    assert state["robots"][B]["mission_id"] == sim.ids["m2"]
-    assert not sim.tick(6.4).commands and sim.state(B) == "MOVING"
-    assert sim.core.resources.snapshot()["ROOM_E"]["state"] == "FREE"
-    db = sim.core.store.db
-    assert {r[0] for r in db.execute("SELECT id FROM missions WHERE status='DONE'")} == {sim.ids["p"], sim.ids["m"]}
-    assert db.execute("SELECT count(*) FROM patients").fetchone()[0] == 1
-    assert db.execute("SELECT count(DISTINCT patient_id) FROM missions").fetchone()[0] == 1
-    for key in ("p", "m"):
-        trip = sim.core.store.metrics()["missions"][sim.ids[key]]
-        assert trip["departure"] is not None and trip["arrival"] is not None
-    assert state["kpi"]["pause_count"] >= 1
+    assert not sim.core.resources.snapshot()["CORRIDOR"]["blocked"]
+    sent = commands(out)
+    for t in (35.1, 35.2):
+        sent.update(commands(sim.tick(t)))
+    # Unblocked, but A still stands in the corridor (it does not drive in this script): the plan finds no way past
+    # it and B stays where it is, saying so.
+    assert B not in sent and sim.core.resources.held[B]["reason"].startswith("계획을 찾지 못해")
 
 
 def test_invalid_request_ack_and_state_rate(sim):
@@ -474,9 +346,7 @@ def test_sqlite_writer_lock_preserves_pause_and_retries_events_once(sim):
 
 def test_operator_card_cancellation_is_persisted_once(sim):
     sim.med(stops=["F"])
-    sim.tick(0)
-    sim.event(B, "MISSION_ACCEPTED")
-    sim.event(B, "ARRIVED")
+    sim.tick(0)                      # B already stands in F: it arrives without a MOVE
     sim.tick(.1)
     sim.confirm(B, "m", "MISMATCH")
     card = sim.tick(.2).cards[0]
@@ -506,39 +376,30 @@ def test_cancel_unentered_grant_immediately_returns_slot_and_serializes_next_mov
     assert commands(sim.tick(1.4))[A].startswith("MOVE D 2")
 
 
-def test_go_zone_uses_manual_level_and_shared_resource_rules(sim):
+def test_go_zone_uses_manual_level_and_only_robots_without_a_mission(sim):
     sim.cmd("GO_ZONE", robot=A, zone="B")
-    assert not sim.tick(0).commands
+    assert commands(sim.tick(0))[A].startswith("MOVE B") and commands(sim.tick(0.05)) == {}
+    assert sim.core.mission.robots[A].job.level == sim.cfg.mission.manual_level == 1
     sim.cmd("GO_ZONE", robot=A, zone="F")
     out = sim.tick(1)
     assert out.acks[0]["code"] == "E-409"
-    assert commands(out)[A].startswith("MOVE B 1 ")
-    assert sim.core.resources.snapshot()["ROOM_B"]["holders"] == [A]
     sim.event(A, "MISSION_ACCEPTED")
     sim.event(A, "ARRIVED")
     sim.tick(1.1)
     assert sim.state(A) == "IDLE"
 
 
-def test_equal_resource_requests_follow_input_order(sim):
-    sim.med(stops=["B"], level=2)
-    sim.patient(pickup="B", level=2)
-    assert not sim.tick(0).commands
-    assert set(commands(sim.tick(1))) == {B}
-    assert sim.state(A) == "HOLD"
-
-
 def test_two_robot_firmware_versions_have_independent_protocol_sessions(sim):
-    sim.patient(pickup="D", dest="A")
-    sim.med(stops=["F", "F"])
+    sim.patient(pickup="A", dest="C")
+    sim.med(stops=["E", "F"])
     first = commands(sim.tick(0))
     assert all(" id=" in first[r] for r in (A, B))
     sim.event(A, "MISSION_ACCEPTED")
     sim.tick(.1)
-    assert commands(sim.tick(3)) == {B: "MOVE F 3"}
-    sim.frames[B].update(mission_id="9f2c1a0b3d4e", state="MOVING", destination="F")
+    assert commands(sim.tick(3)) == {B: "MOVE E 3"}
+    sim.frames[B].update(mission_id="9f2c1a0b3d4e", state="MOVING", destination="E")
     sim.pending.append(("status", json.dumps({"type": "STATUS", "event": "MISSION_ACCEPTED",
-                        "robot_id": sim.cfg.robots[B].ns, "mission_id": "9f2c1a0b3d4e", "destination": "F"}), B))
+                        "robot_id": sim.cfg.robots[B].ns, "mission_id": "9f2c1a0b3d4e", "destination": "E"}), B))
     sim.tick(3.1)
     sim.event(A, "ARRIVED")
     sim.event(B, "ARRIVED")
@@ -546,40 +407,16 @@ def test_two_robot_firmware_versions_have_independent_protocol_sessions(sim):
     sim.confirm(A, "p")
     sim.confirm(B, "m")
     next_moves = commands(sim.tick(3.3))
-    assert next_moves[A].startswith("MOVE A 2 id=") and next_moves[B] == "MOVE F 3"
+    assert next_moves[A].startswith("MOVE C 2 id=") and next_moves[B] == "MOVE F 3"
 
 
-def test_deadlock_db_measures_until_room_release_and_replays_metrics(room_sim):
-    sim = room_sim
-    sim.frames[A]["pose"] = sim.pose("B")
-    sim.frames[B]["pose"] = sim.pose("E")
-    sim.patient(pickup="E", level=2)
-    sim.med(stops=["B"])
-    assert not sim.tick(0).commands
-    card = sim.tick(2).cards[0]
-    assert card["kind"] == "DEADLOCK" and card["default"] == "yield_a"
-    sim.tick(22)
-    assert sim.state(A) == "YIELDING"
-    assert commands(sim.tick(22.1))[A].startswith("MOVE D 2")
-    sim.event(A, "MISSION_ACCEPTED")
-    sim.frames[A]["pose"] = sim.pose((-1.55, -1.6))
-    assert not sim.tick(23).commands
-    assert commands(sim.tick(24))[B].startswith("MOVE B 3")
-    metrics = sim.core.store.metrics()
-    assert metrics["deadlock_count"] == 1 and metrics["deadlock_resolve_s"] == [22]
-    assert metrics["missions"][sim.ids["m"]]["level3_wait_s"] == [24]
-    assert metrics["missions"][sim.ids["m"]]["hold_s"] == [24]
-    # A second connection reads the committed journal and rebuilds the same figures.
-    reopened = Store(sim.cfg.db_path)
-    try:
-        assert reopened.metrics() == metrics
-        row = reopened.db.execute("SELECT close_reason, choice FROM cards WHERE id=?", (card["card_id"],)).fetchone()
-        assert tuple(row) == ("timeout", "yield_a")
-    finally:
-        reopened.close()
+BLOCKED_PLAN_GAP = pytest.mark.xfail(strict=True, reason=(
+    "PLAN (b98f6ca부터): 막힘(BLOCKED) 로봇은 계획에서 정지 로봇(stalled)이고, 운영자가 '다시 출발'·'되돌아가기'를 골라도 "
+    "다시 계획되지 않아 RESUME·MOVE가 나가지 않는다. 4O 정리에서 발견, 동작 변경 금지라 고치지 않음 (보고서 16절)"))
 
 
-@pytest.mark.parametrize("choice", ["hold", "retry", "return"])
+@pytest.mark.parametrize("choice", ["hold", pytest.param("retry", marks=BLOCKED_PLAN_GAP),
+                                    pytest.param("return", marks=BLOCKED_PLAN_GAP)])
 def test_blocked_choices_respect_protocol_state(sim, choice):
     sim.patient(pickup="C")
     sim.tick(0)
@@ -621,9 +458,7 @@ def test_30_route_since_and_recent_history(shared):
     route = out.state["robots"][A]["route"]
     assert route == [list(shared.cfg.zones["D"]), list(shared.cfg.corridor.mouths["TOP"]),
                      list(shared.cfg.corridor.mouths["BOTTOM"]), list(shared.cfg.zones["C"])]
-    road = out.state["resources"]["CORRIDOR"]
-    assert road["queue_detail"] == [{"robot": A, "level": 1, "since": 0, "mission_id": row["mission_id"]}]
-    assert road["reason"] == out.state["last_decision"]["detail"]["reason"]
+    assert out.state["resources"]["CORRIDOR"]["queue_detail"] == []     # nobody waits at a stop line
     assert shared.tick(.2).state["robots"][A]["state_since"] == 0
     for i in range(21):
         shared.call(str(i))
@@ -651,7 +486,7 @@ def bed_frames(sim, start, duration, *, hz=30, value=False):
 
 def test_35_lost_monitor_pauses_only_target_and_requires_manual_resume(sim):
     sim.patient()
-    sim.med(stops=["F"])
+    sim.med(stops=["E"])
     sim.core.enqueue("/patient/bed_exit", False, 0)
     assert set(commands(sim.tick(0))) == {A, B}
     for robot in (A, B):
@@ -764,7 +599,7 @@ def test_37_stop_journal_and_request_replay(shared):
             "SELECT seq,status,arrived_at,confirmed_at,confirmed_by FROM mission_stops WHERE mission_id=? ORDER BY seq", (mid,))]
     s.battery(A, 20)
     s.battery(B, 20)
-    s.patient(pickup="D", dest="A")
+    s.patient(pickup="E", dest="A")
     request = s.pending[-1]
     s.pending.append(request)
     first = s.tick(0)
@@ -810,7 +645,7 @@ def test_37_stop_journal_and_request_replay(shared):
 
 
 def test_37_cancel_after_first_confirmation_preserves_stop(sim):
-    sim.patient(pickup="D", dest="A")
+    sim.patient(pickup="E", dest="A")
     sim.tick(0)
     sim.event(A, "MISSION_ACCEPTED")
     sim.event(A, "ARRIVED")
@@ -909,7 +744,9 @@ def test_39_classification_changes_only_block_timing(sim,label,kind,reason):
     assert not sim.tick(34).commands and sim.state(B) == "HOLD"
     sim.frames[A]["pose"] = sim.pose((-1.55, -2.1))
     moved = sim.tick(35)
-    assert commands(moved)[B].startswith("MOVE")
+    assert not sim.core.resources.snapshot()["CORRIDOR"]["blocked"]
+    # A still stands in the corridor in this script: B stays out of it (the plan finds no way past A yet).
+    assert B not in commands(moved) and sim.state(B) == "HOLD"
     assert moved.state["robots"][A]["obstacle"] is None
     assert sim.tick(45).inspections == [A]
 

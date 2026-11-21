@@ -5,7 +5,7 @@ import json
 import pytest
 
 from fleet_simulation import Simulation
-from part3_fleet_manager.core.resource_manager import MotionRequest
+from part3_fleet_manager.core.legs import MotionRequest
 from part3_fleet_manager.core.robot_protocol import RobotProtocol
 from part3_fleet_manager.preflight_checks import state_rows
 
@@ -127,12 +127,7 @@ def test_52_dock_home_requires_correlated_physical_completion(cfg, completion):
         sim.event(B, "MISSION_ACCEPTED")
         sim.event(B, "ARRIVED")
         sim.tick(2)
-        # A now stands in F beside robot2's measured dock, while robot2 waits at A to return.
-        sim.frames[A]["pose"] = sim.pose("F")
         sim.confirm(B, "c")
-        sim.tick(2.1)
-        assert sim.core.collision.zone[B].peer == A
-        sim.frames[A]["pose"] = sim.pose("D")
         assert sim.tick(5).commands == [MotionRequest(B, "DOCK")]
         meta = sim.core.snapshot(5)["robots"][B]
         assert meta["leg"]["to"] == "F" and meta["route"][-1] == [-0.330, -5.110]

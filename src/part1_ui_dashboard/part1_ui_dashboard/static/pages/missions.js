@@ -64,8 +64,8 @@ renderers.missions = () => {
         (active && r.state === "WAIT_CONFIRM" ? confirmBox(r,m.robot,live) : "") +
         '<div class="buttons">' + (active && r.state === "FAULT" ? btn("다시 시도","retry",m.robot) : "") +
         (active || live?.status === "QUEUED" ? btn("임무 취소","cancel",m.mission_id,"danger") : "") + "</div>" +
-        // 4O: Level change of a waiting or running mission. PLAN plans again with it; LEGACY has no button.
-        (S?.traffic?.mode === "PLAN" && (active || live?.status === "QUEUED")
+        // 4O: Level change of a waiting or running mission; the plan is made again with it.
+        ((active || live?.status === "QUEUED")
             ? `<div class="buttons level-change"><select id="set-level-value" aria-label="${h(m.mission_id)} 응급도">${levelOptions(live.level)}</select>` +
               btn("응급도 변경","set-level",m.mission_id) + "</div>" : "") +
         "<h3>정류장</h3>" + (stored ? stopTable(stored.stops) : recordNotice(result)) + "<h3>작업 기록</h3>" +

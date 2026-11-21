@@ -15,10 +15,6 @@ def start(context):
     fleet = str(Path(value("config_file")).expanduser())
     db = str(Path(value("db_path")).expanduser())
     manager = {"config_file": fleet, "db_path": db}
-    if value("corridor_mode"):
-        manager["corridor_mode"] = value("corridor_mode")
-    if value("traffic_mode"):
-        manager["traffic_mode"] = value("traffic_mode")
     required = value("bed_monitor_require_at_start")
     if required:
         if required.lower() not in ("true", "false"):
@@ -44,8 +40,6 @@ def generate_launch_description():
         DeclareLaunchArgument("config_file", default_value=str(fleet)),
         DeclareLaunchArgument("map_yaml", default_value="", description="PART 04 common occupancy map"),
         DeclareLaunchArgument("db_path", default_value=str(Path.home() / ".bad/bad_real.db")),
-        DeclareLaunchArgument("corridor_mode", default_value="", description="Default from fleet.yaml"),
-        DeclareLaunchArgument("traffic_mode", default_value="", description="LEGACY or PLAN (empty uses fleet.yaml)"),
         DeclareLaunchArgument("bed_monitor_require_at_start", default_value="", description="Default from fleet.yaml"),
         DeclareLaunchArgument("bed_monitor_enabled", default_value="",
                               description="false: bed monitor off (no bed-exit stop); empty uses fleet.yaml"),

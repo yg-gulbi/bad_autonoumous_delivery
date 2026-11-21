@@ -62,8 +62,8 @@ class Robot:
 
 
 class MissionManager:
-    def __init__(self, config, resources, deadlock, decisions, safety, links, next_id, *, traffic=None):
-        self.config, self.resources, self.deadlock = config, resources, deadlock
+    def __init__(self, config, resources, decisions, safety, links, next_id, *, traffic):
+        self.config, self.resources = config, resources
         self.decisions, self.safety, self.links = decisions, safety, links
         self.traffic = traffic
         self.next_id = next_id
@@ -107,11 +107,9 @@ class MissionManager:
     def _interruptible_return(self, robot):
         r = self.robots[robot]
         started = r.state in ("SENDING", "MOVING") or (r.state == "HOLD" and robot in self.resources.pending)
-        # PLAN: a retreat to the previous zone (target_override) is not a home leg a new mission may cut into.
-        retreat = r.target_override and self.config.traffic.mode == "PLAN"
+        # A retreat to the previous zone (target_override) is not a home leg a new mission may cut into.
         return (r.returning and self.config.mission.return_interruptible and not r.canceling and not r.replacing
-                and not retreat and started and robot not in self.deadlock.yielding
-                and self.resources.robot_state(robot, r.state) != "GIVE_WAY")
+                and not r.target_override and started)
 
     def _assign(self, now):
         if not self.unassigned:
@@ -185,28 +183,17 @@ class MissionManager:
             self.ready[robot] = None
 
     def _at_home_slot(self, robot):
-        """Standing in a home-zone slot: in PLAN, a slot reached by a completed MOVE (a robot stopped on the
-        way inside a slot circle is not parked there); otherwise inside a slot region (zone_occupied_m)."""
+        """Standing in a home-zone slot reached by a completed MOVE (a robot stopped on the way inside a slot
+        circle is not parked there)."""
         home = self.config.robots[robot].start_zone
         if self.config.robots[robot].return_to == "DOCK" and self.links[robot].docked:
             return True     # still on its dock (e.g. cancelled while undocking): PART 04 ignores DOCK while docked
-        parked = self.traffic.parked_zone(robot) if self.traffic is not None else None
-        if parked is not None:
-            return parked == home
-        pose = self.links[robot].pose
-        if pose is None:
-            return self.robots[robot].zone == home
-        best = min(((dist(pose, point), zone, idx) for zone in self.config.zones
-                    for idx, point in enumerate(self.config.slots.get(zone) or (self.config.zones[zone],), 1)),
-                   default=None)
-        return bool(best and best[0] <= self.config.resources.zone_occupied_m and best[1] == home)
+        return self.traffic.parked_zone(robot) == home
 
     def _maybe_return_after_cancel(self, robot, now):
         r = self.robots[robot]
         job_id = r.return_after_cancel_id
         r.return_after_cancel_id = None
-        if not self.config.effective_return_after_cancel:
-            return
         if r.queue or r.job is not None or r.canceling or self._at_home_slot(robot):
             return
         home = self.config.robots[robot].start_zone
@@ -275,11 +262,8 @@ class MissionManager:
         r = self.robots[leg.robot]
         job = r.job
         job.sends += 1
-        destination = "DOCK" if leg.dock_path else leg.destination
-        slot = None if leg.dock_path else self.resources.slot_of(leg)
-        if self.config.traffic.mode == "PLAN":
-            # The plan may stop the robot at another slot first to make way (D-45), also on the way to a dock.
-            destination, slot = self.resources.move_target(leg)
+        # The plan may stop the robot at another slot first to make way (D-45), also on the way to a dock.
+        destination, slot = self.resources.move_target(leg)
         self.links[leg.robot].go(f"L-{job.id.removeprefix('M-')}-{job.sends}", destination,
                                  self.resources.level_of(leg), slot=slot)
         r.state, r.resume_due = "SENDING", False
@@ -379,9 +363,6 @@ class MissionManager:
             r.zone, r.slot = leg.destination, slot
             link.forget()
             self.decisions.resolve(robot, now)
-            if self.deadlock.arrived(leg, now):
-                r.state = "HOLD"
-                return
             self.finish_leg(robot, now)
             if r.target_override:
                 r.target_override = None
@@ -439,8 +420,7 @@ class MissionManager:
             if not r.job or r.job.id != mission_id:
                 continue
             link = self.links[robot]
-            # LEGACY: E-423 inside the corridor (unchanged). PLAN: a cancel is a new goal (D-46).
-            self.traffic.cancel_policy(robot, r.state, link, now)
+            # A cancel is a new goal; the plan takes the robot out (D-46).
             canceled_id = r.job.id
             if link.move and (link.state not in DONE or (link.move.attempts and not link.move.remote_id
                                                         and r.state != "FAULT")):
@@ -455,8 +435,7 @@ class MissionManager:
         raise ValueError("E-409: 취소할 임무가 없습니다.")
 
     def set_level(self, mission_id, level, now, *, by=None):
-        """Change the Level of a waiting or running mission. PLAN plans again with it; LEGACY refuses."""
-        self.traffic.level_policy()
+        """Change the Level of a waiting or running mission; the plan is made again with it (D-48)."""
         job = next((j for j in self.unassigned if j.id == mission_id), None)
         robot = None
         for name, r in self.robots.items():
@@ -497,8 +476,6 @@ class MissionManager:
         self.links[robot].forget()
         r.fault_stop, r.replacing, r.state = False, False, "HOLD"
         self.ready[robot] = None
-        if r.target_override is None:
-            self.deadlock.retry_detour(robot, now)
 
     def confirm(self, robot, mission_id, result, now, *, by=None):
         r = self.robots[robot]
@@ -533,9 +510,8 @@ class MissionManager:
                 and not r.fault_stop and not r.canceling and not r.replacing):
             self.fault(robot, "NAV_FAILED", "도크에서 출발 준비 시간이 초과됐습니다.", now)
             link.cancel()
-        giving_way = self.resources.robot_state(robot, r.state) == "GIVE_WAY"
-        local_stop = bool(self.safety.causes[robot]) or r.fault_stop or giving_way
-        stop = local_stop or traffic_stop or self.resources.following(robot) or corridor_command == "PAUSE"
+        local_stop = bool(self.safety.causes[robot]) or r.fault_stop
+        stop = local_stop or traffic_stop or corridor_command == "PAUSE"
         if stop and link.state in PREPARING | {"DOCKING"} and not link.cancel_wait and move and not move.finished:
             # PART 04 accepts PAUSE only while navigating. CANCEL also stops the Create3 action.
             if not r.fault_stop:
@@ -560,9 +536,8 @@ class MissionManager:
             self._stop_event(robot, "STOP_UNCONFIRMED", now, attempt=link.pause_sends - 1)
         if command == "PAUSE":
             r.resume_due = True
-        if (command == "RESUME" and not link.resend_controls) or (
-                not stop and link.state == "MOVING" and link.control_sent != "PAUSE"):
-            # PLAN resends an unanswered RESUME (robot_protocol), so the intent stays until STATE is MOVING.
+        if not stop and link.state == "MOVING" and link.control_sent != "PAUSE":
+            # An unanswered RESUME is sent again (robot_protocol), so the intent stays until STATE is MOVING.
             r.resume_due = False
         if error:
             self.fault(robot, "MOVE_REJECTED", "이동 명령 수락을 확인하지 못했습니다.", now, diagnostic=error)

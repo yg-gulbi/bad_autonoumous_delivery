@@ -51,11 +51,9 @@ def number(value):
 
 
 class RobotProtocol:
-    def __init__(self, ns: str, policy: RobotLinkCfg, *, resend_controls: bool = False):
+    def __init__(self, ns: str, policy: RobotLinkCfg):
         self.ns = ns
         self.policy = policy
-        # 4O PLAN: an unanswered RESUME or CANCEL is sent again after accept_timeout_s (LEGACY sends once).
-        self.resend_controls = resend_controls
         self.tagged = {"always": True, "never": False, "auto": None}[policy.request_id]
         self.move: Move | None = None
         self.state = None
@@ -394,9 +392,9 @@ class RobotProtocol:
         if not self.online(now):
             return None, None
         if self.cancel_wait:
+            # An unanswered RESUME or CANCEL is sent again after accept_timeout_s (4O).
             cancel_retry = (
-                self.resend_controls
-                and self.control_sent == "CANCEL"
+                self.control_sent == "CANCEL"
                 and self.cancel_sent_at is not None
                 and self.state_at > self.cancel_sent_at
                 and now - self.cancel_sent_at >= self.policy.accept_timeout_s
@@ -408,14 +406,13 @@ class RobotProtocol:
             return None, None
         move = self.move
         if stop:
-            if self.resend_controls and self.control_sent == "RESUME":
+            if self.control_sent == "RESUME":
                 self.control_sent = None
                 self.resume_sent_at = None
             return self._pause(now), None
         self.pause_sends, self.stop_unconfirmed = 0, False
         resume_retry = (
-            self.resend_controls
-            and self.control_sent == "RESUME"
+            self.control_sent == "RESUME"
             and self.resume_sent_at is not None
             and self.state_at > self.resume_sent_at
             and now - self.resume_sent_at >= self.policy.accept_timeout_s

@@ -16,9 +16,7 @@ def stop_item(kind, seq, stop):
 class Metrics:
     def __init__(self):
         self.trips, self.waiting, self.holds = {}, {}, {}
-        self.cards, self.yields = {}, {}
-        self.hold_count = self.pause_count = self.deadlock_count = 0
-        self.resolved = []
+        self.hold_count = self.pause_count = 0
 
     def trip(self, mid):
         return self.trips.setdefault(mid, {"departure": None, "arrival": None, "hold_s": [], "level3_wait_s": []})
@@ -26,43 +24,27 @@ class Metrics:
     def observe(self, kind, ts, robot, mid, detail):
         key = robot, mid
         trip = self.trip(mid) if mid else None
-        if kind in {"RESOURCE_REQUEST", "RESOURCE_GRANT", "MISSION_CANCELED", "MISSION_DONE"}:
+        if kind in {"RESOURCE_REQUEST", "LEG_START", "MISSION_CANCELED", "MISSION_DONE"}:
             since = self.holds.pop(key, None)
             if since is not None and trip:
                 trip["hold_s"].append(ts - since)
             req = self.waiting.pop(key, None)
             if kind == "RESOURCE_REQUEST":
                 self.waiting[key] = ts, detail.get("level")
-            elif kind == "RESOURCE_GRANT" and trip and req and req[1] == 3:
+            elif kind == "LEG_START" and trip and req and req[1] == 3:
                 trip["level3_wait_s"].append(ts - req[0])
-        elif kind in {"RESOURCE_HOLD", "ZONE_OCCUPIED_HOLD"} and key not in self.holds:
+        if kind in {"PLAN_WAIT", "ZONE_OCCUPIED_HOLD"} and key not in self.holds:
             self.holds[key] = ts
             self.hold_count += 1
         elif kind == "LEG_START" and trip and trip["departure"] is None:
             trip["departure"] = ts
         elif kind == "ARRIVE" and trip:
             trip["arrival"] = ts
-        elif kind == "PAUSE" or kind == "CORRIDOR_YIELD_START":
+        elif kind == "PAUSE":
             self.pause_count += 1
-        elif kind == "DEADLOCK_DETECTED":
-            self.deadlock_count += 1
-            self.cards[detail["card_id"]] = ts
-        elif kind == "CARD_CLOSED":
-            started = self.cards.pop(detail["card_id"], None)
-            if started is not None and detail.get("closed_by", detail["reason"]) == "resolved":
-                self.resolved.append(ts - started)
-        elif kind == "YIELD_START":
-            self.yields[robot, detail["source_room"]] = detail["detected_at"]
-        elif kind == "RESOURCE_RELEASE":
-            for resource in detail["resources"]:
-                started = self.yields.pop((robot, resource), None)
-                if started is not None:
-                    self.resolved.append(ts - started)
 
     def kpi(self):
-        return {"hold_count": self.hold_count, "deadlock_count": self.deadlock_count,
-                "deadlock_resolve_s_avg": sum(self.resolved) / len(self.resolved) if self.resolved else None,
-                "pause_count": self.pause_count}
+        return {"hold_count": self.hold_count, "pause_count": self.pause_count}
 
 
 class Store:
@@ -271,8 +253,7 @@ class Store:
             self.stats.observe(event["type"], event["ts"], event["robot"], event["mission_id"], event["detail"])
 
     def metrics(self):
-        return {**self.stats.kpi(), "missions": deepcopy(self.stats.trips),
-                "deadlock_resolve_s": list(self.stats.resolved)}
+        return {**self.stats.kpi(), "missions": deepcopy(self.stats.trips)}
 
     def close(self):
         self.db.close()

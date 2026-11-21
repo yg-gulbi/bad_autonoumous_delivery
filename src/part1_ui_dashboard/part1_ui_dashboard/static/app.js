@@ -30,23 +30,17 @@ const pill = (text, color = "") => `<span class="badge ${color}">${h(text)}</spa
 const btn = (text, act, id = "", cls = "", disabled = false) => `<button type="button" class="${cls}" data-act="${act}" data-id="${h(id)}" ${disabled ? "disabled" : ""}>${h(text)}</button>`;
 const zoneOptions = initial => Object.keys(cfg.zones).map(z => `<option value="${z}" ${z === initial ? "selected" : ""}>${h(zn(z))}</option>`).join("");
 const levelOptions = (initial = 1) => [1, 2, 3].map(l => `<option value="${l}" ${l === Number(initial) ? "selected" : ""}>Level ${l}</option>`).join("");
-const waitStates = new Set(["HOLD", "GIVE_WAY", "YIELDING", "WAIT_CONFIRM"]);
+const waitStates = new Set(["HOLD", "WAIT_CONFIRM"]);
 const stateColor = state => ["SAFE_PAUSE", "FAULT", "OFFLINE"].includes(state) ? "red" : waitStates.has(state) ? "amber" : "";
 function displayState(id, robot) {
-    const state = robot.state, road = S?.resources.CORRIDOR;
+    const state = robot.state;
     // 4K (D-32): a stop cause is a request until the robot's STATE reports standing still.
     if (state === "SAFE_PAUSE") return stopConfirmed(robot) ? ["정지 확인", "red"] : ["정지 요청 중(확인 전)", "amber"];
     if (state === "HOLD" && robot.proximity) return [robot.proximity.head_on ? "마주 봄" : "가까움 정지", "amber"];
-    if (state === "HOLD" && robot.zone_wait) {
-        const access = {NEAR_START:"출발 대기", INBOUND:"도착 로봇 대기", OUTBOUND:"출구 양보"};
-        return [access[robot.zone_wait.rule] || (robot.zone_wait.exit ? "출구 막힘 대기" : "목적지 대기"), "amber"];
-    }
-    if (S?.traffic?.mode === "PLAN") {
-        const plan = S.traffic.plans?.[id];
-        if (plan?.wait) return ["순서 대기", "amber"];
-        if (plan?.aside && ["MOVING","SENDING","HOLD","IDLE"].includes(state)) return ["길 비켜 주는 중", "amber"];
-    }
-    if (state === "HOLD" && road?.follow_stop?.rear === id) return ["후행 대기", "amber"];
+    if (state === "HOLD" && robot.zone_wait) return ["출발 대기", "amber"];   // 0.9 m departure check (NEAR_START)
+    const plan = S?.traffic?.plans?.[id];
+    if (plan?.wait) return ["순서 대기", "amber"];
+    if (plan?.aside && ["MOVING","SENDING","HOLD","IDLE"].includes(state)) return ["길 비켜 주는 중", "amber"];
     if (["MOVING","SENDING","RETURNING"].includes(state)) {
         if (["UNDOCKING","LOCALIZING"].includes(robot.part4_state)) return ["도크에서 출발 준비", ""];
         if (robot.part4_state === "DOCKING") return ["도킹 중", ""];
@@ -199,7 +193,7 @@ function situation(fresh) {
     };
     if (!fresh) add(4, "관제 연결 끊김", "관제 상태 수신을 기다립니다.");
     if (!S) return issues;
-    const mon = S.bed_exit.monitor, corridor = S.resources.CORRIDOR;
+    const mon = S.bed_exit.monitor;
     if (monitorOff(mon)) add(1, "침상 감시 꺼짐", "침상 이탈·감시 끊김으로 로봇을 세우지 않습니다. 위쪽 스위치로 다시 켭니다.", false, "attention");
     else if (S.bed_exit.value) add(4, "침상 이탈 감지", "침상 카메라로 환자 상태를 확인하세요.");
     if (!monitorOff(mon) && (monitorLocked(mon) || mon?.bypass)) add(4, monitorBadge()[0], mon?.bypass ? "담당자가 감시 없이 운행을 선택했습니다." : "웹캠 신호와 대상 로봇을 확인하세요.");
@@ -211,40 +205,30 @@ function situation(fresh) {
     }
     const manual = units.filter(([,r]) => (r.pause_causes || [r.paused_by]).includes("MANUAL"));
     if (manual.length) stopLine(3, manual.length === units.length ? "운영자 전체 정지" : "운영자 안전 정지", manual.map(([,r]) => r));
-    const follow = corridor.follow_stop;
-    if (follow) add(1, follow.rule === "GAP" ? "앞 로봇과 간격 유지 → " + robotName(follow.rear) + " 대기" : "앞 로봇 정지 → " + robotName(follow.rear) + " 대기",
-        follow.rule === "GAP" ? "재개 간격 확보 또는 선행 로봇 이탈 대기" : robotName(follow.front) + " 주행 재개 또는 복도 이탈 대기", true);
-    if ([...cards.values()].some(c => c.kind === "DEADLOCK")) add(1, "교착 해소 대기", "결정 카드에서 양보할 로봇을 선택하세요.", true);
     for (const [key,res] of Object.entries(S.resources)) {
         if (res.state === "UNKNOWN") add(1, resLabel(key) + " 점유 불명", "현장에서 점유 상태를 확인하세요.", true);
         if (res.blocked) add(1, "이동 경로 막힘", res.blocked_robots.map(robotName).join(" · "), true);
     }
-    const stopWaits = S.traffic?.mode === "PLAN" ? (S.traffic.stop_line_waits || {}) : {};
-    if (S.traffic?.mode === "PLAN") {
-        // D-45: the plan's order (ADG) says which robot passes first; the wait reason names the place.
-        for (const [id, sw] of Object.entries(stopWaits)) {
-            add(2, robotName(id) + " · " + sw.reason, sw.paused ? "정지선에서 정지 · 앞 로봇이 지나가면 재개" : "출발 보류 · 앞 로봇이 지나가면 출발", true);
-        }
-        for (const [id, plan] of Object.entries(S.traffic.plans || {})) {
-            if (plan.aside && !stopWaits[id]) add(1, robotName(id) + " 길 비켜 주는 중", (plan.labels || []).slice(-1)[0] || "", true);
-        }
-        for (const [segKey, seg] of Object.entries(S.traffic.segments || {})) {
-            if (seg.state === "UNKNOWN" && /^[A-F][12]$/.test(segKey)) {
-                add(1, resLabel(segKey) + " 점유 불명", "현장에서 점유 상태를 확인하세요.", true);
-            }
+    const stopWaits = S.traffic?.stop_line_waits || {};
+    // D-45: the plan's order (ADG) says which robot passes first; the wait reason names the place.
+    for (const [id, sw] of Object.entries(stopWaits)) {
+        add(2, robotName(id) + " · " + sw.reason, sw.paused ? "정지선에서 정지 · 앞 로봇이 지나가면 재개" : "출발 보류 · 앞 로봇이 지나가면 출발", true);
+    }
+    for (const [id, plan] of Object.entries(S.traffic?.plans || {})) {
+        if (plan.aside && !stopWaits[id]) add(1, robotName(id) + " 길 비켜 주는 중", (plan.labels || []).slice(-1)[0] || "", true);
+    }
+    for (const [segKey, seg] of Object.entries(S.traffic?.segments || {})) {
+        if (seg.state === "UNKNOWN" && /^[A-F][12]$/.test(segKey)) {
+            add(1, resLabel(segKey) + " 점유 불명", "현장에서 점유 상태를 확인하세요.", true);
         }
     }
     for (const [id,r] of units) {
         if (r.proximity) add(2, r.proximity.reason, r.label + " 정지 중",
             {type:"PROXIMITY_STOP", ts:r.proximity.since, robot:id, detail:r.proximity});
-        if (r.zone_wait) {
-            const peer = S.robots[r.zone_wait.peer];
-            const accessHint = {NEAR_START:"재개 간격이 확보되면 출발합니다.", INBOUND:"상대가 자리에 서면 출구를 다시 확인합니다.", OUTBOUND:"상대가 구역을 벗어나면 재개합니다."}[r.zone_wait.rule];
-            add(1, r.zone_wait.reason, accessHint || (r.zone_wait.exit ? "2번 자리가 비면 출발합니다." : peer?.state === "IDLE"
-                ? peer.label + "을 다른 구역으로 보내면 출발합니다" : "목적지가 비면 자동으로 출발합니다."),
+        if (r.zone_wait)        // the 0.9 m departure check (collision.NearStartGuard)
+            add(1, r.zone_wait.reason, "재개 간격이 확보되면 출발합니다.",
                 {type:"ZONE_OCCUPIED_HOLD", ts:r.zone_wait.since, robot:id, detail:{...r.zone_wait, destination:r.zone_wait.zone}});
-        }
-        if (!r.proximity && !r.zone_wait && !stopWaits[id] && id !== follow?.rear && ["HOLD", "GIVE_WAY", "YIELDING"].includes(r.state))
+        if (!r.proximity && !r.zone_wait && !stopWaits[id] && r.state === "HOLD")
             add(1, cfg.states[r.state], r.wait_reason || r.label, true);
         if (r.state === "MOVING" && r.stall_s > 0 && !Object.values(S.resources).some(res => res.blocked_robots?.includes(id)))
             add(1, "일시 정체", r.label + " · " + Math.floor(r.stall_s) + "초 동안 이동 없음", true);
@@ -329,14 +313,11 @@ function renderTop() {
         }
     }
 }
-const cardNames = { BED_MONITOR_LOST: "침상 감시 끊김", BLOCKED: "경로 막힘", DEADLOCK: "교착 해소", NAV_FAILED: "주행 실패", MOVE_REJECTED: "이동 거절", STOP_MISMATCH: "확인 불일치", STOP_UNCONFIRMED: "정지 미확인" };
+const cardNames = { BED_MONITOR_LOST: "침상 감시 끊김", BLOCKED: "경로 막힘", NAV_FAILED: "주행 실패", MOVE_REJECTED: "이동 거절", STOP_MISMATCH: "확인 불일치", STOP_UNCONFIRMED: "정지 미확인" };
 
 const choiceDescriptions = {
     BLOCKED: {retry:"앞이 비었는지 확인한 뒤 원래 경로로 다시 갑니다.", return:"이전 구역으로 돌아갑니다.", hold:"현재 위치에서 멈춘 채 운영자의 재시도를 기다립니다."},
-    ZONE: {retry:"목적지 점유를 다시 확인하고 비었을 때 출발합니다.", return:"이전 구역을 목적지로 바꾸고 출발 조건을 확인합니다.", hold:"현재 작업을 보류하고 운영자의 재시도를 기다립니다."},
-    EXIT: {retry:"2번 자리가 비었는지 다시 확인합니다.", depart:"이 출발에 한해 출구 대기를 풉니다. 접근하면 근접 규칙으로 정지합니다.", hold:"현재 작업을 보류합니다."},
     PROXIMITY: {self_first:"상대가 서 있고 거리가 줄지 않는 동안 이 로봇이 먼저 갑니다.", retry:"두 로봇의 거리를 다시 확인합니다. 재개 간격이 확보되면 출발합니다.", return:"현재 구간을 취소하고 이전 구역으로 돌아갈 조건을 확인합니다.", hold:"이 로봇의 임무를 보류합니다.", peer_first:"이 로봇이 멈춘 동안 이동할 수 있는 상대 로봇을 먼저 보냅니다."},
-    DEADLOCK: {yield_a:"침상형 이송 로봇이 대피 구역으로 이동합니다.", yield_b:"약품 운송 로봇이 대피 구역으로 이동합니다."},
     BED_MONITOR_LOST: {hold:"감시 신호를 확인할 때까지 정지를 유지합니다.", bypass:"운영자 확인으로 침상 감시 없이 운행을 허용합니다."},
     NAV_FAILED: {retry:"같은 목적지로 다시 출발합니다.", return:"이전 구역으로 돌아갑니다.", cancel:"현재 작업을 취소합니다."},
     MOVE_REJECTED: {retry:"같은 이동 명령을 다시 보냅니다.", cancel:"현재 작업을 취소합니다."},

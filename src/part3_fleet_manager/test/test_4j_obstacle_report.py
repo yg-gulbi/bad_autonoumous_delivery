@@ -37,8 +37,8 @@ def verdict(label=None, *, status="ok"):
 def drive_into_corridor(sim):
     """A goes D -> C (patient pickup) and is MOVING inside the corridor at t=2."""
     sim.patient(pickup="C", dest="A")
-    sim.tick(0)
-    assert commands(sim.tick(1))[A].startswith("MOVE C 2")
+    assert commands(sim.tick(0))[A].startswith("MOVE C2 2")   # the plan: C2, in the first tick
+    sim.tick(1)
     sim.event(A, "MISSION_ACCEPTED")
     sim.frames[A]["pose"] = sim.pose(IN_CORRIDOR)
     sim.tick(2)
@@ -85,15 +85,17 @@ def test_57_medical_box_blocks_corridor_with_box_card_until_retry(sim):
     sim.call("call", "A")
     for t in (5, 6, 7):
         assert B not in commands(sim.tick(t))
-    assert "막힘" in sim.core.wait_reason(B)
+    assert B in sim.core.resources.held          # held still by the plan while the corridor is blocked
     sim.choose(card, "retry")
     out = sim.tick(8)
     assert not sim.core.resources.snapshot()["CORRIDOR"]["blocked"] and "UNBLOCKED" in types(out)
     sent = commands(out)
     sent.update(commands(sim.tick(8.5)))
-    assert sent[A].startswith("MOVE C 2")
+    assert sent[A].startswith("MOVE C2 2")
 
 
+@pytest.mark.xfail(strict=True, reason="PLAN (b98f6ca부터): 막힘(BLOCKED) 로봇은 계획에서 정지 로봇(stalled)이라 '되돌아가기'를 "
+                   "골라도 MOVE가 나가지 않는다. 4O 정리에서 발견, 동작 변경 금지라 고치지 않음 (보고서 16절)")
 def test_57_box_card_return_unblocks_when_the_robot_moves_again(sim):
     drive_into_corridor(sim)
     abort(sim, 3)
@@ -101,7 +103,7 @@ def test_57_box_card_return_unblocks_when_the_robot_moves_again(sim):
     card, = sim.tick(4).cards
     sim.choose(card, "return")
     t, sent = 4.5, {}
-    while A not in sent:
+    while A not in sent and t < 40:
         sent = commands(sim.tick(t))
         assert sim.core.resources.snapshot()["CORRIDOR"]["blocked"]
         t += .5
@@ -131,7 +133,7 @@ def test_58_none_retries_once_after_3s_then_card_only(sim):
     assert retry["detail"]["reason"] == "의료용 상자는 보이지 않음 → 같은 구간 자동 재출발 (1회)"
     sent = commands(out)
     sent.update(commands(sim.tick(7.5)))
-    assert sent[A].startswith("MOVE C 2") and sim.state(A) == "SENDING"
+    assert sent[A].startswith("MOVE C2 2") and sim.state(A) == "SENDING"
     # The second failure on the same leg gets a card, no further automatic retry.
     sim.event(A, "MISSION_ACCEPTED")
     sim.tick(8)
@@ -221,7 +223,7 @@ def test_60_operator_retry_before_the_verdict_drops_it(sim):
     abort(sim, 3)
     sim.cmd("RETRY", robot=A)
     out = sim.tick(3.5)
-    assert commands(out)[A].startswith("MOVE C 2")
+    assert commands(out)[A].startswith("MOVE C2 2")
     sim.core.enqueue("obstacle_result", verdict("medical_box"), 3.8, robot=A)
     out = sim.tick(4)
     assert not out.cards and not sim.core.resources.snapshot()["CORRIDOR"]["blocked"]

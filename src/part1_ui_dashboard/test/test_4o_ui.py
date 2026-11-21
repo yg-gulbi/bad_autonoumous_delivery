@@ -82,7 +82,7 @@ def test_static_assets_include_4o_plan_hooks():
     app = (static / "app.js").read_text(encoding="utf-8")
     assert "길 비켜 주는 중" in app and "canceling_exit" not in app and "SEGMENTS" not in app
     map_js = (static / "map.js").read_text(encoding="utf-8")
-    assert "CORRIDOR_TOP" in map_js and "traffic.plans" in map_js
+    assert "CORRIDOR_TOP" in map_js and "traffic?.plans" in map_js
     dash = (static / "pages/dashboard.js").read_text(encoding="utf-8")
     assert "plan.wait" in dash and "SEGMENTS" not in dash
 
@@ -130,8 +130,8 @@ def test_static_assets_include_level_controls():
     map_js = (static / "map.js").read_text(encoding="utf-8")
     assert "map-go-level" in map_js
     missions = (static / "pages/missions.js").read_text(encoding="utf-8")
-    # The Level change button only in PLAN (LEGACY refuses SET_LEVEL).
-    assert 'command("SET_LEVEL"' in missions and 'S?.traffic?.mode === "PLAN"' in missions
+    # The Level change button for a waiting or running mission (the plan is made again with it).
+    assert 'command("SET_LEVEL"' in missions and "traffic?.mode" not in missions
 
 
 def test_bed_monitor_switch_command():

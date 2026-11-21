@@ -1,6 +1,6 @@
 """Stage 4O follow-up: quick send (GO_ZONE) with a Level, and the Level change of a mission (SET_LEVEL).
 
-PLAN plans again with the new Level (nothing else changes); LEGACY refuses SET_LEVEL.
+The plan is made again with the new Level (nothing else changes).
 """
 import pytest
 
@@ -22,9 +22,8 @@ def _ack(acks, ref):
     return next(a for a in acks if a["ref"] == ref)
 
 
-@pytest.mark.parametrize("mode", ["PLAN", "LEGACY"])
-def test_quick_send_carries_the_chosen_level_and_defaults_to_manual_level(cfg, mode):
-    sim = KinematicSim(cfg, mode=mode)
+def test_quick_send_carries_the_chosen_level_and_defaults_to_manual_level(cfg):
+    sim = KinematicSim(cfg)
     try:
         sim.cmd("GO_ZONE", robot=A, zone="C", level=3)
         sim.cmd("GO_ZONE", robot=B, zone="E")
@@ -61,7 +60,7 @@ def test_level_fields_in_the_operator_command(fields, ok):
 
 
 def test_plan_level_change_of_a_running_mission_only_plans_again(cfg):
-    sim = KinematicSim(cfg, mode="PLAN")
+    sim = KinematicSim(cfg)
     try:
         ref = sim.submit_med(("E", "B"), level=1)
         _run(sim, 3.0)
@@ -89,7 +88,7 @@ def test_plan_level_change_of_a_running_mission_only_plans_again(cfg):
 
 
 def test_plan_level_change_of_a_waiting_mission_and_refusals(cfg):
-    sim = KinematicSim(cfg, mode="PLAN")
+    sim = KinematicSim(cfg)
     try:
         first = sim.submit_med(("E", "B"), level=1)
         second = sim.submit_call("D", level=1)                  # waits in robot_b's queue
@@ -104,19 +103,5 @@ def test_plan_level_change_of_a_waiting_mission_and_refusals(cfg):
         assert _ack(acks, same)["ok"]                            # nothing to change: no record
         assert [e["mission_id"] for e in sim.all_events if e["type"] == "LEVEL_CHANGE"] == [waiting]
         assert _ack(acks, unknown)["code"] == "E-409"
-    finally:
-        sim.close()
-
-
-def test_legacy_refuses_the_level_change(cfg):
-    sim = KinematicSim(cfg, mode="LEGACY")
-    try:
-        ref = sim.submit_med(("E", "B"), level=1)
-        _run(sim, 2.0)
-        cid = sim.cmd("SET_LEVEL", mission_id=sim.ids[ref], level=3)
-        ack = _ack(_run(sim, 0.4), cid)
-        assert not ack["ok"] and ack["code"] == "E-409" and "LEGACY" in ack["message"]
-        assert sim.core.mission.robots[B].job.level == 1
-        assert not any(e["type"] == "LEVEL_CHANGE" for e in sim.all_events)
     finally:
         sim.close()

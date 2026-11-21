@@ -13,7 +13,7 @@ import json
 
 from kinematic_mock import KinematicSim
 from part3_fleet_manager.core.plan_traffic import PlanLeg, RobotPlan
-from part3_fleet_manager.core.resource_manager import Leg
+from part3_fleet_manager.core.legs import Leg
 from part3_fleet_manager.core.robot_protocol import DONE
 
 A, B = "robot_a", "robot_b"
@@ -24,27 +24,26 @@ def dock_config(cfg):
 
 
 def test_cancel_while_undocking_keeps_the_robot_home_on_its_dock(cfg):
-    for mode in ("PLAN", "LEGACY"):
-        sim = KinematicSim(dock_config(cfg), mode=mode, docked={B})
-        try:
-            ref = sim.submit_call("E", level=2)
-            while sim.now < 10 and sim.robots[B].state != "UNDOCKING":
-                sim.step(0.2)
-            assert sim.robots[B].state == "UNDOCKING"
-            sim.cancel(sim.ids[ref])
-            canceled_at = sim.now
-            sim.run_until(sim.now + 30.0)
-            bot, unit = sim.robots[B], sim.core.mission.robots[B]
-            assert bot.docked and bot.state in DONE
-            assert unit.state == "IDLE" and unit.job is None
-            assert not [c for t, r, c in sim.all_commands if r == B and t > canceled_at and c == "DOCK"]
-            assert not any(e["type"] in ("FAULT", "MOVE_REJECTED") for e in sim.all_events)
-        finally:
-            sim.close()
+    sim = KinematicSim(dock_config(cfg), docked={B})
+    try:
+        ref = sim.submit_call("E", level=2)
+        while sim.now < 10 and sim.robots[B].state != "UNDOCKING":
+            sim.step(0.2)
+        assert sim.robots[B].state == "UNDOCKING"
+        sim.cancel(sim.ids[ref])
+        canceled_at = sim.now
+        sim.run_until(sim.now + 30.0)
+        bot, unit = sim.robots[B], sim.core.mission.robots[B]
+        assert bot.docked and bot.state in DONE
+        assert unit.state == "IDLE" and unit.job is None
+        assert not [c for t, r, c in sim.all_commands if r == B and t > canceled_at and c == "DOCK"]
+        assert not any(e["type"] in ("FAULT", "MOVE_REJECTED") for e in sim.all_events)
+    finally:
+        sim.close()
 
 
 def test_plan_dock_leg_goes_to_its_aside_slot_first(cfg):
-    sim = KinematicSim(dock_config(cfg), mode="PLAN", docked={B})
+    sim = KinematicSim(dock_config(cfg), docked={B})
     try:
         pm = sim.core.resources
         unit = cfg.robots[B]
@@ -59,7 +58,7 @@ def test_plan_dock_leg_goes_to_its_aside_slot_first(cfg):
 
 
 def test_plan_aside_arrival_without_a_plan_after_a_link_loss(cfg):
-    sim = KinematicSim(cfg, mode="PLAN")
+    sim = KinematicSim(cfg)
     try:
         pm, link = sim.core.resources, sim.core.links[B]
         leg = Leg(B, "F", 1, sim.now, "M-0001", False, "MED_ROUND")
@@ -77,14 +76,14 @@ def test_plan_aside_arrival_without_a_plan_after_a_link_loss(cfg):
 
 
 def test_plan_slot_member_without_a_plan_is_only_the_move_ends(cfg):
-    sim = KinematicSim(cfg, mode="PLAN")
+    sim = KinematicSim(cfg)
     try:
         pm, link = sim.core.resources, sim.core.links[B]
         link.go("L-0001-1", "D", 1, slot=2)
         link.move.attempts = 1                                               # sent, not answered yet
         pm.plans.pop(B, None)
         pm.departed_from[B] = "E1"
-        assert pm._moving(B)
+        assert pm.robots.view(B).driving
         assert pm._slot_member(B, "D2") and pm._slot_member(B, "E1")
         assert not pm._slot_member(B, "A2")
     finally:
@@ -92,7 +91,7 @@ def test_plan_slot_member_without_a_plan_is_only_the_move_ends(cfg):
 
 
 def test_plan_link_lost_while_driving_holds_the_rest_of_the_move(cfg):
-    sim = KinematicSim(cfg, mode="PLAN")
+    sim = KinematicSim(cfg)
     try:
         sim.cmd("GO_ZONE", robot=A, zone="C", level=2)
         while sim.now < 30 and not (sim.robots[A].state == "MOVING" and sim.robots[A].pose[1] < -0.8):
@@ -125,7 +124,7 @@ def test_cancel_of_a_mission_that_ended_meanwhile_is_confirmed_by_the_next_state
     """A CANCEL for the running MOVE (here an aside move, while a new MOVE waits unsent) is lost in a link drop and
     that MOVE ends meanwhile. PART 04 ignores a CANCEL with nothing running, so the first STATE after the CANCEL
     showing that mission COMPLETE stands for the confirmation (before: CANCEL resent forever, missions stuck)."""
-    sim = KinematicSim(cfg, mode="PLAN")
+    sim = KinematicSim(cfg)
     try:
         link, ns = sim.core.links[A], cfg.robots[A].ns
         t = sim.now + 1.0

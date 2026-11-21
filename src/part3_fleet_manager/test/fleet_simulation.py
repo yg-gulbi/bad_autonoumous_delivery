@@ -7,7 +7,15 @@ from part3_fleet_manager.core.fleet_core import FleetCore
 
 
 class Simulation:
-    def __init__(self, cfg, *, require_at_start=False, slots=False):
+    """Scripted PART 04 frames around the real FleetCore tick.
+
+    ``settle_plan`` (default): when a tick hands the plan's search to plan_runner, the next tick comes right away at
+    the same time and the two outputs are returned as one. The plan's result is used one tick later (plan_runner);
+    these tests are about missions, safety, cards and the protocol, not about when a plan comes in (the kinematic
+    mock tests keep every tick)."""
+
+    def __init__(self, cfg, *, require_at_start=False, slots=False, settle_plan=True):
+        self.settle_plan = settle_plan
         # The simulator normally runs without a webcam, just like fleet_mock.launch.py.
         monitor = replace(cfg.safety.bed_monitor, require_at_start=require_at_start)
         cfg = replace(cfg, safety=replace(cfg.safety, bed_monitor=monitor))
@@ -37,6 +45,12 @@ class Simulation:
             self.core.enqueue(topic, payload, now, robot=robot)
         self.pending.clear()
         out = self.core.tick(now)
+        if self.settle_plan and self.core.resources.runner.busy:
+            more = self.core.tick(now)
+            for name in ("inspections", "commands", "events", "cards", "acks"):
+                getattr(out, name).extend(getattr(more, name))
+            out.state = more.state or out.state
+            out.storage_error = more.storage_error or out.storage_error
         for c in out.commands:
             if c.command.startswith("MOVE "):
                 self.last[c.robot] = c.command

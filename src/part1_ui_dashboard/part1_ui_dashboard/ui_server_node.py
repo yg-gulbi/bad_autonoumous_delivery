@@ -66,7 +66,7 @@ class UIServer(Node):
             for name, seg in seg_map.segments.items()
             if not seg.is_shared
         }
-        self.track = None
+
         map_path = Path(self.map_yaml).expanduser()
         if not map_path.is_absolute():
             roots = [Path.cwd(), *Path.cwd().parents, *Path(fleet_path).resolve().parents, *Path(__file__).resolve().parents]
@@ -79,7 +79,7 @@ class UIServer(Node):
         self.geometry.update(names=self.names, robot_names=self.robot_names,
                              segments=self.segments, segment_labels=self.segment_labels,
                              event_labels={t: text.format(robot="", zone="정류장", resource="구간", kind="임무").strip(" ·")
-                                           for t, text in ui_api.EVENTS.items()}, event_types=sorted(ui_api.EVENTS), states=ui_api.STATES, kinds=ui_api.KINDS, rules=ui_api.RULES,
+                                           for t, text in ui_api.EVENTS.items()}, event_types=sorted(ui_api.EVENTS), states=ui_api.STATES, kinds=ui_api.KINDS,
                              dev_tools=self.testing, mode=self.mode, demo=self.demo, ack_timeout_s=options["ack_timeout_s"])
         self.outputs = {topic: self.create_publisher(String, topic, 10)
                         for topic in ("/ui/mission_req", "/ui/operator_cmd", "/ui/decision")}
@@ -117,10 +117,6 @@ class UIServer(Node):
                     data["fake_bed_mode"] = self.bed_mode
                 data["demo"] = self.detected_demo
                 data["summary"] = ui_api.summary(data)
-                self.track, checks = ui_api.resume_checks(data, self.track)
-                data["resume_track"], data["resume_checks"] = self.track, checks
-                if checks and all(checks):
-                    self.track = None
             elif kind == "event":
                 card = self.feed.cards.get(data["detail"].get("card_id"))
                 data = ui_api.present_event(data, self.names, self.robot_names, card, self.segment_labels)

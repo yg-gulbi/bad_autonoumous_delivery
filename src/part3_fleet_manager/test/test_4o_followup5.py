@@ -19,7 +19,7 @@ def _follow_scene(cfg, on_tick=None):
     """11/21 21:45:31~21:46:02 (mock record /tmp/bad_mock.db): robot_a (Level 1) D1 -> C2 is in the upper corridor
     when robot_b (Level 3) at A2 is sent to C; robot_b follows robot_a down the corridor. Returns the sim, the time
     robot_b was sent, robot_a's arrival time and the smallest distance until then."""
-    sim = KinematicSim(cfg, mode="PLAN", poses={A: cfg.slot_point("D", 1), B: cfg.slot_point("A", 2)})
+    sim = KinematicSim(cfg, poses={A: cfg.slot_point("D", 1), B: cfg.slot_point("A", 2)})
     sim.run_until(1.0)
     sim.cmd("GO_ZONE", robot=A, zone="C", level=1)
     top = sim.core.resources.segments["CORRIDOR_TOP"].spec
@@ -169,7 +169,7 @@ def test_waiting_mission_cancelled_in_the_tick_the_cancel_is_confirmed_still_sen
     """robot_b's running mission is cancelled in the corridor; in the tick its CANCEL is confirmed the next waiting
     mission is cancelled too. The return home after a cancel (PLAN) was skipped because a mission still waited:
     robot_b stayed in the corridor holding it. Now it goes home once the queue is empty."""
-    sim = KinematicSim(cfg, mode="PLAN")
+    sim = KinematicSim(cfg)
     try:
         running = sim.submit_call("A", level=1)
         waiting = sim.submit_call("D", level=1)

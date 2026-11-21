@@ -19,7 +19,7 @@ def test_two_robots_paused_at_e1_and_e2_both_leaving_room_e_get_a_plan(cfg):
     apart). Before, a PAUSED robot had to drive through the whole piece it stood in: the two pieces came within
     0.36 m, so neither had a plan ("계획을 찾지 못해 제자리 대기") and both waited for ever. Now each may wait where
     it stopped: robot_b goes out first (0.69 m from robot_a at the room point), then robot_a."""
-    sim = KinematicSim(cfg, mode="PLAN", poses={A: cfg.slot_point("E", 1), B: cfg.slot_point("E", 2)})
+    sim = KinematicSim(cfg, poses={A: cfg.slot_point("E", 1), B: cfg.slot_point("E", 2)})
     try:
         sim.run_until(1.0)
         sim.cmd("GO_ZONE", robot=A, zone="B", level=2)

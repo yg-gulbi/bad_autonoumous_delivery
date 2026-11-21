@@ -88,7 +88,7 @@ def decision(form):
     return schemas.parse_decision(schemas.dumps(data))
 
 STATES = {"IDLE": "대기", "RETURNING": "복귀 중", "SENDING": "출발 준비", "MOVING": "이동 중",
-          "HOLD": "진입 전 대기", "GIVE_WAY": "복도 양보 중", "YIELDING": "교착 양보 중",
+          "HOLD": "진입 전 대기",
           "WAIT_CONFIRM": "확인 대기", "SAFE_PAUSE": "안전 정지", "FAULT": "장애", "OFFLINE": "연결 끊김"}
 KINDS = {"PATIENT_TRANSPORT": "환자 이송", "MED_ROUND": "약품 운송", "CALL": "로봇 호출"}
 EVENTS = {
@@ -99,17 +99,13 @@ EVENTS = {
     "MISSION_CREATED": "{kind} 요청 등록", "MISSION_ASSIGNED": "{robot} 임무 배정", "MISSION_REJECTED": "임무 등록 거절",
     "LEG_START": "{robot} 구간 출발", "ARRIVE": "{robot} · {zone} 도착", "CONFIRM_STEP": "{zone} 확인 결과",
     "MISSION_DONE": "{robot} 임무 완료", "MISSION_CANCELED": "임무 취소", "RESOURCE_REQUEST": "{robot} 통행 요청",
-    "RESOURCE_GRANT": "{robot} {resource} 진입 허가", "RESOURCE_HOLD": "{robot} 진입 전 대기",
     "PLAN_UPDATE": "두 로봇 다시 계획", "PLAN_WAIT": "{robot} 계획 순서 대기", "PLAN_YIELD_MOVE": "{robot} 길 비켜 주는 중",
     "LEVEL_CHANGE": "응급도 변경",
     "RESOURCE_ENTER": "{robot} {resource} 진입 확인", "RESOURCE_RELEASE": "{robot} {resource} 통과 완료",
     "RESOURCE_UNKNOWN": "{resource} 점유 확인 불가", "RESOURCE_CLEAR_CONFIRM": "{resource} 현장 확인",
-    "DEADLOCK_DETECTED": "교착 감지", "YIELD_START": "{robot} 교착 양보 시작", "YIELD_DONE": "{robot} 교착 양보 완료",
-    "ZONE_OCCUPIED_HOLD": "{robot} 목적지 대기", "ZONE_OCCUPIED_CLEAR": "{robot} 목적지 대기 해제",
+    "ZONE_OCCUPIED_HOLD": "{robot} 출발 대기", "ZONE_OCCUPIED_CLEAR": "{robot} 출발 대기 해제",
     "PROXIMITY_STOP": "{robot} 근접 정지", "PROXIMITY_CLEAR": "{robot} 근접 정지 해제",
-    "CORRIDOR_FOLLOW_STOP": "{robot} 뒤따르기 정지", "CORRIDOR_FOLLOW_CLEAR": "{robot} 뒤따르기 대기 해제",
-    "CORRIDOR_YIELD_START": "{robot} 복도 양보 시작", "CORRIDOR_YIELD_END": "{robot} 복도 양보 종료",
-    "CORRIDOR_YIELD_TIMEOUT": "{robot} 복도 양보 시간 초과", "STALL_SHORT": "{robot} 일시 정체",
+    "STALL_SHORT": "{robot} 일시 정체",
     "STALL_LONG": "{robot} 장기 정체", "BLOCKED": "이동 경로 막힘", "UNBLOCKED": "이동 경로 막힘 해제",
     "PAUSE": "{robot} 정지", "RESUME": "{robot} 재개", "RESUME_REJECTED": "재개 요청 거절",
     "BED_MONITOR_WARN": "침상 감시 경고", "BED_MONITOR_LOST": "침상 감시 끊김",
@@ -120,11 +116,6 @@ EVENTS = {
     "CARD_OPEN": "운영자 결정 요청", "CARD_CLOSED": "결정 카드 종료", "LINK_LOST": "{robot} 연결 끊김",
     "LINK_BACK": "{robot} 연결 정상", "WARNING": "관제 주의",
 }
-RULES = {"GAP": "앞 로봇과 간격 유지", "FOLLOW": "앞 로봇 정지", "ONLY": "단독 요청", "LEVEL": "높은 응급도 우선", "REQUEST_TIME": "먼저 요청한 쪽",
-         "SUBMIT_ORDER": "먼저 접수한 쪽", "ENTRY_ORDER": "복도에 나중에 들어온 쪽이 양보",
-         "INSIDE": "칸 안·정지선 안 우선", "ORDER": "설정에 적힌 로봇 순서", "PREEMPT": "응급도 선점",
-         "ROBOT_ID": "동점 로봇 식별자 순", "CAPACITY": "자원 정원 도달", "DIRECTION": "복도 반대 방향 통행 중", "NO_PREEMPT": "이미 허가된 로봇은 회수하지 않음",
-         "BLOCKED": "막힘 해제 대기", "UNKNOWN": "점유 확인 대기", "CROSSROAD": "교차로는 한 대씩"}
 
 
 DEFAULT_ROBOT_NAMES = {"robot_a": "침상형 이송 로봇", "robot_b": "약품 운송 로봇"}
@@ -188,8 +179,6 @@ def present_event(event, names, robots=None, card=None, segment_labels=None):
         options = (card or {}).get("options", [])
         label = d.get("choice_label") or next((o["label"] for o in options if o["id"] == choice), None)
         label = label or next((options[choice] for options in OPTIONS.values() if choice in options), None)
-        if not label and isinstance(choice, str) and choice.startswith("yield_"):
-            label = robots.get("robot_" + choice[6:], "로봇") + " 양보"
         reason = close_reason(reason, label)
     elif kind == "MISSION_DONE" and reason == "DONE":
         reason = DONE_REASON
@@ -221,40 +210,10 @@ def summary(state):
     active = [m for m in state["missions"] if m["status"] == "ACTIVE"]
     urgent = [m for m in state["missions"] if m["level"] == 3 and m["status"] in ("ACTIVE", "QUEUED")]
     blocked = {r for res in state["resources"].values() if res["blocked"] for r in res.get("blocked_robots", res["holders"])}
-    waits = [r for r, data in robots.items() if r in blocked or data["state"] in ("HOLD", "GIVE_WAY", "SAFE_PAUSE", "BLOCKED")]
+    waits = [r for r, data in robots.items() if r in blocked or data["state"] in ("HOLD", "SAFE_PAUSE", "BLOCKED")]
     return {"online": sum(r["link_ok"] for r in robots.values()), "active": len(active),
             "kinds": {k: sum(m["type"] == k for m in active) for k in KINDS},
             "urgent": [m["mission_id"] for m in urgent], "waiting": waits}
-
-
-def resume_checks(state, track=None):
-    road = state["resources"]["CORRIDOR"]
-    pair = road["give_way"]
-    follow = road.get("follow_stop")
-    if follow:
-        track = {"kind": "follow", "first": follow["front"], "next": follow["rear"]}
-    elif pair:
-        track = {"kind": "yield", "first": pair["to"], "next": pair["yielding"]}
-    elif road.get("queue_detail", road.get("queue")):
-        nxt = road.get("queue_detail", road.get("queue"))[0]["robot"]
-        first = next((r for r in road["holders"] if r != nxt), None)
-        if first or not track or track["next"] != nxt:
-            track = {"kind": "queue", "first": first, "next": nxt}
-    if not track:
-        return None, []
-    first, nxt = track["first"], track["next"]
-    moving = state["robots"].get(nxt, {}).get("state") == "MOVING"
-    if track["kind"] in ("follow", "yield"):
-        robot = state["robots"].get(nxt, {})
-        released = not (follow if track["kind"] == "follow" else pair)
-        values = [released, robot.get("link_ok", False),
-                  not robot.get("pause_causes") and not robot.get("proximity") and not robot.get("zone_wait") and robot.get("state") not in ("FAULT", "OFFLINE", "SAFE_PAUSE"),
-                  released and moving]
-    else:
-        values = [first is not None and first not in road["holders"], road["state"] == "FREE" or nxt in road["holders"],
-                  nxt in road["holders"], moving and nxt in road["holders"]]
-    return track, values
-
 
 
 def map_meta(path, rotation="ccw90", deskew="auto", padding_m=.25, floor_plan=None):

@@ -5,6 +5,7 @@
 - 이 문서: 화면 페이지와 버튼, 화면 세부(지도·문장·시험 도구), DB 테이블, 버튼을 눌렀을 때의 처리 순서.
 - 관제의 판단 규칙과 토픽 형식은 [`BRIEF.md`](BRIEF.md)에 있다. 테스트 목록도 BRIEF 9장에 같이 있다.
 - 디자인 원본은 `docs/part3/ui/design-v2/`, 실제 화면 캡처는 `docs/part3/ui/screens/`에 있다.
+- 4O 정리(11/22, D-62): 교통 판단은 PLAN 하나다. LEGACY 전용 화면(복도 사용 방향, 재개 조건 체크, 복도 양보·교착 표시, 교착 KPI)과 `/fleet/state`의 `last_decision`·`give_way`·`follow_stop`은 없앴다. main은 아직 LEGACY이고 `feat/part3-segments`를 합치면 main도 PLAN 하나가 된다.
 
 ---
 
@@ -77,7 +78,7 @@ flowchart TB
 
 명령 줄 왼쪽에 관제 연결(최근 2초 수신), 연결 로봇 수, 침상 감시, 진행 작업 수, 배정 대기 수를 표시한다. 침상 감시 배지 옆에 **침상 감시 스위치**가 있다(4O 후속 3, D-51). 끌 때는 확인 창("침상 감시를 끄면 침상 이탈과 감시 끊김으로 로봇을 세우지 않고 경보도 띄우지 않습니다…")을 거쳐 `BED_MONITOR_SET {enabled: false}`를 보내고, 켤 때는 바로 `{enabled: true}`를 보낸다. 꺼져 있으면 배지는 "침상 감시 꺼짐"(주황)이고, 상황 줄에는 침상 이탈·감시 끊김 대신 "침상 감시 꺼짐"만 나온다. 꺼지는 순간 열려 있던 침상 이탈·감시 끊김 경보 창은 닫힌다. 오른쪽 [이송 요청]은 등록 창을 연다. [안전 정지 요청]은 즉시 `PAUSE_ALL`을 보내며 안전 정지 중에는 같은 자리에 [전체 재개]가 나타난다. 침상 이탈·감시 끊김 중에는 재개 금지 이유를 표시한다.
 
-상황 줄은 모든 페이지에 있다. 평상시 회색으로 “이상 없음”을 표시한다. 양보·대기·교착·점유 불명은 주황색으로 표시하고 [판단 근거]를 연결한다. 침상 이탈·범퍼·침상 감시 끊김·로봇 또는 관제 연결 끊김은 빨강이다. 표시 순서는 빨강 경보 → 운영자 전체·개별 정지 → 주황 근접 정지 → 주황 대기·양보·목적지 대기다. 가장 높은 상황과 “외 n건”을 표시한다. 전체 정지 한 번은 한 건으로 센다. 경보 창에서 [확인]을 눌러도 실제 조건이 풀릴 때까지 상황 줄을 유지한다.
+상황 줄은 모든 페이지에 있다. 평상시 회색으로 “이상 없음”을 표시한다. 계획 순서 대기·길 비켜 주기·점유 불명은 주황색으로 표시하고 [판단 근거]를 연결한다. 침상 이탈·범퍼·침상 감시 끊김·로봇 또는 관제 연결 끊김은 빨강이다. 표시 순서는 빨강 경보 → 운영자 전체·개별 정지 → 주황 근접 정지 → 주황 대기·양보·목적지 대기다. 가장 높은 상황과 “외 n건”을 표시한다. 전체 정지 한 번은 한 건으로 센다. 경보 창에서 [확인]을 눌러도 실제 조건이 풀릴 때까지 상황 줄을 유지한다.
 
 결정 카드에는 근거, 관련 로봇·작업, 선택지별 설명을 둔다. 기본 선택이 있을 때 추천과 남은 시간 막대를 표시한다. [나중에]로 닫은 카드는 상황 줄에서 다시 연다. 경보 창에는 경과 시간·로봇·작업·감지 시각·관제 조치를 표시하고 [확인]과 [경보음 끄기]를 제공한다.
 
@@ -108,7 +109,7 @@ flowchart TB
 | 로봇 상태 | 버튼 | 로직 |
 |---|---|---|
 | `IDLE` | 구역 선택 + [보내기] (`GO_ZONE`) | L9 |
-| `SENDING`·`MOVING`·`HOLD`·`GIVE_WAY`·`RETURNING`·`YIELDING` | [정지] (`PAUSE_ROBOT`), [임무 취소] | L10, L7 |
+| `SENDING`·`MOVING`·`HOLD`·`RETURNING` | [정지] (`PAUSE_ROBOT`), [임무 취소] | L10, L7 |
 | `WAIT_CONFIRM` | 카드 안에 확인 칸을 펼친다 (아래) | L6 |
 | `SAFE_PAUSE` | [재개] (`RESUME_ROBOT`). 침상 이탈 중이면 막고 이유를 보여 준다 | L10 |
 | `FAULT` | [다시 시도] (`RETRY`), [임무 취소] | L8, L7 |
@@ -119,20 +120,13 @@ flowchart TB
 - 도착 구역(2번 자리면 "조제실(F) 2번 자리 도착"), 정류장 품목 또는 환자, 다음 목적지를 보여 준다.
 - "□ 확인했습니다"를 체크해야 버튼이 켜진다. 버튼은 [확인 후 다음 이동], 마지막 정류장이면 [수령 완료] (`CONFIRM_STEP OK`). 옆에 [불일치] (`CONFIRM_STEP MISMATCH`).
 
-**재개 조건 체크** (디자인 04). 화면은 상태값을 보고 체크 표시만 한다. 판단은 하지 않는다.
-
-- 복도에 대기 로봇이 있을 때
-  1. "{통행 로봇} 완전 통과 확인": 통행 로봇이 `holders`에서 빠지면 ✓
-  2. "복도 비움 확인": `state`가 `FREE`이거나 대기 로봇에게 `GRANTED`면 ✓
-  3. "{대기 로봇} 진입 허가": 대기 로봇이 `holders`에 들어오면 ✓
-  4. "재개 명령 전달 · 로봇 확인": 대기 로봇 상태가 `MOVING`이 되면 ✓
-- 복도 양보 중일 때: "{우선 로봇} 지나감", "{양보 로봇} 다시 출발"
+**복도 줄** (디자인 04). 통과 중인 로봇(칸 판의 `holder_detail`)과 정지선에서 기다리는 로봇(`traffic.stop_line_waits`, 기다리는 칸 이름), 칸 띠(복도 위쪽·교차로·복도 아래쪽·B·E 문: 비어 있음/예약/점유/확인 필요, 복도 칸은 방향 화살표), 점유 불명 칸마다 [현장 확인 후 … 비움]. 4O 정리에서 LEGACY의 "재개 조건 체크"(`resume_checks`)와 "복도 사용 방향"은 없앴다.
 
 **통행 판단 상세 창** (디자인 08)
 
-- 대상은 `last_decision`, 또는 운영 기록에서 고른 판단 이벤트다.
-- 판단 당시 복도 상태(`state_before`), 경쟁 로봇별 작업 종류·Level·요청 시각(`contenders`), 판단 문장(`reason`), 기준(`rule`을 한국어로: `LEVEL` "높은 응급도 우선", `REQUEST_TIME` "먼저 요청한 쪽", `ENTRY_ORDER` "복도에 나중에 들어온 쪽이 양보", `NO_PREEMPT` "이미 허가된 로봇은 회수하지 않음").
-- 고정 규칙 한 줄: "동급이면 먼저 요청한 쪽, 허가된 통행은 회수하지 않음".
+- 대상은 상황 줄 맨 위 항목의 근거 이벤트, 없으면 마지막 `PLAN_WAIT`(정지선 대기 중) → `RESOURCE_UNKNOWN` → `BLOCKED` → `PLAN_UPDATE`, 또는 운영 기록에서 고른 판단 이벤트다.
+- 로봇, 판단 시각, 계획 시간·다시 계획한 이유(`traffic.plan`), 판단 문장(`reason`).
+- 고정 규칙 한 줄: "두 로봇을 함께 계획: 비용 = Σ Level 가중치 × 도착 시각. 겹치는 곳마다 계획에서 정한 순서대로 지나갑니다".
 - [판단 기록 보기] → P5를 판단 이벤트로 거른 상태로 연다.
 
 ### 2.3 P2 이송 작업
@@ -169,7 +163,7 @@ flowchart TB
 
 | 블록 | 보여 주는 것 | 데이터 출처 | 버튼·입력 | 로직 |
 |---|---|---|---|---|
-| 지표 4칸 | 대기 횟수, 교착 횟수, 교착 평균 해소 시간, 정지 횟수 (고른 기간) | `bad.db` events 집계 | 기간 선택 | L14 |
+| 지표 2칸 | 순서 대기 횟수(구간마다 한 번), 정지 횟수 (고른 기간). 4O 정리에서 교착 횟수·해소 시간은 없앴다 | `bad.db` events 집계 | 기간 선택 | L14 |
 | 이벤트 **(표 1)** | 시각, 종류, 로봇, 임무, 누가, 문장. 50개씩 쪽 넘김 | `bad.db` events | 로봇·종류·임무 거르기, 글자 검색, [CSV 저장] | L14 |
 | 결정 카드 기록 **(표 2)** | 종류, 열린 시각, 닫힌 시각, 고른 것, 누가, 닫힌 이유 | `bad.db` cards | — | L14 |
 
@@ -288,8 +282,6 @@ labels:
 | `SENDING` | 출발 준비 | 회색 |
 | `MOVING` | 이동 중 | 회색 |
 | `HOLD` | 진입 전 대기 | 주황 |
-| `GIVE_WAY` | 복도 양보 중 | 주황 |
-| `YIELDING` | 교착 양보 중 | 주황 |
 | `WAIT_CONFIRM` | 확인 대기 | 주황 |
 | `SAFE_PAUSE` | 로봇 STATE가 멈춤 보고(`PAUSED`·`IDLE`·`COMPLETE`·`CANCELED`·`FAILED`)면 "정지 확인", 아니면 "정지 요청 중(확인 전)" (4K, D-32). 지도 표시도 같다 | 정지 확인 빨강, 확인 전 주황 |
 | `FAULT` | 장애 | 빨강 |
@@ -304,7 +296,6 @@ labels:
 | BLOCKED (근접) | [다시 확인], [되돌아가기], [보류]. `self_first`는 [이 로봇 먼저 보내기], `peer_first`는 [상대 역할 이름 먼저 보내기]. 각각 선택할 로봇의 구간과 출발 가능 여부를 확인한다. 상대가 정차해 있고 거리가 유지되거나 벌어지는 동안만 우선한다. |
 | BLOCKED (마주 봄) | 두 로봇이 마주 보고 있어 한쪽이 물러나야 합니다. 후발 로봇 이름과 [되돌아가기 · 추천], [보류]를 보인다. 운영자가 선택할 때까지 기다린다. |
 | BLOCKED (출구) | [다시 확인], [그대로 출발(근접 규칙 유지)], [보류]. 상황 줄에 “출구 막힘 대기”와 2번 자리를 차지한 로봇이 보인다. |
-| DEADLOCK | yield_a / yield_b — 선택한 역할의 로봇이 대피 구역으로 이동합니다. |
 | BED_MONITOR_LOST | hold — 감시 신호를 확인할 때까지 정지를 유지합니다. bypass — 운영자 확인으로 침상 감시 없이 운행을 허용합니다. |
 | NAV_FAILED | retry — 같은 목적지로 다시 출발합니다. return — 이전 구역으로 돌아갑니다. cancel — 현재 작업을 취소합니다. |
 | MOVE_REJECTED | retry — 같은 이동 명령을 다시 보냅니다. cancel — 현재 작업을 취소합니다. |
@@ -314,9 +305,8 @@ labels:
 **이벤트 제목**
 
 - `ui_api.py`의 표 하나에서 만든다. BRIEF 4.8절 이벤트 종류 전부에 문장이 있어야 한다 (테스트 32). 예:
-  - `RESOURCE_GRANT` → "{로봇} 복도 진입 허가", `RESOURCE_HOLD` → "{로봇} 진입 전 대기"
-  - `RESOURCE_ENTER` → "{로봇} 복도 진입 확인", `RESOURCE_RELEASE` → "{로봇} 복도 통과 완료"
-  - `CORRIDOR_YIELD_START` → "{로봇} 복도 양보 시작"
+  - `RESOURCE_ENTER` → "{로봇} {칸} 진입 확인", `RESOURCE_RELEASE` → "{로봇} {칸} 통과 완료", `ZONE_OCCUPIED_HOLD` → "{로봇} 출발 대기"(출발 전 0.9 m 확인)
+  - 4O 정리에서 LEGACY 전용 이벤트(`RESOURCE_GRANT`·`RESOURCE_HOLD`·`DEADLOCK_DETECTED`·`YIELD_*`·`CORRIDOR_*`)의 제목은 없앴다. 그 전 DB의 그런 기록은 "관제 기록"으로 보인다.
   - `MISSION_CREATED` → "{종류} 요청 등록", `ARRIVE` → "{로봇} · {구역} 도착", `CONFIRM_STEP` → "{구역} 확인 완료"
   - 4O PLAN: `PLAN_UPDATE` → "두 로봇 다시 계획", `PLAN_WAIT` → "{로봇} 계획 순서 대기", `PLAN_YIELD_MOVE` → "{로봇} 길 비켜 주는 중". 세 종류 모두 운영 기록의 "판단" 필터에 들어간다. 지도에는 `traffic.plans`의 계획 경로를 가는 선으로 그린다. `LEVEL_CHANGE` → "응급도 변경" (문장 "Level 1 → 3", 작업 기록에 남는다).
   - 4O 후속 3: `BED_MONITOR_ENABLED` → "침상 감시 켬", `BED_MONITOR_DISABLED` → "침상 감시 끔" (`by`가 남는다). UNKNOWN 칸 때문에 기다리는 로봇의 대기 이유는 "교차로·101호 병실(E) 문: 현장 확인 필요"다. 비켜서기 MOVE의 `LEG_START` 문장은 "101호 병실(E) 2번 자리 이동 시작 (비켜서기, 목적지 조제실(F) 2번 자리)"다.
@@ -500,7 +490,7 @@ erDiagram
 | 칸 | 타입 | 뜻 | 쓰는 때 |
 |---|---|---|---|
 | id | TEXT PK | `K-` 뒤에 UUID | L11 열림 |
-| kind | TEXT | `DEADLOCK`, `BLOCKED`, `NAV_FAILED`, `MOVE_REJECTED`, `STOP_MISMATCH`, `BED_MONITOR_LOST` | L11 |
+| kind | TEXT | `BLOCKED`, `NAV_FAILED`, `MOVE_REJECTED`, `STOP_MISMATCH`, `STOP_UNCONFIRMED`, `BED_MONITOR_LOST` (그 전 DB에는 `DEADLOCK`도 있을 수 있다) | L11 |
 | robots | TEXT | 관련 로봇 (쉼표) | L11 |
 | title, reason | TEXT | 제목, 근거 문장 | L11 |
 | payload_json | TEXT | 선택지, 추천, 기본값, 제한 시간 | L11 |
@@ -726,7 +716,7 @@ sequenceDiagram
 
 ### 5.12 L11 결정 카드
 
-1. 관제가 사람 판단이 필요한 상황을 만나면 (교착, 30초 막힘·물건 감지, 주행 실패, 명령 안 받음, 불일치, 침상 감시 끊김) 카드를 연다.
+1. 관제가 사람 판단이 필요한 상황을 만나면 (근접 정지·마주 봄, 30초 막힘·물건 감지, 주행 실패, 명령 안 받음, 불일치, 침상 감시 끊김) 카드를 연다.
    - `INSERT cards (opened_at, payload)`, `INSERT events (CARD_OPEN)`, `/fleet/decision_req` 발행.
 2. 화면: 어느 페이지든 결정 카드 창. 남은 시간 막대가 줄어든다.
 3. 운영자가 선택지를 누르면 `POST /api/decision {card_id, choice}` → `/ui/decision`.
@@ -783,7 +773,7 @@ sequenceDiagram
 | `GET /api/events?type=&robot=&mission=&q=&from=&to=&page=` | `events … ORDER BY id DESC LIMIT 50` | P5 표 1 |
 | `GET /api/events.csv?(같은 조건)` | 같은 쿼리, 쪽 나눔 없이 (최대 1만 줄) | P5 [CSV 저장] |
 | `GET /api/cards?from=&to=&page=` | `cards ORDER BY opened_at DESC LIMIT 50` | P5 표 2 |
-| `GET /api/kpi?from=&to=` | events 집계: `RESOURCE_HOLD` 수, `DEADLOCK_DETECTED` 수와 해소까지 평균 시간, `PAUSE` 수 | P5 지표 |
+| `GET /api/kpi?from=&to=` | events 집계(`core.store.Metrics`와 같은 셈): `hold_count`(구간마다 한 번 센 `PLAN_WAIT`·`ZONE_OCCUPIED_HOLD`), `pause_count`(`PAUSE` 수) | P5 지표 |
 
 - 진행 중·배정 대기 임무는 DB가 아니라 `/fleet/state`로 보여 준다 (더 빠르고 정확하다).
 - `bad.db`가 없거나 열 수 없으면 기록 주소는 503, 기록 표에 "기록 DB에 연결할 수 없습니다"를 쓰고 나머지 화면은 그대로 둔다.

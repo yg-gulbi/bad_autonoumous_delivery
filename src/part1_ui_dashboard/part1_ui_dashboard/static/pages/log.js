@@ -1,4 +1,4 @@
-const decisions = new Set(["RESOURCE_GRANT","RESOURCE_HOLD","CORRIDOR_YIELD_START","CORRIDOR_FOLLOW_STOP","ZONE_OCCUPIED_HOLD","PROXIMITY_STOP","PLAN_UPDATE","PLAN_WAIT","PLAN_YIELD_MOVE"]);
+const decisions = new Set(["ZONE_OCCUPIED_HOLD","PROXIMITY_STOP","PLAN_UPDATE","PLAN_WAIT","PLAN_YIELD_MOVE"]);
 let logTab = "events", eventPage = 1, cardPage = 1;
 function logQuery() {
     const {robot,type,mid,q,group,from,to} = logFilter;
@@ -19,9 +19,7 @@ renderers.log = () => {
     const kpi = readHistory("kpi","kpi",period);
     if (kpi.data) {
         const k = kpi.data;
-        put("kpis", Object.entries({"대기 횟수":k.hold_count,"교착 횟수":k.deadlock_count,
-            "교착 평균 해소 시간": k.deadlock_resolve_s_avg == null ? "해소 기록 없음" : k.deadlock_resolve_s_avg.toFixed(1) + "초",
-            "정지 횟수":k.pause_count}).map(([t,v]) => `<div class="metric"><label>${h(t)}</label><strong>${h(v)}</strong></div>`).join(""));
+        put("kpis", Object.entries({"순서 대기 횟수":k.hold_count, "정지 횟수":k.pause_count}).map(([t,v]) => `<div class="metric"><label>${h(t)}</label><strong>${h(v)}</strong></div>`).join(""));
     } else put("kpis", recordNotice(kpi));
     put("log-tabs", '<div class="tabs">' + btn("이벤트","logtab","events",logTab === "events" ? "selected" : "") +
         btn("결정 카드","logtab","cards",logTab === "cards" ? "selected" : "") + "</div>");

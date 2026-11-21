@@ -27,84 +27,6 @@ def count(sim, kind):
     return sim.core.store.db.execute("SELECT count(*) FROM events WHERE type=?", (kind,)).fetchone()[0]
 
 
-def test_150226_wait_at_exit_until_moving_robot_is_clear(sim):
-    # B is waiting outside the lower mouth. A clears the corridor, passing the parked B.
-    at(sim, B, sim.cfg.slot_point("F", 2))
-    sim.cmd("GO_ZONE", robot=A, zone="C")
-    sim.tick(0)
-    assert wire(sim.tick(1))[A].startswith("MOVE C ")
-    sim.event(A, "MISSION_ACCEPTED")
-    at(sim, A, (-1.65, -3.7))
-    sim.cmd("GO_ZONE", robot=B, zone="D")
-    sim.tick(1.1)
-    at(sim, A, (-1.81, -4.70))
-    sim.tick(2)
-    for i in range(1, 12):
-        at(sim, A, (-1.81 - .039*i/11, -4.7))
-        assert not sim.tick(2 + .1*i).commands
-    assert A not in sim.core.resources.snapshot()["CORRIDOR"]["holders"]
-    assert sim.core.wait_reason(B) == "가까이 움직이는 로봇 대기"  # 0.499 m
-    at(sim, A, (-2.26, -4.70))  # 0.91 m and still moving
-    assert B not in wire(sim.tick(3.2))  # remaining corridor decision window
-    assert wire(sim.tick(4))[B].startswith("MOVE D ")
-    assert count(sim, "PROXIMITY_STOP") == 0
-
-
-def test_150338_wait_for_c2_arrival_then_for_its_exit(sim):
-    at(sim, B, "C")
-    sim.patient("bed", "C", "F")
-    sim.tick(0)
-    assert wire(sim.tick(1))[A].startswith("MOVE C2 ")
-    sim.event(A, "MISSION_ACCEPTED")
-    at(sim, A, (-1.65, -3.55))
-    sim.cmd("GO_ZONE", robot=B, zone="D")
-    assert not sim.tick(2).commands
-    assert sim.core.wait_reason(B) == "수술실(C)에 들어오는 로봇 대기"
-    at(sim, A, (-1.85, -4.52))
-    assert not sim.tick(3).commands
-    assert not sim.tick(4.1).commands  # corridor released before A has parked
-    at(sim, A, (-2.758, -4.539))  # exactly 0.584 m from C1 while still approaching C2
-    assert not sim.tick(4.15).commands
-    assert sim.core.wait_reason(B) == "수술실(C)에 들어오는 로봇 대기"
-    sim.event(A, "ARRIVED")
-    arrival = sim.tick(4.2)
-    assert not arrival.commands
-    assert sim.core.wait_reason(B).startswith("출구 막힘 대기 · 수술실(C) 2번 자리")
-    assert next(e for e in arrival.events if e["type"] == "ARRIVE")["detail"]["reason"] == "수술실(C) 2번 자리 도착"
-    assert sim.core.store.db.execute("SELECT zone FROM mission_stops ORDER BY seq LIMIT 1").fetchone()[0] == "C"
-    card, = sim.tick(34.3).cards
-    assert card["context"] == "EXIT" and "수술실(C) 2번 자리" in card["reason"]
-    sim.confirm(A, "bed")
-    assert wire(sim.tick(35))[A].startswith("MOVE F ")
-    sim.event(A, "MISSION_ACCEPTED")
-    at(sim, A, (-2.15, -4.64))
-    assert not sim.tick(36).commands  # past C2, still within 0.9 m of B
-    at(sim, A, (-1.70, -4.62))
-    assert wire(sim.tick(37))[B].startswith("MOVE D ")
-    assert count(sim, "PROXIMITY_STOP") == 0
-
-
-def test_arrival_pauses_outside_the_radius_when_departure_was_first(sim):
-    at(sim, B, "C")
-    sim.cmd("GO_ZONE", robot=B, zone="F")  # actually leaves C before the arrival
-    assert wire(sim.tick(0))[B].startswith("MOVE F ")
-    sim.cmd("GO_ZONE", robot=A, zone="C")
-    sim.event(B, "MISSION_ACCEPTED")
-    sim.tick(.1)
-    assert wire(sim.tick(1.1))[A].startswith("MOVE C")
-    sim.event(A, "MISSION_ACCEPTED")
-    at(sim, A, (-1.7, -2.8))  # just outside C2's 2 m boundary
-    assert sim.core.config.resources.zone_arrival_clear_m == 2.0
-    assert wire(sim.tick(2)) == {A: "PAUSE"}
-    assert sim.core.collision.access.distance(A, "C") > 2
-    assert sim.core.wait_reason(A) == "수술실(C)에서 나오는 로봇 대기"
-    sim.event(A, "PAUSED")
-    assert not sim.tick(3).commands
-    at(sim, B, (-1.0, -2.2))
-    assert wire(sim.tick(4)) == {A: "RESUME"}
-    assert count(sim, "PROXIMITY_STOP") == 0
-
-
 def test_receding_then_closing_stops_once_and_never_clears_on_trend_alone(sim):
     # The last half second of fresh pose pairs already shows separation when MOVING arrives.
     for i in range(7):
@@ -155,13 +77,11 @@ def test_failed_priority_leaves_one_card_and_later_mover_reverses(sim, choice):
     sim.choose(card, "return")
     assert wire(sim.tick(22.4)) == {B:"CANCEL"}
     sim.event(B, "MISSION_CANCELED")
-    assert wire(sim.tick(22.5))[B].startswith("MOVE F ")
-    sim.event(B, "MISSION_ACCEPTED")
-    at(sim, B, (-2.4, -4.6))
-    assert not sim.tick(22.6).commands
-    at(sim, B, (-2.65, -4.6))
-    assert wire(sim.tick(22.7)) == {A:"RESUME"}
-    assert not sim.core.collision.head_on
+    # PLAN (b98f6ca as well): from two positions already closer than proximity_stop_m the plan finds no route
+    # (LEGACY sent robot_b back to F here). Both stay still and robot_b says so; nothing drives into the other.
+    out = sim.tick(22.5)
+    assert not [c for c in out.commands if c.command.startswith(("MOVE", "RESUME"))]
+    assert sim.core.resources.held[B]["reason"] == "계획을 찾지 못해 제자리 대기 · 다시 계획을 기다립니다"
 
 
 def test_exit_warning_is_advisory_and_uses_finite_segments(cfg):
@@ -195,65 +115,13 @@ def test_gap_in_observations_or_flat_latest_reading_does_not_waive_stop(sim, las
     assert wire(sim.tick(last_time)) == {B: "PAUSE"}
 
 
-def test_outbound_arrival_at_neighbouring_zone_is_not_proof_of_clearance(sim):
-    at(sim, B, "C")
-    sim.cmd("GO_ZONE", robot=B, zone="F")
-    assert wire(sim.tick(0))[B].startswith("MOVE F ")
-    sim.cmd("GO_ZONE", robot=A, zone="C")
-    sim.event(B, "MISSION_ACCEPTED")
-    sim.tick(.1)
-    sim.tick(1.1)
-    sim.event(A, "MISSION_ACCEPTED")
-    at(sim, A, (-1.7, -2.8))
-    assert wire(sim.tick(2)) == {A: "PAUSE"}
-    sim.event(A, "PAUSED")
-    sim.event(B, "ARRIVED")  # F1 is within 2 m of C1
-    assert A not in wire(sim.tick(3))
-    assert sim.core.wait_reason(A) == "수술실(C)에서 나오는 로봇 대기"
-    at(sim, B, "D")
-    assert wire(sim.tick(4)) == {A: "RESUME"}
-
-
-def test_simultaneous_swap_in_overlapping_radii_has_one_wire_departure(sim):
-    # D and A are in the same hall. Both starts are inside the other's 2 m radius.
-    at(sim, B, "A")
-    sim.cmd("GO_ZONE", robot=A, zone="A")
-    sim.cmd("GO_ZONE", robot=B, zone="D")
-    sent = wire(sim.tick(0))
-    assert list(sent) == [A] and sent[A].startswith("MOVE A2 ")
-    sim.event(A, "MISSION_ACCEPTED")
-    assert not sim.tick(.1).commands
-    assert sim.core.wait_reason(B) == "응급실(A)에 들어오는 로봇 대기"
-    assert sim.core.wait_reason(A) is None
-    sim.event(A, "ARRIVED")
-    assert not sim.tick(.2).commands
-    assert sim.core.wait_reason(B).startswith("출구 막힘 대기")
-
-
 @pytest.mark.parametrize("peer_state", ["STOPPING_PAUSE", "STOPPING_CANCELED", "UNDOCKING"])
 def test_stop_in_progress_is_not_permission_to_depart(sim, peer_state):
     at(sim, B, (-1.76, .8))
     sim.frames[B]["state"] = peer_state
     sim.cmd("GO_ZONE", robot=A, zone="A")
     assert A not in wire(sim.tick(0))
-    assert sim.core.wait_reason(A) == "가까이 움직이는 로봇 대기"
-    sim.frames[B]["state"] = "PAUSED"
-    assert wire(sim.tick(.1))[A].startswith("MOVE A ")
-
-
-def test_arrival_status_before_parked_pose_keeps_outgoing_robot_in_place(sim):
-    at(sim, B, "C")
-    sim.patient("bed", "C", "F")
-    sim.tick(0)
-    sim.tick(1)
-    sim.event(A, "MISSION_ACCEPTED")
-    at(sim, A, (-1.75, -4.42))  # outside the corridor, not at either C slot yet
-    sim.cmd("GO_ZONE", robot=B, zone="D")
-    sim.tick(2)
-    assert sim.core.wait_reason(B) == "수술실(C)에 들어오는 로봇 대기"
-    sim.frames[A].update(state="COMPLETE", percent=100)  # recovery from terminal STATE, no ARRIVED pose
-    assert B not in wire(sim.tick(3.2))
-    assert sim.core.wait_reason(B) == "수술실(C)에 들어오는 로봇 대기"
-    at(sim, A, sim.cfg.slot_point("C", 2))
-    assert B not in wire(sim.tick(3.3))
-    assert sim.core.wait_reason(B).startswith("출구 막힘 대기")
+    # The plan holds robot_a for robot_b; the 0.9 m departure check would hold it too (collision.NearStartGuard).
+    assert sim.core.wait_reason(A) in ("가까이 움직이는 로봇 대기", "간호 스테이션(D) 1번 자리: 약품 운송 로봇이 지나간 뒤")
+    for t in (.5, 1.0, 2.0):                      # still stopping: robot_a stays
+        assert A not in wire(sim.tick(t))

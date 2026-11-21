@@ -1,4 +1,4 @@
-"""Stage 4O PLAN: point graph, joint planner (behaviour from cost alone), execution, config, LEGACY isolation.
+"""Stage 4O PLAN: point graph, joint planner (behaviour from cost alone), execution, config.
 
 The planner tests build agents the way PlanManager does (standing at a slot, or driving a route from a
 pose) and check that the expected behaviour comes out of the cost. No test helper knows a zone pair.
@@ -105,7 +105,7 @@ class Kit:
 
 @pytest.fixture
 def kit(cfg):
-    return Kit(replace(cfg, traffic=replace(cfg.traffic, mode="PLAN")))
+    return Kit(replace(cfg, traffic=replace(cfg.traffic)))
 
 
 def corridor(kit, piece):
@@ -181,11 +181,9 @@ def test_conflicts_are_geometric_and_use_the_slot_distance_for_a_standing_robot(
 def test_segment_map_comes_only_from_fleet_yaml(cfg):
     assert not hasattr(segments_module, "build_default_map_specs")
     raw = read_config_yaml(Path(__file__).resolve().parents[1] / "config/fleet.yaml")
-    raw["traffic"]["mode"] = "PLAN"
     raw["traffic"]["segments"] = {}
     raw["traffic"]["links"] = []
-    raw["traffic"].pop("graph")
-    with pytest.raises(ValueError, match="칸 지도"):
+    with pytest.raises(ValueError, match="칸 지도|traffic.links|traffic.graph.corridor"):
         config_from_dict(raw)
 
 
@@ -224,7 +222,7 @@ def test_idle_robot_blocking_an_exit_steps_aside_and_comes_back(cfg):
     segs = dict(cfg.traffic.segments)
     segs["E2"] = replace(segs["E2"], circle=(e2[0], e2[1], segs["E2"].circle[2]))
     k = Kit(replace(cfg, slots={**cfg.slots, "E": (cfg.zones["E"], e2)},
-                    traffic=replace(cfg.traffic, mode="PLAN", segments=segs)))
+                    traffic=replace(cfg.traffic, segments=segs)))
     plan = k.P.plan([k.standing("idle", "E2"), k.standing("out", "E1", "D", 2)])
     assert plan.ok
     assert_clean(k, plan)
@@ -301,53 +299,43 @@ def test_joint_search_over_the_limit_falls_back_to_level_order(kit):
     assert_clean(kit, plan)
 
 
-# --- 3. config, LEGACY isolation, snapshot --------------------------------------------------------
+# --- 3. config, snapshot -------------------------------------------------------------------------------------
 
-def test_mode_names_default_legacy_and_preflight(cfg):
-    assert cfg.traffic.mode == "LEGACY"
-    assert cfg.effective_return_after_cancel is False
-    pc = replace(cfg, traffic=replace(cfg.traffic, mode="PLAN"))
-    assert pc.effective_return_after_cancel is True
-    assert "LEGACY" in traffic_mode_line(cfg) and "PLAN" in traffic_mode_line(pc)
-    raw = read_config_yaml(Path(__file__).resolve().parents[1] / "config/fleet.yaml")
-    raw["traffic"]["mode"] = "SEGMENTS"
-    with pytest.raises(ValueError, match="traffic.mode"):
-        config_from_dict(raw)
+def test_old_traffic_settings_are_refused_and_preflight_names_plan(cfg):
+    """4O 정리: PLAN is the only traffic judgement; a fleet.yaml that still names a LEGACY setting is refused."""
+    assert "PLAN" in traffic_mode_line(cfg)
+    for section, key, value in (("traffic", "mode", "PLAN"), ("corridor", "mode", "DIRECTIONAL"),
+                                ("corridor", "room_mode", "DOOR"), ("corridor", "yield_enabled", True),
+                                ("resources", "aging_s", 0), ("mission", "return_after_cancel", True)):
+        raw = read_config_yaml(Path(__file__).resolve().parents[1] / "config/fleet.yaml")
+        raw[section][key] = value
+        with pytest.raises(ValueError, match=f"{section}.{key}: 없어진 설정"):
+            config_from_dict(raw)
 
 
-def test_resume_and_cancel_resend_only_in_plan(cfg):
-    legacy = FleetCore(replace(cfg, db_path=":memory:"))
-    plan = FleetCore(replace(cfg, db_path=":memory:", traffic=replace(cfg.traffic, mode="PLAN")))
+def test_unanswered_resume_is_sent_again(cfg):
+    link = RobotProtocol("robot2", cfg.robot_link)
+    link.state, link.state_at = "PAUSED", 0.0
+    assert link.step(0.0, resume=True)[0] == "RESUME"
+    link.state_at = 1.0          # STATE still PAUSED after the RESUME
+    assert link.step(cfg.robot_link.accept_timeout_s + 0.1, resume=True)[0] == "RESUME"
+
+
+def test_retreat_blocks_home_interrupt(cfg):
+    core = FleetCore(replace(cfg, db_path=":memory:"))
     try:
-        assert not any(link.resend_controls for link in legacy.links.values())
-        assert all(link.resend_controls for link in plan.links.values())
+        m = core.mission
+        r = m.robots[A]
+        from part3_fleet_manager.core.mission import Mission
+        r.job = Mission("H-x", A, "RETURN_HOME", 1, [{"zone": "D"}], None, 0.0, status="ACTIVE")
+        r.state, r.target_override = "MOVING", "E"
+        assert m._interruptible_return(A) is False
     finally:
-        legacy.store.close()
-        plan.store.close()
-    for resend, expected in ((False, None), (True, "RESUME")):
-        link = RobotProtocol("robot2", cfg.robot_link, resend_controls=resend)
-        link.state, link.state_at = "PAUSED", 0.0
-        assert link.step(0.0, resume=True)[0] == "RESUME"
-        link.state_at = 1.0          # STATE still PAUSED after the RESUME
-        assert link.step(cfg.robot_link.accept_timeout_s + 0.1, resume=True)[0] == expected
-
-
-def test_retreat_blocks_home_interrupt_only_in_plan(cfg):
-    for mode, interruptible in (("LEGACY", True), ("PLAN", False)):
-        core = FleetCore(replace(cfg, db_path=":memory:", traffic=replace(cfg.traffic, mode=mode)))
-        try:
-            m = core.mission
-            r = m.robots[A]
-            from part3_fleet_manager.core.mission import Mission
-            r.job = Mission("H-x", A, "RETURN_HOME", 1, [{"zone": "D"}], None, 0.0, status="ACTIVE")
-            r.state, r.target_override = "MOVING", "E"
-            assert m._interruptible_return(A) is interruptible
-        finally:
-            core.store.close()
+        core.store.close()
 
 
 def test_plan_snapshot_lists_routes_and_wait_reasons(cfg):
-    sim = KinematicSim(cfg, mode="PLAN")
+    sim = KinematicSim(cfg)
     try:
         sim.submit_patient("C", "A", level=1)
         sim.submit_med(("E", "B"), level=3)
@@ -373,7 +361,7 @@ def test_plan_snapshot_lists_routes_and_wait_reasons(cfg):
 # --- 4. execution in the kinematic mock ---------------------------------------------------------
 
 def test_cancel_in_the_corridor_is_a_new_goal_without_e423(cfg):
-    sim = KinematicSim(cfg, mode="PLAN")
+    sim = KinematicSim(cfg)
     try:
         sim.submit_patient("C", "A", level=2)
         while sim.now < 30 and not (-2.2 < sim.robots[A].pose[1] < -1.0):
@@ -394,7 +382,7 @@ def test_cancel_in_the_corridor_is_a_new_goal_without_e423(cfg):
 
 
 def test_link_loss_keeps_segments_unknown_until_operator_check(cfg):
-    sim = KinematicSim(cfg, mode="PLAN")
+    sim = KinematicSim(cfg)
     try:
         sim.submit_patient("C", "A", level=2)
         while sim.now < 30 and "CORRIDOR_TOP" not in {
@@ -412,7 +400,7 @@ def test_link_loss_keeps_segments_unknown_until_operator_check(cfg):
 
 
 def test_snapshot_schema_in_plan_mode(cfg):
-    core = FleetCore(replace(cfg, db_path=":memory:", traffic=replace(cfg.traffic, mode="PLAN")))
+    core = FleetCore(replace(cfg, db_path=":memory:", traffic=replace(cfg.traffic)))
     try:
         state = core.snapshot(0.0)
         assert state["traffic"]["mode"] == "PLAN"

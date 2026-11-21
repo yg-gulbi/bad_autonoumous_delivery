@@ -1,9 +1,9 @@
 """Stage 4O: 11/20 mock log replay (5 scenes, 16:09:59 in two variants) and 4N 15:02:26/15:03:38 in PLAN.
 
-The Level 3 robot is always robot_b. Each scene is measured in LEGACY too; the report table
-(docs/part3/ui/stage4o-report.md) lists LEGACY, ac58e60 SEGMENTS and PLAN side by side. The mock robots
-drive through the middle of the B·E doors (plan_graph.door_route) in both modes, so the arrival bounds
-include that walk.
+The Level 3 robot is always robot_b. Up to the 4O 정리 each scene was measured in LEGACY too (the report table
+in docs/part3/ui/stage4o-report.md lists LEGACY, ac58e60 SEGMENTS and PLAN side by side); the bounds are now the
+PLAN numbers of docs/part3/ui/4o-baseline.json (b98f6ca) + 0.5 s. The mock robots drive through the middle of the
+B·E doors (plan_graph.door_route), so the arrival bounds include that walk.
 """
 from dataclasses import replace
 
@@ -52,9 +52,9 @@ def _measure(sim, req_t):
     }
 
 
-def _run_160550(cfg, mode: str) -> dict:
+def _run_160550(cfg) -> dict:
     """16:05:50 A(L2) D->C is requested 4 s after B(L3) F->E->B->D started."""
-    sim = KinematicSim(cfg, mode=mode, speed_mps=0.2)
+    sim = KinematicSim(cfg, speed_mps=0.2)
     try:
         sim.submit_med(("E", "B", "D"), level=3, ref="m2")
         sim.run_until(4.0, auto_confirm=False)
@@ -69,9 +69,9 @@ def _run_160550(cfg, mode: str) -> dict:
         sim.close()
 
 
-def _run_160632(cfg, mode: str) -> dict:
+def _run_160632(cfg) -> dict:
     """16:06:32 B(L3) E->B while A(L2) D->C is in CORRIDOR_TOP, too close to CROSSROAD to stop before it."""
-    sim = KinematicSim(cfg, mode=mode, speed_mps=0.2, poses={A: "D", B: "E"})
+    sim = KinematicSim(cfg, speed_mps=0.2, poses={A: "D", B: "E"})
     try:
         sim.submit_patient("C", "A", level=2, ref="m1")
         while sim.now < 20.0:
@@ -86,9 +86,9 @@ def _run_160632(cfg, mode: str) -> dict:
         sim.close()
 
 
-def _run_160709(cfg, mode: str) -> dict:
+def _run_160709(cfg) -> dict:
     """16:07:09 B(L3) B->D while A(L1, C->D return) is going up CORRIDOR_BOTTOM, >= 0.8 m from CROSSROAD."""
-    sim = KinematicSim(cfg, mode=mode, speed_mps=0.2, poses={A: "C", B: "B"})
+    sim = KinematicSim(cfg, speed_mps=0.2, poses={A: "C", B: "B"})
     try:
         sim.cmd("GO_ZONE", robot=A, zone="D")
         while sim.now < 20.0:
@@ -103,9 +103,9 @@ def _run_160709(cfg, mode: str) -> dict:
         sim.close()
 
 
-def _run_160959(cfg, mode: str, *, lead_s: float) -> dict:
+def _run_160959(cfg, *, lead_s: float) -> dict:
     """16:09:59 B(L3) F->E while A(L2) D->C is going down CORRIDOR_TOP (lead_s = how long A has driven)."""
-    sim = KinematicSim(cfg, mode=mode, speed_mps=0.2, poses={A: "D", B: "F"})
+    sim = KinematicSim(cfg, speed_mps=0.2, poses={A: "D", B: "F"})
     try:
         sim.submit_patient("C", "A", level=2, ref="m3")
         while sim.now < 5.0 and _first_move_time(sim, A, 0.0) is None:
@@ -115,21 +115,20 @@ def _run_160959(cfg, mode: str, *, lead_s: float) -> dict:
         sim.run_until(a_move + lead_s, auto_confirm=False)
         req_t = sim.now
         stop_line = sim.cfg.traffic.stop_margin_m
-        crossroad = sim.core.resources.segments["CROSSROAD"].spec if mode == "PLAN" else None
-        a_dist = crossroad.distance(sim.robots[A].pose) if crossroad else None
+        a_dist = sim.core.resources.segments["CROSSROAD"].spec.distance(sim.robots[A].pose)
         sim.submit_med(("E", "B"), level=3, ref="m4")
         sim.run_until(req_t + 60.0, auto_confirm=False)
         out = _measure(sim, req_t)
-        out["a_dist"] = round(a_dist, 3) if a_dist is not None else None
+        out["a_dist"] = round(a_dist, 3)
         out["stop_line"] = stop_line
         return out
     finally:
         sim.close()
 
 
-def _run_161049(cfg, mode: str) -> dict:
+def _run_161049(cfg) -> dict:
     """16:10:49 B(L3) E->B one second after A(L2) C->A departed."""
-    sim = KinematicSim(cfg, mode=mode, speed_mps=0.2, poses={A: "C", B: "E"})
+    sim = KinematicSim(cfg, speed_mps=0.2, poses={A: "C", B: "E"})
     try:
         sim.submit_patient("A", "D", level=2, ref="m3")
         while sim.now < 5.0 and _first_move_time(sim, A, 0.0) is None:
@@ -145,37 +144,37 @@ def _run_161049(cfg, mode: str) -> dict:
         sim.close()
 
 
+# docs/part3/ui/4o-baseline.json: Level 3 wait and arrival of each scene at b98f6ca (PLAN), + 0.5 s.
+TOLERANCE_S = 0.5
+
+
 def test_160550_l2_robot_starts_at_once_and_waits_at_the_corridor_stop_line(cfg):
-    leg = _run_160550(cfg, "LEGACY")
-    plan = _run_160550(cfg, "PLAN")
-    assert plan["wait_s"] <= 1.0 and plan["arrive_s"] <= leg["arrive_s"]
+    plan = _run_160550(cfg)
+    assert plan["wait_s"] <= 1.0 and plan["arrive_s"] <= 25.2 + TOLERANCE_S
     assert plan["b_paused_s"] == 0.0
-    # LEGACY kept A in D for ~19 s; PLAN sends it at once and pauses it before B's way, naming B.
-    assert leg["a_wait_s"] > 10.0
+    # A is sent at once (LEGACY kept it in D for ~19 s) and pauses before B's way, naming B.
     assert plan["a_wait_s"] <= 1.0
     assert plan["a_paused_s"] > 0.0
     assert any("약품 운송 로봇이 지나간 뒤" in r for r in plan["a_waits"])
     assert plan["prox_stops"] == 0
 
 
-def test_160632_l3_waits_only_while_a_crosses_and_arrives_before_legacy(cfg):
-    leg = _run_160632(cfg, "LEGACY")
-    plan = _run_160632(cfg, "PLAN")
+def test_160632_l3_waits_only_while_a_crosses(cfg):
+    plan = _run_160632(cfg)
     # A is inside its stop line before CROSSROAD: it cannot stop, so B waits for it to pass. B leaves E1 once
     # A is past the room E way and may stop once at the CROSSROAD stop line while A clears it (clear_hold_s).
-    assert plan["wait_s"] < leg["wait_s"]
-    assert plan["arrive_s"] is not None and plan["arrive_s"] <= 29.0 and plan["arrive_s"] < leg["arrive_s"]
+    assert plan["wait_s"] <= 9.4 + TOLERANCE_S
+    assert plan["arrive_s"] is not None and plan["arrive_s"] <= 27.2 + TOLERANCE_S
     assert plan["a_paused_s"] == 0.0 and plan["b_paused_s"] <= cfg.resources.clear_hold_s
     assert plan["a_zone"] == "C" and plan["b_zone"] == "B"
     assert plan["prox_stops"] == 0
 
 
 def test_160709_l3_goes_first_and_l1_robot_waits_below_crossroad(cfg):
-    leg = _run_160709(cfg, "LEGACY")
-    plan = _run_160709(cfg, "PLAN")
+    plan = _run_160709(cfg)
     assert plan["wait_s"] <= 1.0
-    assert plan["arrive_s"] < leg["arrive_s"] and plan["arrive_s"] <= 23.0
-    assert plan["b_paused_s"] == 0.0 and leg["b_paused_s"] > 10.0
+    assert plan["arrive_s"] <= 21.0 + TOLERANCE_S
+    assert plan["b_paused_s"] == 0.0
     assert plan["a_paused_s"] > 0.0
     assert plan["a_zone"] == "D" and plan["b_zone"] == "D"
     assert plan["prox_stops"] == 0
@@ -183,8 +182,7 @@ def test_160709_l3_goes_first_and_l1_robot_waits_below_crossroad(cfg):
 
 @pytest.mark.parametrize("lead_s", [6.8, 9.8])
 def test_160959_l3_starts_at_once_whether_or_not_a_can_stop_before_crossroad(cfg, lead_s):
-    leg = _run_160959(cfg, "LEGACY", lead_s=lead_s)
-    plan = _run_160959(cfg, "PLAN", lead_s=lead_s)
+    plan = _run_160959(cfg, lead_s=lead_s)
     if lead_s == 6.8:
         assert plan["a_dist"] >= plan["stop_line"]    # A can still stop before CROSSROAD: it pauses there
         assert plan["a_aside"] == 0 and plan["a_paused_s"] > 0.0
@@ -192,17 +190,16 @@ def test_160959_l3_starts_at_once_whether_or_not_a_can_stop_before_crossroad(cfg
         assert plan["a_dist"] < plan["stop_line"]     # A cannot stop before CROSSROAD: it gets out of B's way
         assert plan["a_aside"] >= 1
     assert plan["wait_s"] <= 1.0
-    assert plan["arrive_s"] <= 27.0 and plan["arrive_s"] < leg["arrive_s"]
+    assert plan["arrive_s"] <= 25.2 + TOLERANCE_S
     assert plan["b_paused_s"] == 0.0
     assert plan["a_zone"] == "C" and plan["b_zone"] == "E"
     assert plan["prox_stops"] == 0
 
 
 def test_161049_l3_starts_at_once_and_l2_robot_waits_in_corridor_bottom(cfg):
-    leg = _run_161049(cfg, "LEGACY")
-    plan = _run_161049(cfg, "PLAN")
-    assert plan["wait_s"] <= 1.0 and leg["wait_s"] > 20.0
-    assert plan["arrive_s"] <= 19.5 and plan["arrive_s"] < leg["arrive_s"]
+    plan = _run_161049(cfg)
+    assert plan["wait_s"] <= 1.0
+    assert plan["arrive_s"] <= 18.0 + TOLERANCE_S
     assert plan["b_paused_s"] == 0.0 and plan["a_paused_s"] > 0.0
     assert plan["a_zone"] == "A" and plan["b_zone"] == "B"
     assert plan["prox_stops"] == 0
@@ -211,7 +208,7 @@ def test_161049_l3_starts_at_once_and_l2_robot_waits_in_corridor_bottom(cfg):
 def test_160959_level_order_plan_when_every_joint_search_runs_out_of_time(cfg):
     """plan_limit_ms past (here: every joint search): the Level-order plan takes over and PLAN_UPDATE says so."""
     tiny = replace(cfg, traffic=replace(cfg.traffic, graph=replace(cfg.traffic.graph, plan_limit_ms=0.01)))
-    plan = _run_160959(tiny, "PLAN", lead_s=9.8)
+    plan = _run_160959(tiny, lead_s=9.8)
     assert plan["fallbacks"] and all("Level 순 계획으로 대신 (계획 시간 초과)" in r for r in plan["fallbacks"])
     assert plan["wait_s"] <= 1.0 and plan["b_paused_s"] == 0.0
     assert plan["a_zone"] == "C" and plan["b_zone"] == "E"
@@ -222,7 +219,7 @@ def test_160959_level_order_plan_when_every_joint_search_runs_out_of_time(cfg):
 
 def test_150226_plan_zero_proximity_stops(cfg):
     """15:02:26: B stands in F2; A D->C comes down toward the bottom hall when B is sent F->D."""
-    sim = KinematicSim(cfg, mode="PLAN", speed_mps=0.2, poses={B: cfg.slot_point("F", 2)})
+    sim = KinematicSim(cfg, speed_mps=0.2, poses={B: cfg.slot_point("F", 2)})
     try:
         sim.cmd("GO_ZONE", robot=A, zone="C")
         while sim.now < 40.0 and sim.robots[A].pose[1] > -3.7:
@@ -238,7 +235,7 @@ def test_150226_plan_zero_proximity_stops(cfg):
 
 def test_150338_plan_zero_proximity_stops(cfg):
     """15:03:38: B stands in C1; A picks a patient up in C (C2) and takes them to F while B is sent C->D."""
-    sim = KinematicSim(cfg, mode="PLAN", speed_mps=0.2, poses={B: "C"})
+    sim = KinematicSim(cfg, speed_mps=0.2, poses={B: "C"})
     try:
         sim.submit_patient("C", "F", level=2, ref="bed")
         while sim.now < 40.0 and sim.robots[A].pose[1] > -3.55:
