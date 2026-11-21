@@ -329,9 +329,24 @@ class SegmentBoard:
             seg.uncertain.clear()
         return released
 
+    def at(self, robot: str, pose: g.Point, slot_member) -> list[str]:
+        """Segments this pose of the robot is inside, judged as observe() does: a narrow segment by its shape,
+        a slot when it is the nearest slot and the robot counts there (``slot_member``). Shared ones are left out."""
+        inc = self.config.corridor.include_boundary
+        found = []
+        for name, seg in self.segments.items():
+            if seg.spec.is_shared:
+                continue
+            if seg.spec.is_slot:
+                if self.map.nearest_slot(pose) == name and slot_member(robot, name):
+                    found.append(name)
+            elif seg.spec.contains(pose, include_boundary=inc):
+                found.append(name)
+        return found
+
     def recover(self, robot: str, now: float, reason: str, **detail) -> list[str]:
-        """The robot is back online at a fresh pose after a short link loss in which it cannot have moved past
-        its stop line (D-52): it keeps the UNKNOWN segments it is inside, the others are released without an
+        """The robot is back online at a fresh pose inside segments that were its own while it was offline
+        (D-52, D-57): it keeps the UNKNOWN segments it is inside, the ones it has passed are released without an
         operator check. Segments that are UNKNOWN for another robot as well stay UNKNOWN for that robot."""
         released = []
         for name, seg in self.segments.items():

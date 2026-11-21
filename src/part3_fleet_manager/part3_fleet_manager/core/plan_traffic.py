@@ -17,7 +17,7 @@ link recovery or loss, a safety stop release, and when a robot is ``replan_delay
 """
 
 from dataclasses import dataclass, field, replace
-from math import dist, hypot, inf
+from math import dist, hypot
 import time
 
 from . import geometry as g
@@ -28,6 +28,7 @@ from .robot_protocol import DONE
 from .segments import SegmentBoard
 
 _GRAPHS: dict = {}
+PAUSED_CUT_M = 0.05      # a PAUSED robot's route is cut this far ahead: it may wait right where it stopped
 
 
 def plan_graph(config) -> PlanGraph:
@@ -324,34 +325,36 @@ class PlanManager:
         self._parking(reports)
         for robot, plan in self.plans.items():
             self._progress(robot, plan)
+        # Before the board counts the robot inside where it is now: which of those segments were not its own.
+        foreign = {robot: [n for n in self.board.at(robot, self.reports[robot].pose, self._slot_member)
+                           if robot not in self.segments[n].holders] for robot in back}
         self.board.observe(now, reports, self._slot_member)
         for robot in back:
-            self._link_back(robot, now)
+            self._link_back(robot, now, foreign[robot])
 
-    def _link_back(self, robot, now):
-        """Back online with a fresh pose (D-52). The segments it held while offline (UNKNOWN, including the
-        rest of its MOVE, D-46·D-49) are settled now: it keeps the ones it is inside and the rest are released,
-        unless it may have moved while offline - lost time x plan speed, or the distance between the pose before
-        and after the loss, over stop_margin_m. Then the operator checks them on the spot as before."""
+    def _link_back(self, robot, now, foreign):
+        """Back online with a fresh pose (D-52, D-57). Offline the robot drives only along the MOVE it has, and
+        it held its segments and the rest of that MOVE (UNKNOWN, D-46·D-49). If the new pose is inside segments
+        of its own, they are settled now: it keeps the ones it is inside and the ones it has passed are released.
+        Only when the new pose lies in a segment that was not its own (``foreign``) does the operator check them
+        on the spot as before."""
         lost_at, before = self._lost.pop(robot)
         names = [n for n, seg in self.segments.items() if robot in seg.uncertain]
         if not names:
             return
         pose = self.reports[robot].pose
         lost_s = now - lost_at
-        reach_m = lost_s * self.graph.speed
-        moved_m = dist(pose, before) if before is not None else inf
-        margin = self.config.traffic.stop_margin_m
-        detail = {"lost_s": round(lost_s, 2), "reach_m": round(reach_m, 2),
-                  "moved_m": None if moved_m == inf else round(moved_m, 2)}
+        moved_m = dist(pose, before) if before is not None else None
+        detail = {"lost_s": round(lost_s, 2), "moved_m": None if moved_m is None else round(moved_m, 2)}
         label = self.robot_label(robot)
-        if reach_m > margin or moved_m > margin:
-            why = (f"{lost_s:.1f}초 동안 최대 {reach_m:.1f} m" if reach_m > margin
-                   else f"끊기기 전 위치에서 {moved_m:.2f} m")
-            self.record("RESOURCE_UNKNOWN", now, f"{label} 연결 복구 · {why} 움직였을 수 있어 현장 확인이 필요합니다",
-                        robot=robot, code="E-423", resources=names, observed=[], uncertain=[robot], **detail)
+        if foreign:
+            where = "·".join(self.resource_label(n) for n in foreign)
+            self.record("RESOURCE_UNKNOWN", now, f"{label} 연결 복구 · 다시 받은 위치가 이 로봇 몫이 아닌 {where}에 걸쳐 "
+                        "현장 확인이 필요합니다", robot=robot, code="E-423", resources=names, observed=[],
+                        uncertain=[robot], foreign=list(foreign), **detail)
             return
-        self.board.recover(robot, now, f"{label} 연결 {lost_s:.1f}초 만에 복구 · 그 자리에 있어 자동 반납", **detail)
+        self.board.recover(robot, now, f"{label} 연결 {lost_s:.1f}초 만에 복구 · 쥔 칸 안에 있어 지나간 칸 자동 반납",
+                           **detail)
         self._mark("연결 복구")
 
     def _parking(self, reports):
@@ -530,9 +533,11 @@ class PlanManager:
             extra = self._still_held(robot)
             # A robot driving cannot stop before its stop line (stop_margin_m ahead), so the points up to there
             # are fixed; the route is cut at the stop line, so it can still wait right there. A robot that has
-            # already stopped (PAUSED) can stay where it is.
+            # already stopped (PAUSED) can stay where it is: its route is cut PAUSED_CUT_M ahead of it, so it can
+            # wait there (a robot inside a piece cannot wait; before, a PAUSED robot had to drive through the whole
+            # piece it stood in, and two robots paused in E1 and E2 had no plan, random seed 112 of 4O follow-up 4).
             driving = link.state in ("MOVING", "UNDOCKING")
-            cut = stop_m if driving else None
+            cut = stop_m if driving else (PAUSED_CUT_M if link.state == "PAUSED" else None)
             rid = self.graph.route_from(pose, target, start=origin, via_done=via_done, extra=extra, cut=cut)
             route = self.graph.routes[rid]
             until = max((j for j, s0 in enumerate(route.starts) if j > 0 and s0 < stop_m - 1e-6), default=None) \

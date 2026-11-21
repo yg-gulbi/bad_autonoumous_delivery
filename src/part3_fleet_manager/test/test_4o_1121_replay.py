@@ -64,7 +64,7 @@ def test_1235_without_the_grace_the_same_four_segments_go_unknown_and_come_back_
     try:
         lost, = _events(sim, "LINK_LOST", A)
         back, = _events(sim, "LINK_BACK", A)
-        assert 0 < lost["ts"] - resumed <= cfg.robot_link.link_timeout_s and back["ts"] - lost["ts"] < 2.0
+        assert 0 < lost["ts"] - resumed <= cfg.robot_link.link_timeout_s + 1.0 and back["ts"] - lost["ts"] < 2.0   # STATE 1 Hz
         unknown = {n for e in _events(sim, "RESOURCE_UNKNOWN", A) for n in e["detail"]["resources"]}
         assert unknown == set(FIELD_UNKNOWN)
         auto = [e for e in _events(sim, "RESOURCE_RELEASE", A) if e["detail"].get("auto")]
@@ -100,18 +100,67 @@ def test_1235_short_link_loss_of_a_standing_robot_keeps_its_slot_without_an_oper
         sim.close()
 
 
-def test_long_link_loss_still_needs_the_operator_check(cfg):
-    sim, board = _standing_drop(cfg, 8.0)          # offline ~5 s: 5 s x 0.2 m/s = 1.0 m > stop_margin_m 0.8 m
+def test_long_link_loss_inside_its_own_slot_settles_without_the_operator(cfg):
+    """D-57: however long it was offline, robot_b is back inside E2, which was its own: nothing to check."""
+    sim, board = _standing_drop(cfg, 8.0)          # offline ~5 s
     try:
         lost, = _events(sim, "LINK_LOST", B)
         back, = _events(sim, "LINK_BACK", B)
-        assert (back["ts"] - lost["ts"]) * 0.2 > cfg.traffic.stop_margin_m
+        assert back["ts"] - lost["ts"] > 4.0
+        assert [e["detail"]["resources"] for e in _events(sim, "RESOURCE_UNKNOWN", B)] == [["E2"]]   # at the loss only
+        assert not _unknown(sim) and board["E2"].holders[B].state == "OCCUPIED"
+    finally:
+        sim.close()
+
+
+def test_link_back_in_a_segment_that_was_not_its_own_needs_the_operator_check(cfg):
+    """D-57: robot_b comes back in the door of room E, which it did not hold (pushed away, or Nav2 went another
+    way): its UNKNOWN E2 stays for the operator's check."""
+    sim = KinematicSim(cfg, mode="PLAN", poses={B: cfg.slot_point("E", 2)})
+    try:
+        sim.run_until(2.05)
+        board = sim.core.resources.segments
+        sim.drop_link(B, 8.0)
+        sim.run_until(sim.now + 5.0)
+        assert not sim.core.link_ok[B] and board["E2"].uncertain == {B} and B not in board["DOOR_E"].holders
+        sim.robots[B].pose = (-0.95, -1.75)                    # inside the door of room E, outside the crossroad
+        assert board["DOOR_E"].spec.contains(sim.robots[B].pose) and not board["CROSSROAD"].spec.contains(sim.robots[B].pose)
+        sim.run_until(sim.now + 6.0)
+        back, = _events(sim, "LINK_BACK", B)
         check = _events(sim, "RESOURCE_UNKNOWN", B)[-1]
-        assert check["ts"] == back["ts"] and "현장 확인" in check["detail"]["reason"]
+        assert check["ts"] == back["ts"] and check["detail"]["foreign"] == ["DOOR_E"]
+        assert "이 로봇 몫이 아닌 101호 병실(E) 문" in check["detail"]["reason"]
         assert _unknown(sim) == {"E2": [B]}
         sim.cmd("RESOURCE_CLEAR_CONFIRM", resource="E2")
         sim.run_until(sim.now + 0.4)
-        assert not _unknown(sim) and board["E2"].holders[B].state == "OCCUPIED"
+        assert not _unknown(sim) and B not in board["E2"].holders and B in board["DOOR_E"].holders
+    finally:
+        sim.close()
+
+
+def test_short_link_loss_while_driving_keeps_the_segment_it_is_in_and_frees_the_ones_it_passed(cfg):
+    """D-57: robot_a drives D1 -> C and loses the link for about a second while it goes from the upper corridor
+    into the crossroad. It moved about 0.8 m along its MOVE (the D-52 rule sent this to the operator); now it keeps
+    the crossroad and the rest of its route stays planned, the upper corridor it has passed is released."""
+    sim = KinematicSim(cfg, mode="PLAN")
+    try:
+        board = sim.core.resources.segments
+        sim.cmd("GO_ZONE", robot=A, zone="C", level=2)
+        while sim.now < 40 and not (sim.robots[A].state == "MOVING" and sim.robots[A].pose[1] < -1.25):
+            sim.step(0.2)
+        assert board["CORRIDOR_TOP"].spec.contains(sim.robots[A].pose)
+        sim.drop_link(A, 4.0)
+        sim.run_until(sim.now + 6.0)
+        lost, = _events(sim, "LINK_LOST", A)
+        back, = _events(sim, "LINK_BACK", A)
+        auto = [e for e in _events(sim, "RESOURCE_RELEASE", A) if e["detail"].get("auto")]
+        assert back["ts"] - lost["ts"] <= 2.0 and auto and auto[0]["detail"]["moved_m"] > 0.7
+        assert "CORRIDOR_TOP" in {n for e in auto for n in e["detail"]["resources"]}
+        assert not [e for e in _events(sim, "RESOURCE_UNKNOWN", A) if e["ts"] == back["ts"]]
+        assert not _unknown(sim)
+        assert board["CROSSROAD"].spec.contains(sim.robots[A].pose) and board["CROSSROAD"].holders[A].state == "OCCUPIED"
+        sim.run_until(sim.now + 40.0)
+        assert sim.core.mission.robots[A].zone == "C" and not _events(sim, "RESOURCE_CLEAR_CONFIRM")
     finally:
         sim.close()
 
