@@ -17,5 +17,6 @@
 | [헤드리스 크롬 캡처가 끝나지 않음 (SSE)](2026-11-19-part3-4j-headless-capture-sse.md) | 해결 (작업 도구) | DevTools 프로토콜로 4J 화면 4장 캡처 |
 | [Part 5 시작 시 웹캠 미연결 종료 및 USB 재연결 보강](2026-11-20-part5-webcam-startup-reconnect.md) | 단위 테스트·통합 테스트 통과 / 실웹캠 분리 검증 대기 | 웹캠 미연결 생존·즉시 `release()`·1초 쿨다운 재연결 추가, 단위 51/51·통합 7/7 통과 |
 | [part3_part5 통합 테스트 robot2/robot3 네임스페이스 불일치](2026-11-20-part3-part5-robot-namespace-mismatch.md) | 해결 | `fleet.yaml`(D-29) `robot_a=robot3`에 맞춰 명령 토픽 상수화 후 통합 테스트 7/7 PASS (15.0s, MCAP 104건) |
+| [Part 5 벤치마크 import와 설정 경로 오류](2026-11-21-part5-benchmark-import-config.md) | 설정 경로 검증 완료 | JSON 5개가 같은 모델 폴더를 해석하고 실제 영상에서 추론 완료 |
 
 새 기록 양식: [_template.md](_template.md)
