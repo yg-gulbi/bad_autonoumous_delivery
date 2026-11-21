@@ -75,6 +75,7 @@ class RobotPlan:
     legs: list
     entries: list
     deps: dict = field(default_factory=dict)        # entry index -> [(robot, entry index)]
+    follow: set = field(default_factory=set)        # (entry index, robot, its entry index): same way, same direction
     s: float = 0.0
     entry: int = 0
     started: bool = False                           # MOVE for legs[0] sent
@@ -742,6 +743,7 @@ class PlanManager:
         robots = list(self.plans)
         for robot in robots:
             self.plans[robot].deps = {}
+            self.plans[robot].follow = set()
         for a in robots:
             for b in robots:
                 if a == b:
@@ -754,6 +756,8 @@ class PlanManager:
                             best = i
                     if best is not None:
                         pb.deps.setdefault(j, []).append((a, best))
+                        if _follows(pa.entries[best:], pb.entries[j:]):
+                            pb.follow.add((j, a, best))
 
     # --- execution ------------------------------------------------------------------------------
 
@@ -795,12 +799,48 @@ class PlanManager:
             if entry.s0 > s + reach:
                 break
             for other, i in plan.deps.get(j, ()):
-                if not self._cleared(other, i, now) or self._still_holds(other, i, entry.piece):
+                if self._still_holds(other, i, entry.piece):
+                    return j, other, i
+                if not self._cleared(other, i, now) and not self._follow_ok(robot, j, other, i):
                     return j, other, i
             other = self._held_by_other(robot, entry.piece)
             if other is not None:
                 return j, other, None
         return None
+
+    def _follow_ok(self, robot, j, other, i):
+        """Following (D-59): robot's entry j waits for other's entry i on the same way in the same direction. The
+        order counts as kept while the robot ahead drives on (MOVING, reached that position, no PAUSE on its way)
+        and the gap is at least corridor.follow_gap_m (follow_resume_m once this robot waits for it, as the
+        corridor follow rule). A robot waiting at this position is not let go while the robot ahead is inside a
+        one-robot segment on its way. The gap itself is kept by this and the proximity stop; a robot ahead that
+        stops holds the one behind at its stop line. Crossing and meeting keep the clear_margin_m / clear_hold_s
+        rule, and one-robot segments their own check (_still_holds, _held_by_other)."""
+        plan, ahead = self.plans.get(robot), self.plans.get(other)
+        if plan is None or ahead is None or (j, other, i) not in plan.follow:
+            return False
+        link, report, mine = self.links.get(other), self.reports.get(other), self.reports.get(robot)
+        if (link is None or report is None or mine is None or report.pose is None or mine.pose is None
+                or not report.link_ok or report.safe_pause or report.stalled or link.cancel_wait
+                or link.state != "MOVING" or link.control_sent == "PAUSE" or other in self.held):
+            return False
+        if not self._on_first_leg(other, ahead) or ahead.entries[i].leg != 0 or ahead.entry < i:
+            return False
+        if self.held.get(robot, {}).get("point") == plan.entries[j].point:
+            # Waiting at this very position: it is not let go while the robot ahead is inside a one-robot segment
+            # (crossroad, door, slot) on its way - it would only drive up to that segment and stop again. A robot
+            # that is driving is not stopped for this (the segment's own check holds it at its stop line if it must).
+            for entry in plan.entries[j:]:
+                if entry.leg != 0:
+                    break
+                for name in self.graph.segs(entry.piece):
+                    seg = self.segments.get(name)
+                    holding = seg.holders.get(other) if seg is not None else None
+                    if holding is not None and seg.kind == "single" and holding.state == "OCCUPIED":
+                        return False
+        waiting = self.held.get(robot, {}).get("peer") == other
+        gap = self.config.corridor.follow_resume_m if waiting else self.config.corridor.follow_gap_m
+        return dist(report.pose, mine.pose) >= gap
 
     def _held_by_other_segment(self, robot, name, direction):
         seg = self.segments.get(name)
@@ -1081,6 +1121,26 @@ class PlanManager:
             "plans": plans,
             "plan": dict(self.plan_info),
         }
+
+
+def _follows(ahead, behind):
+    """The entries behind go the way of the entries ahead, in the same direction: the position ahead and the next one
+    come in the same order on the way behind. Standing positions do not count (the robot ahead stops there)."""
+    if not ahead or not behind or ahead[0].standing or behind[0].standing:
+        return False
+    way_ahead = _points(ahead)
+    way_behind = _points(behind)
+    if len(way_ahead) < 2:
+        return False
+    return any(way_behind[k] == way_ahead[0] and way_behind[k + 1] == way_ahead[1] for k in range(len(way_behind) - 1))
+
+
+def _points(entries):
+    out = []
+    for entry in entries:
+        if not out or out[-1] != entry.point:
+            out.append(entry.point)
+    return out
 
 
 def _seg_dist(p, a, b):

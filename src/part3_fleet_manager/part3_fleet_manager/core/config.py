@@ -1,7 +1,7 @@
 """Load and validate the fleet.yaml settings in BRIEF section 8."""
 
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from math import cos, dist, isfinite, radians, sin
 from os import PathLike
 from os.path import expanduser
@@ -564,6 +564,42 @@ def _load_graph(data: Mapping | None, segments: Mapping) -> GraphCfg:
     return GraphCfg(plan_speed_mps=speed, level_weights=weights, corridor=corridor, points=points, **numbers)
 
 
+def _with_slot_links(traffic: TrafficCfg, slots: Mapping, exit_blocked: set) -> TrafficCfg:
+    """Slot links of the segment map from zones.<z>.slot2_blocks_exit (4O follow-up 5, D-60): true = hall -> slot 2
+    -> slot 1 (slot 2 is in the way out of slot 1), false = hall -> slot 1 and hall -> slot 2; a zone with one slot
+    = hall -> slot 1. The hall is the shared segment of the zone's region. traffic.links holds the other links; a
+    slot link written there anyway must be one of these."""
+    specs = traffic.segments
+    if not specs:
+        return traffic
+    made = []
+    for zone in slots:
+        region = geometry.ZONE_REGIONS[zone]
+        hall = next((n for n, s in specs.items() if s.kind == "shared" and s.region == region), None)
+        slot = {s.slot: n for n, s in specs.items() if s.zone == zone and s.slot is not None}
+        if hall is None or 1 not in slot:
+            continue                                     # _check_segment_map names what is missing
+        if 2 in slot:
+            if zone in exit_blocked:
+                made += [(hall, slot[2]), (slot[2], slot[1])]
+            else:
+                made += [(hall, slot[1]), (hall, slot[2])]
+        else:
+            made.append((hall, slot[1]))
+    made_set = {frozenset(pair) for pair in made}
+    slot_names = {n for n, s in specs.items() if s.zone is not None and s.slot is not None}
+    kept = []
+    for a, b in traffic.links:
+        if {a, b} & slot_names:
+            if frozenset((a, b)) not in made_set:
+                raise ConfigError(f"traffic.links: {a}–{b} 연결이 zones.*.slot2_blocks_exit와 맞지 않습니다 "
+                                  "(자리 연결은 slot2_blocks_exit에서 만듭니다)")
+            continue
+        if (a, b) not in kept and (b, a) not in kept:
+            kept.append((a, b))
+    return replace(traffic, links=tuple(kept) + tuple(made))
+
+
 def _check_segment_map(traffic: TrafficCfg, slots: Mapping) -> None:
     """PLAN reads its map only from fleet.yaml: every region and every zone slot needs a segment (4O)."""
     if not traffic.segments and not traffic.links:
@@ -692,7 +728,7 @@ def config_from_dict(data: Mapping) -> FleetConfig:
     return_after_cancel = mission.get("return_after_cancel")
     if return_after_cancel is not None and type(return_after_cancel) is not bool:
         raise ConfigError("mission.return_after_cancel: bool 값이 필요합니다")
-    traffic = _load_traffic(root.get("traffic"), zones)
+    traffic = _with_slot_links(_load_traffic(root.get("traffic"), zones), slots, exit_blocked_zones)
     _check_segment_map(traffic, slots)
     values = {**asdict(ObstacleCfg()), **_mapping(root.get("obstacle", {}), "obstacle")}
     threshold = _number(values["min_confidence"], "obstacle.min_confidence", minimum=0)

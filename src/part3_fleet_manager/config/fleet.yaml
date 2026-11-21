@@ -139,27 +139,15 @@ traffic:                        # 단계 4O 교통 판단 (기본값은 LEGACY �
     E2:              {kind: single,  zone: E, slot: 2, label: "101호 병실(E) 2번 자리",    circle: {x: -0.500, y: -2.950, r: 0.6}}
     F1:              {kind: single,  zone: F, slot: 1, label: "조제실(F) 1번 자리",        circle: {x: -1.400, y: -5.400, r: 0.6}}
     F2:              {kind: single,  zone: F, slot: 2, label: "조제실(F) 2번 자리",        circle: {x: -1.350, y: -4.700, r: 0.6}}
-  links:
-    - [A1, A2]
-    - [A2, HALL_TOP]
-    - [D1, HALL_TOP]
-    - [D2, HALL_TOP]
-    - [HALL_TOP, CORRIDOR_TOP]
+  links:                        # 칸 사이 연결. 구역 자리 연결은 적지 않는다: zones.<구역>.slot2_blocks_exit에서 만든다 (D-60)
+    - [HALL_TOP, CORRIDOR_TOP]  #   true  = 홀 → 2번 → 1번 (A·C·F),  false = 홀 → 1번, 홀 → 2번 (B·D·E). 홀 = 그 구역 영역의 shared 칸
     - [CORRIDOR_TOP, CROSSROAD]
     - [CROSSROAD, CORRIDOR_BOTTOM]
     - [CORRIDOR_BOTTOM, HALL_BOTTOM]
-    - [HALL_BOTTOM, C2]
-    - [C2, C1]
-    - [HALL_BOTTOM, F2]
-    - [F2, F1]
     - [CROSSROAD, DOOR_B]
     - [DOOR_B, ROOM_B]
-    - [ROOM_B, B1]
-    - [ROOM_B, B2]
     - [CROSSROAD, DOOR_E]
     - [DOOR_E, ROOM_E]
-    - [ROOM_E, E1]
-    - [ROOM_E, E2]
   graph:                        # PLAN 지점 그래프 (D-44). 자리 12개는 위 칸 지도의 자리 칸에서 가져온다
     corridor: [CORRIDOR_TOP, CORRIDOR_BOTTOM]   # 복도 칸: 이 두 칸을 cell_m 길이로 자동으로 나눈다
     cell_m: 0.5

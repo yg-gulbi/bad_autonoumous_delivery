@@ -428,6 +428,13 @@ class MissionManager:
                 if job.id == mission_id:
                     r.queue.remove(job)
                     self._cancel_job(job, now, "대기 임무 취소", by)
+                    if (r.job is None and not r.queue and not r.canceling and robot in self.ready
+                            and r.return_after_cancel_id is not None):
+                        # Its running mission was cancelled and confirmed in this tick while this one still waited
+                        # (so the return home was skipped): with the queue empty now, it goes home after all
+                        # (random seed 188 of 4O follow-up 5: left standing in the upper corridor).
+                        self.ready.pop(robot, None)
+                        self._maybe_return_after_cancel(robot, now)
                     return
             if not r.job or r.job.id != mission_id:
                 continue
