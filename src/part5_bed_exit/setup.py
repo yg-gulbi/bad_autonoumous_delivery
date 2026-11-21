@@ -17,9 +17,14 @@ setup(
         ('share/part5_bed_exit', ['package.xml']),
         (
             'share/part5_bed_exit/config',
-            glob('config/*.template.json')
+            glob('config/*.default.json')
+            + glob('config/*.template.json')
             + glob('config/*.template.yaml')
             + glob('config/*.mp3'),
+        ),
+        (
+            'share/part5_bed_exit/models',
+            glob('models/*.pt') + glob('models/*.task'),
         ),
         ('share/part5_bed_exit/launch', glob('launch/*.launch.py')),
         ('share/part5_bed_exit', ['USAGE.md', 'requirements.txt']),

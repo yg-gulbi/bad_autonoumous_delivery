@@ -44,6 +44,19 @@ from part5_bed_exit.tts_speaker import (
 WINDOW_TITLE = 'Part 5 Bed Exit (/patient/bed_exit)'
 
 
+def _resolve_default_method_config() -> str:
+    """``method_config`` 미지정 시 설치된 또는 소스 트리의 ``methods.default.json``을 찾는다."""
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        installed = Path(get_package_share_directory('part5_bed_exit')) / 'config' / 'methods.default.json'
+        if installed.is_file():
+            return str(installed)
+    except Exception:
+        pass
+    local = Path(__file__).resolve().parents[1] / 'config' / 'methods.default.json'
+    return str(local) if local.is_file() else ''
+
+
 def _load_config_defaults(config_path: str) -> dict:
     """``method_config`` JSON이 유효하면 노드 파라미터 기본값 참조용 딕셔너리를 읽는다."""
     if not config_path:
@@ -124,6 +137,8 @@ class BedExitNode(Node):
         self.declare_parameter('method_config', '')
         method_path = self.get_parameter('method').value
         config_path = self.get_parameter('method_config').value
+        if detector is None and not config_path and (not method_path or ':' not in str(method_path)):
+            config_path = _resolve_default_method_config()
         cfg = _load_config_defaults(config_path)
 
         # 2) 기본 실행·입출력·회전 파라미터

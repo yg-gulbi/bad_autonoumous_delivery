@@ -61,11 +61,9 @@ def _build_nodes(context):
 
 
 def generate_launch_description():
-    default_params = str(
-        Path(get_package_share_directory('part5_bed_exit'))
-        / 'config'
-        / 'bed_exit.params.template.yaml'
-    )
+    share_dir = Path(get_package_share_directory('part5_bed_exit'))
+    default_params = str(share_dir / 'config' / 'bed_exit.params.template.yaml')
+    default_method_config = str(share_dir / 'config' / 'methods.default.json')
     return LaunchDescription([
         DeclareLaunchArgument(
             'params_file',
@@ -74,7 +72,9 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument('method', default_value='', description='Optional method override'),
         DeclareLaunchArgument(
-            'method_config', default_value='', description='Optional ROI/model JSON config path'
+            'method_config',
+            default_value=default_method_config,
+            description='ROI/model JSON config path (defaults to installed methods.default.json)',
         ),
         DeclareLaunchArgument('camera_index', default_value='', description='Optional camera index'),
         DeclareLaunchArgument('video_path', default_value='', description='Optional MP4 input path'),
