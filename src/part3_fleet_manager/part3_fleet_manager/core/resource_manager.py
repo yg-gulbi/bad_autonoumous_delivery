@@ -371,6 +371,10 @@ class ResourceManager:
                 self._release(name, robot, now, f"{self.robot_label(robot)} · {self.resource_label(name)} 통과 완료",
                               leg.mission_id if leg else None)
 
+    def level_of(self, leg: Leg) -> int:
+        """Level sent with the MOVE (LEGACY never changes a leg's Level)."""
+        return leg.level
+
     def effective_level(self, leg: Leg, now: float) -> int:
         interval = self.config.resources.aging_s
         return leg.level + int((now - leg.since) // interval) if interval else leg.level

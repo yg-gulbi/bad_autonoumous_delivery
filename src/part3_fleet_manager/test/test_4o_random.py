@@ -2,9 +2,18 @@
 
 Checks 1-5 are the ones of ac58e60. Check 4 used the preemption rule, which PLAN no longer has; it keeps its
 meaning as "a pending robot the plan lets go is not kept waiting longer than decision_window_s + 2 s".
+
+Events: missions, cancels (with a higher-Level resubmit), manual pauses and 2 s link drops (1b565ba), and since
+the 4O follow-up: quick send (GO_ZONE with a Level), Level change (SET_LEVEL), the same mission sent, cancelled
+and sent again three times within 5 s, a second cancel before the first is confirmed, bed exit (the PART 05
+feed runs all the time), an obstacle (Nav2 gives up, PART 06 verdict, card), both robots losing the link at
+once, a link loss longer than link_timeout_s (of a robot that is not driving). On odd seeds robot_b returns to its dock and starts docked, so
+every one of its trips leaves the dock and ends docked.
 """
 import os
 import random
+from dataclasses import replace
+from math import inf
 
 import pytest
 
@@ -17,6 +26,7 @@ DEFAULT_SEEDS = int(os.environ.get("PLAN_RANDOM_SEEDS", "50"))
 SIM_DURATION_S = 600.0
 DRAIN_LIMIT_S = 480.0
 DT = 0.2
+DRIVING = ("MOVING", "UNDOCKING", "LOCALIZING", "DOCKING")
 
 
 def _travel_dir(bot, smap) -> int:
@@ -28,14 +38,36 @@ def _travel_dir(bot, smap) -> int:
     return 1 if dp > 0 else -1
 
 
+def seed_config(cfg, seed: int):
+    """Odd seeds: robot_b goes home to its dock (and starts on it)."""
+    if seed % 2 and cfg.robots[B].dock is not None:
+        return replace(cfg, robots={**cfg.robots, B: replace(cfg.robots[B], return_to="DOCK")}), {B}
+    return cfg, set()
+
+
 def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> dict:
     rng = random.Random(seed)
-    sim = KinematicSim(cfg, mode="PLAN", speed_mps=0.2)
+    cfg, docked = seed_config(cfg, seed)
+    sim = KinematicSim(cfg, mode="PLAN", speed_mps=0.2, docked=docked, bed_feed=True)
     log: list[str] = []
     submitted_refs: list[str] = []
     stats = {"missions": 0, "cancels": 0, "requeues": 0, "pauses": 0, "drops": 0, "safety_cards": 0,
-             "prox_stops": 0, "prox_stops_planned": 0, "replans": 0, "plan_ms_max": 0.0, "fallbacks": 0}
+             "prox_stops": 0, "prox_stops_planned": 0, "replans": 0, "plan_ms_max": 0.0, "fallbacks": 0,
+             "quick_sends": 0, "level_changes": 0, "bursts": 0, "double_cancels": 0, "bed_exits": 0,
+             "obstacles": 0, "double_drops": 0, "long_drops": 0, "undocks": 0, "docks": 0,
+             "rejected": 0}
     injected_until = {"t": -1.0}   # proximity stops right after a manual pause or link drop are not plan failures
+    scheduled: list[tuple[float, object]] = []   # (time, action) for events made of several steps
+    last_resume: dict[str, float] = {}
+    verdict_for: dict[str, float] = {}
+    sent_home: dict[str, float] = {}
+
+    def schedule(at, action):
+        scheduled.append((at, action))
+        scheduled.sort(key=lambda item: item[0])
+
+    def injected(until):
+        injected_until["t"] = max(injected_until["t"], until)
 
     # Pre-schedule random events across the 10-minute window.
     next_event_t = rng.uniform(0.5, 4.0)
@@ -146,13 +178,36 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
                     log.append(f"t={now:.1f} CONFIRM {r} {unit.job.id}")
             else:
                 confirm_at.pop(r, None)
-        # Auto-resume expired random manual pauses.
+        # Resume after a manual pause has run out or the bed is back to normal (once a second while denied).
         for r in list(paused_until):
             if now >= paused_until[r]:
                 paused_until.pop(r)
-                if sim.core.safety.causes[r]:
-                    sim.resume(r)
-                    log.append(f"t={now:.1f} RESUME {r}")
+        safety = sim.core.safety
+        for r in sim.robots:
+            if not safety.causes[r] or r in paused_until or now - last_resume.get(r, -inf) < 1.0:
+                continue
+            if safety.denial([r], now, safety.bed_exit):
+                continue
+            last_resume[r] = now
+            sim.resume(r)
+            log.append(f"t={now:.1f} RESUME {r} {sorted(safety.causes[r])}")
+        # PART 06 verdict on the photo of a Nav2 abort in front of an obstacle (0.6 s later).
+        for r, bot in sim.robots.items():
+            if bot.gave_up_at is not None and verdict_for.get(r) != bot.gave_up_at and now >= bot.gave_up_at + 0.6:
+                verdict_for[r] = bot.gave_up_at
+                label = rng.choice(("medical_box", "person", None))
+                sim.obstacle_verdict(r, label)
+                log.append(f"t={now:.1f} OBSTACLE_VERDICT {r} {label}")
+        # Drain: a robot left elsewhere by a quick send is sent home.
+        if now >= duration_s:
+            for r, unit in sim.core.mission.robots.items():
+                home = cfg.robots[r].start_zone
+                if (unit.state == "IDLE" and unit.job is None and not unit.queue and not unit.canceling
+                        and unit.zone != home and sim.robots[r].state in DONE and not safety.causes[r]
+                        and now - sent_home.get(r, -inf) > 10.0):
+                    sent_home[r] = now
+                    sim.cmd("GO_ZONE", robot=r, zone=home)
+                    log.append(f"t={now:.1f} GO_HOME {r} {home}")
         # If a boundary drop ever caused UNKNOWN while robot is back online, operator confirms clear.
         sm = sim.core.resources
         for name, seg in sm.segments.items():
@@ -209,7 +264,7 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
         ] + [(None, j) for j in sim.core.mission.unassigned]
 
         roll = rng.random()
-        if roll < 0.56 and len(active_missions) + len(queued_missions) < 6:
+        if roll < 0.40 and len(active_missions) + len(queued_missions) < 6:
             # New random mission (kind, level, zones)
             kind = rng.choice(("PATIENT", "MED", "CALL"))
             lvl = rng.choice((1, 2, 3))
@@ -227,7 +282,7 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
                 log.append(f"t={now:.1f} NEW CALL L{lvl} {z} ({ref})")
             submitted_refs.append(ref)
             stats["missions"] += 1
-        elif roll < 0.78 and active_missions:
+        elif roll < 0.52 and active_missions:
             # Cancel an active mission at any time (including mid-corridor!), sometimes re-submitting with higher Level!
             r, job = rng.choice(active_missions)
             sim.cancel(job.id)
@@ -252,7 +307,7 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
                     log.append(f"t={now:.1f} REQUEUE CALL L{new_lvl} {z} ({ref})")
                 submitted_refs.append(ref)
                 stats["requeues"] += 1
-        elif roll < 0.90:
+        elif roll < 0.58:
             # Pause a robot for 2~6 s, then resume.
             r = rng.choice((A, B))
             if r not in paused_until and not sim.core.safety.causes[r]:
@@ -262,7 +317,7 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
                 injected_until["t"] = max(injected_until["t"], now + dur + 10.0)
                 stats["pauses"] += 1
                 log.append(f"t={now:.1f} PAUSE {r} for {dur:.1f}s")
-        else:
+        elif roll < 0.62:
             # 2 s link drop.
             r = rng.choice((A, B))
             if now >= sim.robots[r].drop_until:
@@ -270,8 +325,106 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
                 injected_until["t"] = max(injected_until["t"], now + 12.0)
                 stats["drops"] += 1
                 log.append(f"t={now:.1f} DROP_LINK {r} 2.0s")
+        elif roll < 0.68:
+            # Quick send (GO_ZONE) with a Level to a robot without a mission.
+            idle = [r for r, u in sim.core.mission.robots.items() if not u.job and not u.queue and not u.canceling]
+            if idle:
+                r, zone, level = rng.choice(idle), rng.choice(ZONES), rng.choice((1, 2, 3))
+                sim.cmd("GO_ZONE", robot=r, zone=zone, level=level)
+                stats["quick_sends"] += 1
+                log.append(f"t={now:.1f} GO_ZONE {r} {zone} L{level}")
+        elif roll < 0.74:
+            # Level change of a waiting or running mission.
+            jobs = [j for _, j in active_missions + queued_missions]
+            if jobs:
+                job = rng.choice(jobs)
+                level = rng.choice([lvl for lvl in (1, 2, 3) if lvl != job.level])
+                sim.cmd("SET_LEVEL", mission_id=job.id, level=level)
+                stats["level_changes"] += 1
+                log.append(f"t={now:.1f} SET_LEVEL {job.id} L{job.level}->L{level}")
+        elif roll < 0.78:
+            # The same mission sent, cancelled and sent again three times within 5 s (the last one stays).
+            kind, level = rng.choice(("PATIENT", "MED", "CALL")), rng.choice((1, 2, 3))
+            zones = rng.sample(ZONES, 2)
+            refs: list[str] = []
+
+            def send():
+                if kind == "PATIENT":
+                    refs.append(sim.submit_patient(zones[0], zones[1], level=level))
+                elif kind == "MED":
+                    refs.append(sim.submit_med(zones, level=level))
+                else:
+                    refs.append(sim.submit_call(zones[0], level=level))
+                stats["missions"] += 1
+                submitted_refs.append(refs[-1])
+                log.append(f"t={sim.now:.1f} BURST SEND {kind} L{level} {zones} ({refs[-1]})")
+
+            def cancel_last():
+                mid = sim.ids.get(refs[-1]) if refs else None
+                if mid:
+                    sim.cancel(mid)
+                    stats["cancels"] += 1
+                    log.append(f"t={sim.now:.1f} BURST CANCEL {mid}")
+
+            for i, action in enumerate((send, cancel_last, send, cancel_last, send, cancel_last, send)):
+                schedule(now + 0.6 * i, action)
+            stats["bursts"] += 1
+        elif roll < 0.82:
+            # Cancel a running mission twice (same tick and again before the robot confirms the CANCEL),
+            # and its robot's next waiting mission right after.
+            if active_missions:
+                r, job = rng.choice(active_missions)
+                sim.cancel(job.id)
+                sim.cancel(job.id)
+                schedule(now + DT, lambda mid=job.id: sim.cancel(mid))
+                queue = list(sim.core.mission.robots[r].queue)
+                if queue:
+                    schedule(now + DT, lambda mid=queue[0].id: sim.cancel(mid))
+                stats["cancels"] += 1
+                stats["double_cancels"] += 1
+                log.append(f"t={now:.1f} DOUBLE_CANCEL {job.id} ({r}, robot {sim.robots[r].state})")
+        elif roll < 0.86:
+            # Bed exit for 1~4 s (the feed keeps running); robot_a is held until the operator resumes.
+            dur = rng.uniform(1.0, 4.0)
+            sim.bed_value = True
+
+            def bed_back():
+                sim.bed_value = False
+            schedule(now + dur, bed_back)
+            injected(now + dur + 10.0)
+            stats["bed_exits"] += 1
+            log.append(f"t={now:.1f} BED_EXIT {dur:.1f}s")
+        elif roll < 0.90:
+            # Obstacle in front of a driving robot: it stops, Nav2 gives up, PART 06 answers, a card opens.
+            moving = [r for r, bot in sim.robots.items() if bot.state == "MOVING" and bot.blocked_since is None]
+            if moving:
+                r = rng.choice(moving)
+                sim.obstacle(r)
+                injected(now + sim.cfg.mock.abort_after_s + 10.0)
+                stats["obstacles"] += 1
+                log.append(f"t={now:.1f} OBSTACLE {r} at {sim.robots[r].pose}")
+        elif roll < 0.94:
+            # Both robots lose the link for 2 s at the same time.
+            for r in (A, B):
+                sim.drop_link(r, 2.0)
+            injected(now + 12.0)
+            stats["double_drops"] += 1
+            log.append(f"t={now:.1f} DROP_LINK both 2.0s")
+        else:
+            # A robot that is not driving loses the link longer than link_timeout_s. (A robot driving toward a
+            # closed stop line cannot be stopped once a PAUSE is lost for longer than the stop line lasts; the
+            # report measures that case separately.)
+            standing = [r for r, bot in sim.robots.items() if bot.state not in DRIVING and now >= bot.drop_until]
+            if standing:
+                r = rng.choice(standing)
+                dur = rng.uniform(cfg.robot_link.link_timeout_s + 1.0, cfg.robot_link.link_timeout_s + 5.0)
+                sim.drop_link(r, dur)
+                injected(now + dur + 10.0)
+                stats["long_drops"] += 1
+                log.append(f"t={now:.1f} DROP_LINK {r} {dur:.1f}s (long, {sim.robots[r].state})")
 
     def count_events(out):
+        stats["rejected"] += sum(1 for ack in out.acks if not ack.get("ok"))
         for e in out.events:
             if e["type"] == "PROXIMITY_STOP":
                 stats["prox_stops"] += 1
@@ -289,6 +442,8 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
             if sim.now >= next_event_t:
                 inject_random_event()
                 next_event_t = sim.now + rng.uniform(4.0, 16.0)
+            while scheduled and scheduled[0][0] <= sim.now + 1e-9:
+                scheduled.pop(0)[1]()
             handle_operator_routine()
             out = sim.step(DT)
             count_events(out)
@@ -303,6 +458,8 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
 
         drain_end = sim.now + DRAIN_LIMIT_S
         while sim.now < drain_end - 1e-9:
+            while scheduled and scheduled[0][0] <= sim.now + 1e-9:
+                scheduled.pop(0)[1]()
             handle_operator_routine()
             out = sim.step(DT)
             count_events(out)
@@ -339,6 +496,8 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
 
         stats["max_both_wait_s"] = round(max_both_wait_s, 2)
         stats["max_start_wait_s"] = round(max_start_wait_s, 2)
+        stats["undocks"] = sum(bot.undocks for bot in sim.robots.values())
+        stats["docks"] = sum(bot.docks for bot in sim.robots.values())
         return stats
     finally:
         sim.close()

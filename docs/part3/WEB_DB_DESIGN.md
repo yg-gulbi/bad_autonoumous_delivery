@@ -318,7 +318,7 @@ labels:
   - `RESOURCE_ENTER` → "{로봇} 복도 진입 확인", `RESOURCE_RELEASE` → "{로봇} 복도 통과 완료"
   - `CORRIDOR_YIELD_START` → "{로봇} 복도 양보 시작"
   - `MISSION_CREATED` → "{종류} 요청 등록", `ARRIVE` → "{로봇} · {구역} 도착", `CONFIRM_STEP` → "{구역} 확인 완료"
-  - 4O PLAN: `PLAN_UPDATE` → "두 로봇 다시 계획", `PLAN_WAIT` → "{로봇} 계획 순서 대기", `PLAN_YIELD_MOVE` → "{로봇} 길 비켜 주는 중". 세 종류 모두 운영 기록의 "판단" 필터에 들어간다. 지도에는 `traffic.plans`의 계획 경로를 가는 선으로 그린다.
+  - 4O PLAN: `PLAN_UPDATE` → "두 로봇 다시 계획", `PLAN_WAIT` → "{로봇} 계획 순서 대기", `PLAN_YIELD_MOVE` → "{로봇} 길 비켜 주는 중". 세 종류 모두 운영 기록의 "판단" 필터에 들어간다. 지도에는 `traffic.plans`의 계획 경로를 가는 선으로 그린다. `LEVEL_CHANGE` → "응급도 변경" (문장 "Level 1 → 3", 작업 기록에 남는다).
 - 보조 문장은 `detail.reason`을 그대로 쓰고, 없으면 비운다.
 - 실시간 화면과 DB 기록 조회(운영 기록, 작업 상세의 기록)가 같은 문장 함수를 쓴다.
 - 옛 기록처럼 `reason`이 코드 값이거나 로봇 ID가 들어 있으면 그대로 보이지 않는다. 종류별 문장으로 바꾸고, ID는 표시 이름으로 바꾼다:
@@ -704,7 +704,8 @@ sequenceDiagram
 
 ### 5.10 L9 구역으로 보내기
 
-- 로봇 카드의 [보내기] 또는 지도의 구역 보내기 창 → `GO_ZONE {robot, zone}`.
+- 로봇 카드의 [보내기] 또는 지도의 구역 보내기 창 → `GO_ZONE {robot, zone, level}` (응급도 1~3, 기본 1).
+- 작업 상세의 [응급도 변경] (PLAN에서만 보임, 대기·진행 중 임무) → `SET_LEVEL {mission_id, level}`.
 - 관제: 임무가 없는 로봇만 허용 (아니면 `E-409`). 자원 규칙은 똑같이 적용한다. `INSERT events (LEG_START, by)`. 임무 테이블에는 쓰지 않는다 (운영자 이동은 임무가 아니다). 도착하면 그 구역에서 기다린다.
 
 ### 5.11 L10 정지·재개
@@ -801,7 +802,7 @@ sequenceDiagram
 | `GET /events` | SSE (실시간 상태·이벤트·카드·응답) | L1 |
 | `GET /api/map`, `/map/meta`, `/map/image` | 지도 설정, 평면도·변환, 정리한 실제 맵 | L1 |
 | `POST /api/mission` | 임무 요청 → `/ui/mission_req` | L2, L3 |
-| `POST /api/command` | `CONFIRM_STEP`, `CANCEL_MISSION`, `RETRY`, `PAUSE_ROBOT`, `RESUME_ROBOT`, `PAUSE_ALL`, `RESUME_ALL`, `GO_ZONE`, `RESOURCE_CLEAR_CONFIRM` → `/ui/operator_cmd` | L6~L10, L13 |
+| `POST /api/command` | `CONFIRM_STEP`, `CANCEL_MISSION`, `RETRY`, `PAUSE_ROBOT`, `RESUME_ROBOT`, `PAUSE_ALL`, `RESUME_ALL`, `GO_ZONE`, `SET_LEVEL`, `RESOURCE_CLEAR_CONFIRM` → `/ui/operator_cmd` | L6~L10, L13 |
 | `POST /api/decision` | 결정 카드 선택 → `/ui/decision` | L11 |
 | `POST /api/service/pause`, `/api/service/resume` | `/robot/pause`·`/robot/resume` 호출 (화면 버튼은 쓰지 않음. 누른 사람이 안 남는다) | L10 |
 | `GET /api/missions…`, `/api/events…`, `/api/cards`, `/api/kpi`, `/api/patients/recent` | 기록 조회 (`bad.db` 읽기 전용) | L14 |

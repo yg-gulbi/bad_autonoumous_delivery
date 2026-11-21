@@ -29,6 +29,7 @@ const duration = n => [Math.floor(Math.max(0, n) / 60), Math.floor(Math.max(0, n
 const pill = (text, color = "") => `<span class="badge ${color}">${h(text)}</span>`;
 const btn = (text, act, id = "", cls = "", disabled = false) => `<button type="button" class="${cls}" data-act="${act}" data-id="${h(id)}" ${disabled ? "disabled" : ""}>${h(text)}</button>`;
 const zoneOptions = initial => Object.keys(cfg.zones).map(z => `<option value="${z}" ${z === initial ? "selected" : ""}>${h(zn(z))}</option>`).join("");
+const levelOptions = (initial = 1) => [1, 2, 3].map(l => `<option value="${l}" ${l === Number(initial) ? "selected" : ""}>Level ${l}</option>`).join("");
 const waitStates = new Set(["HOLD", "GIVE_WAY", "YIELDING", "WAIT_CONFIRM"]);
 const stateColor = state => ["SAFE_PAUSE", "FAULT", "OFFLINE"].includes(state) ? "red" : waitStates.has(state) ? "amber" : "";
 function displayState(id, robot) {

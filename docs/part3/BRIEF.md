@@ -335,7 +335,8 @@ PART 04의 ROS 패키지 이름은 `hospital_nav`, 소스 폴더는 `src/part4_a
 | `RETRY` | `robot` | 실패한 구간을 다시 시도 |
 | `PAUSE_ROBOT` · `RESUME_ROBOT` | `robot` | 로봇 한 대만 정지·재개 |
 | `PAUSE_ALL` · `RESUME_ALL` | 없음 | 화면의 [안전 정지 요청]·[전체 재개]. `/robot/pause`·`/robot/resume`과 같은 동작·같은 거절 조건이고, `by`를 기록에 남긴다 |
-| `GO_ZONE` | `robot`, `zone` | 지정 구역으로 보내기 (임무 없는 로봇만. 자원 규칙은 똑같이 적용) |
+| `GO_ZONE` | `robot`, `zone`, 선택 `level`(1~3) | 지정 구역으로 보내기 (임무 없는 로봇만. 자원 규칙은 똑같이 적용). `level`이 없으면 `mission.manual_level` |
+| `SET_LEVEL` | `mission_id`, `level`(1~3) | 대기·진행 중 임무의 응급도 변경. PLAN만: 그 임무의 구간을 새 Level로 다시 계획한다. LEGACY는 `E-409` (4O 후속, D-48) |
 | `RESOURCE_CLEAR_CONFIRM` | `resource` | 점유 불명(`UNKNOWN`) 자원을 사람이 확인하고 비움 |
 
 모든 명령에 `/ui/ack`로 답한다.
@@ -441,7 +442,7 @@ PART 04의 ROS 패키지 이름은 `hospital_nav`, 소스 폴더는 `src/part4_a
  "detail": {"resources": ["CORRIDOR", "ROOM_E"], "reason": "복도 비어 있음 + Level 3 > Level 2 → 약품 운송 로봇 허가"}}
 ```
 
-이벤트 종류: `MISSION_CREATED`, `MISSION_REJECTED`, `LEG_START`, `ARRIVE`, `CONFIRM_STEP`, `MISSION_DONE`, `MISSION_CANCELED`, `RESOURCE_REQUEST`, `RESOURCE_GRANT`, `RESOURCE_HOLD`, `RESOURCE_ENTER`, `RESOURCE_RELEASE`, `RESOURCE_UNKNOWN`, `RESOURCE_CLEAR_CONFIRM`, `DEADLOCK_DETECTED`, `YIELD_START`, `YIELD_DONE`, `CORRIDOR_YIELD_START`, `CORRIDOR_YIELD_END`, `CORRIDOR_YIELD_TIMEOUT`, `CORRIDOR_FOLLOW_STOP`, `CORRIDOR_FOLLOW_CLEAR`, `ZONE_OCCUPIED_HOLD`, `ZONE_OCCUPIED_CLEAR`, `PROXIMITY_STOP`, `PROXIMITY_CLEAR`, `STALL_SHORT`, `STALL_LONG`, `BLOCKED`, `UNBLOCKED`, `PAUSE`, `RESUME`, `RESUME_REJECTED`, `BED_EXIT`, `BED_EXIT_CLEAR`, `BUMP`, `MOVE_REJECTED`, `NAV_FAILED`, `FAULT`, `CARD_OPEN`, `CARD_CLOSED`, `LINK_LOST`, `LINK_BACK`, `WARNING`, `BED_MONITOR_WARN`, `BED_MONITOR_LOST`, `BED_MONITOR_BACK`, `BED_MONITOR_BYPASS`, `OBSTACLE_INSPECT`, `OBSTACLE_RESULT`, `OBSTACLE_REPORT`, `OBSTACLE_RETRY`, `STOP_RESENT`, `STOP_UNCONFIRMED`, `ARRIVED_FROM_STATE`, `PLAN_UPDATE`, `PLAN_WAIT`, `PLAN_YIELD_MOVE`.
+이벤트 종류: `MISSION_CREATED`, `MISSION_REJECTED`, `LEG_START`, `ARRIVE`, `CONFIRM_STEP`, `MISSION_DONE`, `MISSION_CANCELED`, `RESOURCE_REQUEST`, `RESOURCE_GRANT`, `RESOURCE_HOLD`, `RESOURCE_ENTER`, `RESOURCE_RELEASE`, `RESOURCE_UNKNOWN`, `RESOURCE_CLEAR_CONFIRM`, `DEADLOCK_DETECTED`, `YIELD_START`, `YIELD_DONE`, `CORRIDOR_YIELD_START`, `CORRIDOR_YIELD_END`, `CORRIDOR_YIELD_TIMEOUT`, `CORRIDOR_FOLLOW_STOP`, `CORRIDOR_FOLLOW_CLEAR`, `ZONE_OCCUPIED_HOLD`, `ZONE_OCCUPIED_CLEAR`, `PROXIMITY_STOP`, `PROXIMITY_CLEAR`, `STALL_SHORT`, `STALL_LONG`, `BLOCKED`, `UNBLOCKED`, `PAUSE`, `RESUME`, `RESUME_REJECTED`, `BED_EXIT`, `BED_EXIT_CLEAR`, `BUMP`, `MOVE_REJECTED`, `NAV_FAILED`, `FAULT`, `CARD_OPEN`, `CARD_CLOSED`, `LINK_LOST`, `LINK_BACK`, `WARNING`, `BED_MONITOR_WARN`, `BED_MONITOR_LOST`, `BED_MONITOR_BACK`, `BED_MONITOR_BYPASS`, `OBSTACLE_INSPECT`, `OBSTACLE_RESULT`, `OBSTACLE_REPORT`, `OBSTACLE_RETRY`, `STOP_RESENT`, `STOP_UNCONFIRMED`, `ARRIVED_FROM_STATE`, `PLAN_UPDATE`, `PLAN_WAIT`, `PLAN_YIELD_MOVE`, `LEVEL_CHANGE`.
 
 - 4O PLAN: `PLAN_UPDATE`는 다시 계획한 이유·시간·비용 (`reason_code`, `plan_ms`, `cost`, `method`, `fallback`, `plans`). `PLAN_WAIT`는 계획 순서 때문에 지점 앞에서 기다림 (`point`, `peer`). `PLAN_YIELD_MOVE`는 길을 비켜 주려고 다른 자리로 가는 MOVE와 그 도착 (`target`, `arrived`). 비켜 주는 자리 도착은 정류장 도착이 아니어서 확인 대기·정지 기록을 남기지 않는다.
 
@@ -533,7 +534,7 @@ PART 04의 ROS 패키지 이름은 `hospital_nav`, 소스 폴더는 `src/part4_a
     - 3초(`accept_timeout_s`) 안에 셋 다 없을 때만 `NAV_FAILED` 카드.
   - 로봇별 `return_to: DOCK`이면 도크 접근 경로와 목적지 점유를 확인한 뒤 `DOCK`을 보낸다. 복귀 구간의 DOCKED 또는 동일 임무 STATE의 `COMPLETE`와 `docked: true`가 함께 와야 도크 복귀 완료다. 두 로봇의 기본값은 ZONE이다. robot2 도크는 조제실(F) 쪽이다. robot3는 PART 04에 도크 좌표가 등록된 뒤 DOCK을 사용한다.
 - 출발 준비 중인 로봇의 정지는 무진전 시간에 포함하지 않는다. 이 로봇의 위치는 주행 중인 상대의 근접 판단에 계속 사용한다. 출발 준비가 `robot_link.start_timeout_s`(120초)를 넘으면 `CANCEL`과 기존 `NAV_FAILED` 카드로 처리한다. 준비·접안 중 안전 정지가 필요할 때도 PART 04가 이 단계에서 받는 CANCEL로 중단한다.
-- **운영자 이동(`GO_ZONE`)**: 응급도가 없으므로 `mission.manual_level`(1)로 보낸다. 도착하면 그 구역에서 기다린다 (홈으로 복귀하지 않는다). 임무가 아니라서 `missions`에 쓰지 않는다.
+- **운영자 이동(`GO_ZONE`)**: 빠른 보내기에서 고른 응급도(1~3, 화면 기본 1)로 보낸다. `level`이 없으면 `mission.manual_level`(1)이다. 도착하면 그 구역에서 기다린다 (홈으로 복귀하지 않는다). 임무가 아니라서 `missions`에 쓰지 않는다.
 - **실패**: `MISSION_FAILED`(예: `Nav2: ABORTED`) → `FAULT` + 카드 `NAV_FAILED`: [다시 시도] [이전 구역으로 되돌아가기] [임무 취소], `default: null`.
   - report 모드에서 이유가 `Nav2: ABORTED`이면 카드를 바로 열지 않고 `obstacle.report_wait_s`(4초) 동안 `OBSTACLE`을 기다린다. 오면 그 판별로 장애물 카드를 연다 (5.5절). 안 오면 이 `NAV_FAILED` 카드를 연다. `FAULT`와 `NAV_FAILED` 이벤트는 바로 남긴다.
   - [되돌아가기]로 이전 구역에 도착하면 `FAULT`로 기다린다. 원래 구간은 운영자의 `RETRY`로 다시 시작한다 (`mission.retry_after_return: false`).
@@ -667,11 +668,11 @@ PART 04의 ROS 패키지 이름은 `hospital_nav`, 소스 폴더는 `src/part4_a
 
 `traffic.mode: PLAN`(실행 인자 `traffic_mode:=PLAN`)이면 5.3절의 허가 비교와 선점 대신 두 로봇의 경로와 순서를 함께 계획한다. 기본값은 `LEGACY`이고 LEGACY 동작은 바뀌지 않는다.
 
-1. **지점 그래프** (`traffic.graph`): 자리 12개, 약품 운송 로봇 도크, 교차로, B·E 문, B·E 방 안, 위·아래 홀 입구, 그리고 복도 칸(`cell_m` 0.5 m로 자동 분할)이다. 지점 사이 경로는 `route_planner` 경로를 지점 영역으로 자른 실제 선이다. 걸리는 시간은 거리 ÷ `plan_speed_mps`(기본 mock 속도)다.
+1. **지점 그래프** (`traffic.graph`): 자리 12개, 약품 운송 로봇 도크, 교차로, B·E 문, B·E 방 안, 위·아래 홀 입구, 그리고 복도 칸(`cell_m` 0.5 m로 자동 분할)이다. 지점 사이 경로는 `plan_graph.door_route` 선(`route_planner` 경로에 B·E 방을 드나들 때 교차로 → 문 가운데 → 방 안 지점 → 자리를 넣은 선)을 지점 영역으로 자른 실제 선이다. 걸리는 시간은 거리 ÷ `plan_speed_mps`(기본 mock 속도)다.
 2. **충돌 쌍**: 두 위치의 선 사이 거리가 근접 정지 거리보다 짧으면 동시에 쓸 수 없다. 둘 다 움직이면 `proximity_stop_m`, 한쪽이 자리에 서 있으면 `slot_stop_m`, 둘 다 서 있으면 충돌이 아니다. 복도·교차로·문은 대수 제한(single, 복도는 방향별 one_way)도 같이 본다.
 3. **계획**: 상태는 (A 위치, B 위치, 시간), 한 단계 `plan_step_s`(0.5초)다. 행동은 다음 지점으로 가기, 기다리기, 서 있을 때 다른 자리로 가는 새 MOVE다. 충돌 쌍과 자리 맞바꾸기는 허용하지 않는다. 비용은 Σ `level_weights[Level]` × 도착 시각이고, 임무 없는 로봇은 지금 자리를 목표로 `idle_weight`를 쓴다. 목표 자리는 1번과 2번 모두 후보이고 같으면 1번이다. 정지선(`stop_margin_m`) 안의 지점은 이미 정해진 것으로 두고, 지나온 지점으로 되돌리지 않는다. 시간 한도(`plan_limit_ms`)를 넘거나 세 대 이상이면 Level 순서로 한 대씩 계획하고 `PLAN_UPDATE`에 적는다.
 4. **실행 (ADG)**: 계획의 순서를 충돌 쌍마다 "앞 로봇이 지점을 `clear_margin_m`만큼 지나 `clear_hold_s` 동안 벗어남"으로 바꿔 지킨다. 다음 지점이 아직 막혀 있으면 정지선에서 `PAUSE`, 풀리면 `RESUME`. PART 04에는 MOVE·PAUSE·RESUME·CANCEL만 보낸다. 다른 자리로 가는 MOVE는 "길 비켜 주는 중"이다.
-5. **다시 계획**: 새 구간 요청, 취소, Level 상향 재접수, 구간 도착, 계획보다 `replan_delay_s` 넘게 늦음, 안전 정지 해제, 연결 복구 때. 들어간 지점은 바꾸지 않는다. 취소는 새 목표다(복귀, `return_after_cancel` 기본 true). 연결이 끊긴 로봇은 지금 지점과 남은 MOVE 경로를 막은 것으로 두고 칸은 `UNKNOWN`이 된다.
+5. **다시 계획**: 새 구간 요청, 취소, Level 상향 재접수, 응급도 변경(`SET_LEVEL`), 구간 도착, 계획보다 `replan_delay_s` 넘게 늦음, 안전 정지 해제, 연결 끊김·복구 때. 들어간 지점은 바꾸지 않는다. 취소는 새 목표다(복귀, `return_after_cancel` 기본 true). 연결이 끊긴 로봇은 지금 지점과 남은 MOVE 경로를 막은 것으로 두고 칸은 `UNKNOWN`이 된다. 주행 중 끊기면 남은 MOVE 경로의 빈 칸도 그 로봇 몫(`UNKNOWN`)이다. 응급도 변경은 그 구간의 Level 가중치만 바꾼다(D-48·D-49).
 6. 근접 정지, 0.9 m 출발 확인, 침상 이탈, 장애물, 정지 확인, 멈춤, 도크, 정면·교착 카드는 LEGACY와 같다.
 
 ### 5.4 `deadlock` — 교착 감지와 해소
@@ -969,7 +970,7 @@ mission:
   return_home: true
   return_interruptible: true
   return_level: 1               # 완료한 임무의 응급도를 홈 복귀에 상속하지 않음
-  manual_level: 1               # GO_ZONE에는 UI가 level을 보내지 않음
+  manual_level: 1               # level 없이 온 GO_ZONE의 응급도 (화면의 빠른 보내기는 1~3을 고른다)
   retry_after_return: false     # 이전 구역으로 되돌아간 뒤 원래 구간은 운영자가 재시도
   confirm_at_stops: true
 

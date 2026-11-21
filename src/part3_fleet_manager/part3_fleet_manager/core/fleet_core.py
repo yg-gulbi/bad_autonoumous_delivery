@@ -115,8 +115,12 @@ class FleetCore:
             r = self.mission.robots[robot]
             if r.job or r.queue or r.canceling:
                 raise ValueError("E-409: 임무 없는 로봇만 직접 이동할 수 있습니다.")
-            return self.mission.submit({"type": "GO_ZONE", "level": self.config.mission.manual_level,
+            level = cmd.get("level", self.config.mission.manual_level)   # quick send: Level 1~3, else manual_level
+            return self.mission.submit({"type": "GO_ZONE", "level": level,
                                         "requested_by": cmd["by"], "stops": [{"zone": cmd["zone"]}]}, now, manual_robot=robot)
+        elif action == "SET_LEVEL":
+            self.mission.set_level(cmd["mission_id"], cmd["level"], now, by=cmd["by"])
+            return cmd["mission_id"]
 
     def _choose(self, data, now):
         key, choice, by = data["card_id"], data["choice"], data["by"]

@@ -75,6 +75,8 @@ def command(form, *, robots=None, resources=None):
     if not isinstance(cmd, str) or cmd not in schemas.COMMAND_FIELDS:
         raise ValueError("관제 명령을 확인하세요.")
     data = {key: form.get(key) for key in schemas.COMMAND_FIELDS[cmd]}
+    if cmd in schemas.COMMAND_LEVEL and form.get("level") is not None:
+        data["level"] = form["level"]      # GO_ZONE without a level goes at mission.manual_level
     data.update(v=1, cmd=cmd, cmd_id=request_id(), by=_operator(form))
     return schemas.parse_operator_cmd(schemas.dumps(data), robots=robots, resources=resources)
 
@@ -97,6 +99,7 @@ EVENTS = {
     "MISSION_DONE": "{robot} 임무 완료", "MISSION_CANCELED": "임무 취소", "RESOURCE_REQUEST": "{robot} 통행 요청",
     "RESOURCE_GRANT": "{robot} {resource} 진입 허가", "RESOURCE_HOLD": "{robot} 진입 전 대기",
     "PLAN_UPDATE": "두 로봇 다시 계획", "PLAN_WAIT": "{robot} 계획 순서 대기", "PLAN_YIELD_MOVE": "{robot} 길 비켜 주는 중",
+    "LEVEL_CHANGE": "응급도 변경",
     "RESOURCE_ENTER": "{robot} {resource} 진입 확인", "RESOURCE_RELEASE": "{robot} {resource} 통과 완료",
     "RESOURCE_UNKNOWN": "{resource} 점유 확인 불가", "RESOURCE_CLEAR_CONFIRM": "{resource} 현장 확인",
     "DEADLOCK_DETECTED": "교착 감지", "YIELD_START": "{robot} 교착 양보 시작", "YIELD_DONE": "{robot} 교착 양보 완료",

@@ -134,6 +134,8 @@ class PlanManager:
         self.departed_from: dict[str, str | None] = {}   # slot the robot's current MOVE started from
         self._last_target: dict[str, str | None] = {}
         self.yield_events: list = []
+        self.levels: dict = {}                            # leg -> Level after an operator change (SET_LEVEL)
+        self.coast_route: dict[str, tuple] = {}          # robot that may still drive its MOVE -> remaining pieces
 
     # --- labels and events ----------------------------------------------------------------------
 
@@ -199,6 +201,7 @@ class PlanManager:
         else:
             return False
         self.slot_choice.pop(leg, None)
+        self.levels.pop(leg, None)
         self._origins.pop(robot, None)
         self.wait_reasons.pop(robot, None)
         self._mark("구간 종료")
@@ -209,25 +212,33 @@ class PlanManager:
 
     def move_target(self, leg):
         """(zone, slot) for the MOVE of this leg: its goal slot, the aside slot the plan stops at first, or
-        the goal slot the robot already stands in (that MOVE only reports the arrival)."""
+        the goal slot the robot already stands in (that MOVE only reports the arrival). A dock leg goes to
+        its aside slot first too, else ("DOCK", None)."""
         plan = self.plans.get(leg.robot)
         if plan and (plan.legs or plan.entries):
             name = plan.legs[0].target if plan.legs else plan.entries[0].point
             point = self.graph.points.get(name)
             if point is not None and point.kind == "slot" and point.zone == (
                     leg.destination if not plan.legs else point.zone):
-                return point.zone, point.slot
+                if not leg.dock_path or (plan.legs and plan.legs[0].aside):
+                    return point.zone, point.slot
+        if leg.dock_path:
+            return "DOCK", None
         return leg.destination, self.slot_of(leg)
 
     def arrived_aside(self, robot, data, now) -> bool:
-        """An ARRIVED at the aside slot of a mission leg: the leg waits again and the plan is made again."""
+        """An ARRIVED at the aside slot of a mission leg: the leg waits again and the plan is made again.
+        Judged by the MOVE that was sent (a slot that is not a goal of the leg), not by the current plan: the
+        arrival may come back only with a STATE after a link loss, when the robot had no plan."""
         leg = self.active.get(robot)
-        plan = self.plans.get(robot)
-        if leg is None or not plan or not plan.legs or not plan.legs[0].aside:
+        link = self.links.get(robot)
+        move = link.move if link is not None else None
+        if leg is None or move is None or move.zone == "DOCK" or data.get("destination") != move.zone:
             return False
-        point = self.graph.points[plan.legs[0].target]
-        if data.get("destination") != point.zone:
+        name = self.map.slot_names.get((move.zone, move.slot or 1))
+        if name is None or name in self._goal_endpoints(robot, leg):
             return False
+        point = self.graph.points[name]
         del self.active[robot]
         self.pending[robot] = leg
         self.record("PLAN_YIELD_MOVE", now, f"{self.robot_label(robot)} · {self.endpoint_label(point.name)} 도착, 길 비켜 주는 중",
@@ -245,7 +256,15 @@ class PlanManager:
 
     def effective_level(self, leg, now):
         del now
-        return leg.level
+        return self.level_of(leg)
+
+    def level_of(self, leg):
+        return self.levels.get(leg, leg.level)
+
+    def set_level(self, leg, level):
+        """The mission's Level changed: the same leg is planned again with the new Level's weight."""
+        self.levels[leg] = level
+        self._mark("응급도 변경")
 
     def following(self, robot) -> bool:
         del robot
@@ -286,8 +305,8 @@ class PlanManager:
                         if s.link_ok and s.pose is not None}
         for robot, report in reports.items():
             ok = bool(report.link_ok and report.pose is not None)
-            if ok and self._link_ok.get(robot, ok) != ok:
-                self._mark("연결 복구")
+            if self._link_ok.get(robot, ok) != ok:
+                self._mark("연결 복구" if ok else "연결 끊김")
             self._link_ok[robot] = ok
             if self._safe.get(robot) and not report.safe_pause:
                 self._mark("안전 정지 해제")
@@ -327,7 +346,8 @@ class PlanManager:
             return self.parked_at.get(robot) == slot
         plan = self.plans.get(robot)
         if plan is None or not plan.entries:
-            return True
+            # No plan right now (just back online, or held still): the slot its MOVE started from or goes to.
+            return slot in (self._move_endpoint(robot), self.departed_from.get(robot))
         return slot in self.graph.segs(plan.entries[min(plan.entry, len(plan.entries) - 1)].piece)
 
     def _idle_arrivals(self, now):
@@ -447,7 +467,7 @@ class PlanManager:
         target = self._move_endpoint(robot) if moving else None
         if leg is not None:
             goals = self._goal_endpoints(robot, leg)
-            weight = self.gcfg.level_weights.get(leg.level, 1.0)
+            weight = self.gcfg.level_weights.get(self.level_of(leg), 1.0)
             goal_zone = leg.destination
         else:
             weight = self.gcfg.idle_weight
@@ -478,7 +498,8 @@ class PlanManager:
             norm = hypot(*heading) or 1.0
             committed = [self.graph.pieces[p].point for p in route.pieces[:(until or 0) + 1]]
             # Aside slots it can still turn to: the nearest aside_candidates among the slots ahead (a slot
-            # behind it would need a turn inside the stop line, so it does not take one of the places).
+            # behind it would need a turn inside the stop line, so it does not take one of the places). A robot
+            # that has stopped (PAUSED) can turn: CANCEL, then a new MOVE (move_start_s, as for any new route).
             asides = 0
             for other in [*goals, *self._aside_targets(robot, pose, goal_zone, None, every=True)]:
                 if other == target:
@@ -492,7 +513,7 @@ class PlanManager:
                 step = (alt_route.line[1][0] - pose[0], alt_route.line[1][1] - pose[1])
                 cos = (step[0] * heading[0] + step[1] * heading[1]) / (norm * (hypot(*step) or 1.0))
                 alt_points = [self.graph.pieces[p].point for p in alt_route.pieces[:len(committed)]]
-                if cos > 0.7 and alt_points == committed:
+                if not driving or (cos > 0.7 and alt_points == committed):
                     starts.append((alt, until))
                     asides += other not in goals
             stand_goal = None
@@ -543,11 +564,13 @@ class PlanManager:
             rid = self.graph.route_from(pose, coast_target, start=origin, via_done=via_done,
                                         extra=self._still_held(robot))
             blocks = tuple(self.graph.routes[rid].pieces)
+            self.coast_route[robot] = blocks
         agent = Agent(robot, weight, starts, goals_pieces, targets, tuple(goals), free_routes, static=static,
                       blocks=blocks)
         return agent
 
     def replan(self, now, reason):
+        self.coast_route = {}
         agents = [a for a in (self._agent(r) for r in self.config.robots) if a is not None]
         result = self.planner.plan(agents, limit_ms=self.gcfg.plan_limit_ms)
         self._last_replan = now
@@ -566,6 +589,7 @@ class PlanManager:
         self._dependencies()
         keep_routes = {leg.route for plan in self.plans.values() for leg in plan.legs}
         keep_pieces = {entry.piece for plan in self.plans.values() for entry in plan.entries}
+        keep_pieces.update(piece for pieces in self.coast_route.values() for piece in pieces)
         if self.graph.prune(keep_routes, keep_pieces):
             self.planner.forget()
         for robot, plan in self.plans.items():
@@ -796,6 +820,10 @@ class PlanManager:
                     # Offline robots keep their segments (UNKNOWN), and so does a robot that may still drive
                     # because its CANCEL has not been confirmed.
                     self.board.grant(robot, {}, now)
+                elif (report is None or not report.link_ok) and self._coasting(robot) and robot in self.coast_route:
+                    # Link lost while driving: it may go on along its MOVE, so it also holds the free segments on
+                    # that way (UNKNOWN while offline); the plan already keeps the other robot off it (D-46).
+                    self.board.grant(robot, self._coast_segments(robot), now)
                 continue
             if plan.failed:
                 # No route this time (e.g. the other robot stands in the way while cancelling): keep still.
@@ -861,6 +889,16 @@ class PlanManager:
         result.grants = [leg for leg in result.grants if leg is not None]
         return result
 
+    def _coast_segments(self, robot):
+        """Segments the robot holds now plus the capacity segments on the rest of its MOVE that no other robot
+        holds (single, or one_way the other way)."""
+        names = {name: seg.holders[robot].direction for name, seg in self.segments.items() if robot in seg.holders}
+        for piece in self.coast_route.get(robot, ()):
+            for name, direction in self.graph.segs(piece).items():
+                if name not in names and self._held_by_other_segment(robot, name, direction) is None:
+                    names[name] = direction
+        return names
+
     def _grant(self, robot, now):
         leg = self.pending.get(robot)
         if leg is None:
@@ -905,7 +943,7 @@ class PlanManager:
     def snapshot(self):
         door_b = (self.map.door_names[g.ROOM_B],) if g.ROOM_B in self.map.door_names else ()
         door_e = (self.map.door_names[g.ROOM_E],) if g.ROOM_E in self.map.door_names else ()
-        queue = [{"robot": leg.robot, "level": leg.level, "mission_id": leg.mission_id, "since": leg.since}
+        queue = [{"robot": leg.robot, "level": self.level_of(leg), "mission_id": leg.mission_id, "since": leg.since}
                  for leg in self.pending.values() if leg.robot in self.held]
         return {
             g.CORRIDOR: self.board.aggregate(self.map.corridor_names, 2, queue),

@@ -66,6 +66,17 @@ def traffic(cfg):
         yield from (e for e in sim.all_events if e["type"].startswith("PLAN_"))
     finally:
         sim.close()
+    # 4O follow-up: a Level change of a waiting mission (PLAN only).
+    sim = KinematicSim(replace(cfg, assignment=replace(cfg.assignment, mode="ROLE")), mode="PLAN")
+    try:
+        sim.submit_med(("E", "B"), level=1)
+        ref = sim.submit_call("D", level=1)
+        sim.run_until(1.0)
+        sim.cmd("SET_LEVEL", mission_id=sim.ids[ref], level=3)
+        sim.run_until(2.0)
+        yield from (e for e in sim.all_events if e["type"] == "LEVEL_CHANGE")
+    finally:
+        sim.close()
 
 
 def test_41_actual_fleet_event_titles_reasons_and_journal(tmp_path,monkeypatch):

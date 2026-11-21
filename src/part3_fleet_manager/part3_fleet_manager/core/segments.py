@@ -323,6 +323,9 @@ class SegmentBoard:
                     seg.holders.pop(robot, None)
                     released.append(robot)
                     self.record("RESOURCE_RELEASE", now, reason, robot=robot, resources=[seg_name])
+                elif robot in seg.holders and seg.holders[robot].entered_at is None:
+                    # Claimed while offline and found inside: it occupies the segment now.
+                    seg.holders[robot].entered_at = now
             seg.uncertain.clear()
         return released
 

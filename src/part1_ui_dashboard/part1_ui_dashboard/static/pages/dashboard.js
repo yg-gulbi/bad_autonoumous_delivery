@@ -1,5 +1,5 @@
 let dashTab = "ACTIVE";
-const checked = new Set(), goZones = {};
+const checked = new Set(), goZones = {}, goLevels = {};
 const missionTarget = m => m?.patient?.name || m?.patient?.chart_no || m?.items?.filter(Boolean).join(" · ") || (m ? cfg.kinds[m.type] : "임무 대기");
 const cardTitle = (t, extra = "") => `<div class="row"><h2>${t}</h2>${extra}</div>`;
 
@@ -17,7 +17,9 @@ document.addEventListener("change", e => { const key = e.target.dataset.check; i
         checked.delete(key);
     render();
 } if (e.target.dataset.go)
-    goZones[e.target.dataset.go] = e.target.value; });
+    goZones[e.target.dataset.go] = e.target.value;
+if (e.target.dataset.goLevel)
+    goLevels[e.target.dataset.goLevel] = Number(e.target.value); });
 
 function obstacleText(r) {
     if (r.obstacle_pending) return "장애물 분류 중…";
@@ -48,7 +50,8 @@ function robotCard(id, r) {
     const job = mById(r.mission_id), st = r.state, home = r.returning || st === "RETURNING";
     let controls = "";
     if (st === "IDLE")
-        controls = `<select aria-label="${r.label} 이동 구역" data-go="${id}">${zoneOptions(goZones[id])}</select>` + btn("보내기", "go", id);
+        controls = `<select aria-label="${r.label} 이동 구역" data-go="${id}">${zoneOptions(goZones[id])}</select>` +
+            `<select aria-label="${r.label} 응급도" data-go-level="${id}">${levelOptions(goLevels[id] || 1)}</select>` + btn("보내기", "go", id);
     else if (st === "WAIT_CONFIRM")
         controls = confirmBox(r, id, job);
     else if (st === "SAFE_PAUSE") {
@@ -153,7 +156,7 @@ function basisEvent() {
     return S.last_decision;
 }
 Object.assign(actions, { basis: () => basis(basisEvent()), "decision-log": () => { logFilter = { group: "decision" }; navigate("log"); },
-    go: (id, b) => command("GO_ZONE", { robot: id, zone: goZones[id] || Object.keys(cfg.zones)[0] }, b),
+    go: (id, b) => command("GO_ZONE", { robot: id, zone: goZones[id] || Object.keys(cfg.zones)[0], level: goLevels[id] || 1 }, b),
     pause: (id, b) => command("PAUSE_ROBOT", { robot: id }, b), resume: (id, b) => command("RESUME_ROBOT", { robot: id }, b), retry: (id, b) => command("RETRY", { robot: id }, b),
     confirm: (id, b) => command("CONFIRM_STEP", { robot: id, mission_id: S.robots[id].mission_id, result: "OK" }, b),
     mismatch: (id, b) => command("CONFIRM_STEP", { robot: id, mission_id: S.robots[id].mission_id, result: "MISMATCH" }, b),

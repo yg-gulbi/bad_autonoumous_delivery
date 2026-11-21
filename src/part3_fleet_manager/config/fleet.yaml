@@ -108,7 +108,7 @@ mission:
   return_interruptible: true
   return_level: 1               # 완료한 임무의 응급도를 홈 복귀에 상속하지 않음
   # return_after_cancel: null   # 미설정 시 LEGACY=false, PLAN=true (D-46)
-  manual_level: 1               # GO_ZONE에는 UI가 level을 보내지 않음
+  manual_level: 1               # level 없이 온 GO_ZONE의 응급도 (화면의 빠른 보내기는 1~3을 고른다)
   retry_after_return: false     # 이전 구역으로 되돌아간 뒤 원래 구간은 운영자가 재시도
   confirm_at_stops: true
 

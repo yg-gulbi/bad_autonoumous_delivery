@@ -30,16 +30,23 @@ def _parse_cmd(text: str):
 
 class KinematicRobot:
     """Single robot moving at speed_mps and emitting 1 Hz STATE. It drives plan_graph.door_route: into and
-    out of room B or E through the middle of the door and the point inside the room, as Nav2 would."""
+    out of room B or E through the middle of the door and the point inside the room, as Nav2 would.
 
-    def __init__(self, cfg, robot_id: str, *, speed_mps: float = 0.2, start_pose=None):
+    Like mock_hospital_nav it can start docked (a MOVE first undocks: UNDOCKING 1 s, LOCALIZING
+    ``mock.localizing_s``), drive a DOCK (door route to the approach point, DOCKING 1 s, DOCKED), and stop in
+    front of an obstacle until Nav2 gives up after ``mock.abort_after_s`` (MISSION_FAILED, then OBSTACLE)."""
+
+    def __init__(self, cfg, robot_id: str, *, speed_mps: float = 0.2, start_pose=None, docked: bool = False):
         self.cfg = cfg
         self.robot_id = robot_id
         unit = cfg.robots[robot_id]
         self.ns = unit.ns
         self.speed_mps = speed_mps
+        self.predock, self.dock_point = unit.dock.path_end() if unit.dock else (None, None)
+        self.docked = bool(docked and self.dock_point is not None)
         self.pose: tuple[float, float] = (
-            cfg.zones[start_pose] if isinstance(start_pose, str)
+            self.dock_point if self.docked
+            else cfg.zones[start_pose] if isinstance(start_pose, str)
             else tuple(start_pose) if start_pose is not None
             else cfg.zones[unit.start_zone]
         )
@@ -54,6 +61,10 @@ class KinematicRobot:
         self.via: tuple[float, float] | None = None
         self.drop_until = -1.0
         self.next_state_at = 0.0
+        self.phase_until = 0.0
+        self.blocked_since: float | None = None   # stopped in front of an obstacle (Nav2 recovering)
+        self.gave_up_at: float | None = None      # last Nav2 abort in front of an obstacle (for a PART 06 verdict)
+        self.undocks = self.docks = 0
         self.battery_pct = 80.0 if robot_id == "robot_a" else 75.0
         self._outbox: list[tuple[str, object]] = []
 
@@ -80,8 +91,8 @@ class KinematicRobot:
             "priority": self.level,
             "reason": self.reason,
             "pose": {"x": round(self.pose[0], 3), "y": round(self.pose[1], 3)},
-            "docked": False,
-            "ready": True,
+            "docked": self.docked,
+            "ready": not self.docked and self.state != "LOCALIZING",
             "battery": {"percent": self.battery_pct, "voltage": 15.0, "status": "DISCHARGING"},
             "remaining_m": round(rem, 2) if rem is not None else None,
             "percent": pct,
@@ -91,30 +102,88 @@ class KinematicRobot:
     def drop_link(self, now: float, seconds: float):
         self.drop_until = max(self.drop_until, now + seconds)
 
+    def obstacle(self, now: float) -> bool:
+        """An obstacle right in front: the robot stops and Nav2 gives up after mock.abort_after_s."""
+        if self.state != "MOVING" or self.blocked_since is not None:
+            return False
+        self.blocked_since = now
+        return True
+
+    def _navigating(self):
+        self._emit_status("NAVIGATING", destination=self.dest, via="교차로" if self.via else None)
+
     def receive(self, text: str, now: float):
         action, dest, level, tag, slot = _parse_cmd(text)
-        if action == "MOVE" and self.state in DONE:
-            self.dest = dest
+        if action in ("MOVE", "DOCK") and self.state in DONE:
+            if action == "DOCK" and (self.dock_point is None or self.docked):
+                return
+            self.dest = dest if action == "MOVE" else "DOCK"
             self.level = level or 1
             self.mid = tag or f"sim-{int(now * 1000)}"
-            self.slot = slot or 1
+            self.slot = (slot or 1) if action == "MOVE" else None
             self.reason = ""
-            self.path = door_route(self.cfg, self.pose, dest, self.slot)
+            self.blocked_since = None
+            if action == "DOCK":
+                anchor = min(self.cfg.zones, key=lambda z: dist(self.cfg.zones[z], self.predock))
+                self.path = [*door_route(self.cfg, self.pose, anchor)[:-1], self.predock]
+            else:
+                self.path = door_route(self.cfg, self.pose, dest, self.slot)
             self.via = self.cfg.corridor.crossroad if self.cfg.corridor.crossroad in self.path[:-1] else None
             self.total = sum(dist(a, b) for a, b in pairwise([self.pose, *self.path]))
+            accepted = {"destination": self.dest, "priority": self.level}
+            if action == "MOVE":
+                accepted["slot"] = self.slot
+            self._emit_status("MISSION_ACCEPTED", **accepted)
+            if self.docked:
+                self.state, self.phase_until = "UNDOCKING", now + 1.0
+                self._emit_status("UNDOCKING")
+                return
             self.state = "MOVING"
-            self._emit_status("MISSION_ACCEPTED", destination=self.dest, priority=self.level, slot=self.slot)
-            self._emit_status("NAVIGATING", destination=self.dest, via="교차로" if self.via else None)
+            self._navigating()
         elif action == "PAUSE" and self.state == "MOVING":
             self.reason = "관제 요청"
             self.state = "STOPPING_PAUSE"
         elif action == "RESUME" and self.state == "PAUSED":
             self.state = "MOVING"
+            if self.blocked_since is not None:
+                self.blocked_since = now          # Nav2 tries again in front of the obstacle
             self._emit_status("RESUMED")
-            self._emit_status("NAVIGATING", destination=self.dest, via="교차로" if self.via else None)
+            self._navigating()
         elif action == "CANCEL" and self.state not in DONE:
             self.reason = "운영자 취소"
             self.state = "STOPPING_CANCELED"
+
+    def _give_up(self, now):
+        """Nav2 ABORTED after recoveries: MISSION_FAILED, then the obstacle report (PART 04 order)."""
+        self.state, self.reason, self.blocked_since, self.gave_up_at = "FAILED", "Nav2: ABORTED", None, now
+        self.path.clear()
+        self.via = None
+        self._emit_status("MISSION_FAILED", reason=self.reason)
+        ahead = 0.42
+        self._emit_status("OBSTACLE", destination=self.dest,
+                          robot_pose={"x": round(self.pose[0], 3), "y": round(self.pose[1], 3), "yaw_deg": 0.0},
+                          captured=["depth", "rgb", "scan"], image_topic=f"/{self.ns}/hospital_nav/obstacle_image",
+                          depth_m=0.45, lidar_m=ahead, bearing_deg=0.0, map_x=round(self.pose[0] + ahead, 3),
+                          map_y=round(self.pose[1], 3), reason=self.reason)
+
+    def _phase(self, now):
+        if now < self.phase_until - 1e-9:
+            return
+        if self.state == "DOCKING":
+            self.state, self.docked, self.pose = "COMPLETE", True, self.dock_point
+            self.docks += 1
+            self._outbox.append(("pose", {"x": round(self.pose[0], 4), "y": round(self.pose[1], 4)}))
+            self._emit_status("DOCKED")
+        elif self.state == "UNDOCKING":
+            self.docked = False
+            self.undocks += 1
+            self._emit_status("UNDOCKED")
+            self.state, self.phase_until = "LOCALIZING", now + self.cfg.mock.localizing_s
+            self._emit_status("LOCALIZING")
+        else:
+            self._emit_status("READY", pose={"x": round(self.pose[0], 3), "y": round(self.pose[1], 3)})
+            self.state = "MOVING"
+            self._navigating()
 
     def step(self, now: float, dt: float) -> list[tuple[str, object]]:
         if self.state == "STOPPING_PAUSE":
@@ -124,7 +193,13 @@ class KinematicRobot:
             self.state = "CANCELED"
             self.path.clear()
             self.via = None
+            self.blocked_since = None
             self._emit_status("MISSION_CANCELED", reason=self.reason)
+        elif self.state in ("UNDOCKING", "LOCALIZING", "DOCKING"):
+            self._phase(now)
+        elif self.state == "MOVING" and self.blocked_since is not None:
+            if now - self.blocked_since >= self.cfg.mock.abort_after_s - 1e-9:
+                self._give_up(now)
         elif self.state == "MOVING":
             budget = self.speed_mps * dt
             moved = False
@@ -158,7 +233,10 @@ class KinematicRobot:
                     moved = True
             if moved and now >= self.drop_until:
                 self._outbox.append(("pose", {"x": round(self.pose[0], 4), "y": round(self.pose[1], 4)}))
-            if not self.path:
+            if not self.path and self.dest == "DOCK":
+                self.state, self.phase_until = "DOCKING", now + 1.0
+                self._emit_status("DOCKING")
+            elif not self.path:
                 self.state = "COMPLETE"
                 self._emit_status(
                     "ARRIVED",
@@ -188,10 +266,13 @@ class KinematicRobot:
 
 
 class KinematicSim:
-    """Drives FleetCore with pure-Python KinematicRobots at 0.2 m/s."""
+    """Drives FleetCore with pure-Python KinematicRobots at 0.2 m/s.
+
+    ``docked``: robots that start on their dock. ``bed_feed``: publish /patient/bed_exit (``bed_value``) three
+    times per step, as the PART 05 webcam node does at >= min_rate_hz."""
 
     def __init__(self, cfg, *, mode: str = "PLAN", speed_mps: float = 0.2, poses: dict | None = None,
-                 require_at_start: bool = False):
+                 require_at_start: bool = False, docked=(), bed_feed: bool = False):
         monitor = replace(cfg.safety.bed_monitor, require_at_start=require_at_start)
         cfg = replace(
             cfg,
@@ -202,9 +283,10 @@ class KinematicSim:
         self.cfg = cfg
         self.core = FleetCore(cfg)
         self.robots = {
-            r: KinematicRobot(cfg, r, speed_mps=speed_mps, start_pose=(poses or {}).get(r))
+            r: KinematicRobot(cfg, r, speed_mps=speed_mps, start_pose=(poses or {}).get(r), docked=r in docked)
             for r in cfg.robots
         }
+        self.bed_feed, self.bed_value = bed_feed, False
         self.now = 0.0
         self.seq = 0
         self.ids: dict[str, str] = {}
@@ -286,8 +368,22 @@ class KinematicSim:
     def drop_link(self, robot: str, seconds: float):
         self.robots[robot].drop_link(self.now, seconds)
 
+    def obstacle(self, robot: str) -> bool:
+        return self.robots[robot].obstacle(self.now)
+
+    def obstacle_verdict(self, robot: str, label: str | None):
+        """PART 06 result for the photo of the last Nav2 abort (report mode)."""
+        self.core.enqueue("obstacle_result", json.dumps({
+            "status": "ok", "obstacle_present": label is not None,
+            "header": {"stamp": {"sec": int(self.now), "nanosec": 0}, "frame_id": "oakd_rgb_camera_optical_frame"},
+            "detections": [] if label is None else [{"label": label, "confidence": 0.9, "bbox": [120, 80, 300, 260]}],
+        }), self.now, robot=robot)
+
     def step(self, dt: float = 0.2, *, validate_wire: bool = False):
         self.now = round(self.now + dt, 6)
+        if self.bed_feed:
+            for k in (2, 1, 0):
+                self.core.enqueue("/patient/bed_exit", self.bed_value, round(self.now - k * dt / 3, 6))
         for r, bot in self.robots.items():
             for topic, payload in bot.step(self.now, dt):
                 self.core.enqueue(topic, payload, self.now, robot=r)

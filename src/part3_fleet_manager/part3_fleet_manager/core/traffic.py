@@ -84,6 +84,9 @@ class LegacyTraffic:
             raise ValueError("E-423: 복도 통과 후 취소하세요.")
         return "IMMEDIATE"
 
+    def level_policy(self):
+        raise ValueError("E-409: LEGACY 교통 판단에서는 응급도를 바꿀 수 없습니다.")
+
     def traffic_snapshot(self) -> dict:
         return {
             "mode": "LEGACY",
@@ -151,6 +154,9 @@ class PlanTraffic:
     def cancel_policy(self, robot: str, state: str, link, now: float) -> str:
         del robot, state, link, now
         return "IMMEDIATE"      # a cancel is a new goal; the plan takes the robot out (D-46)
+
+    def level_policy(self):
+        """A Level change only changes the plan's weight; the plan is made again (D-48)."""
 
     def arrived_aside(self, robot: str, data: dict, now: float) -> bool:
         return self.resources.arrived_aside(robot, data, now)

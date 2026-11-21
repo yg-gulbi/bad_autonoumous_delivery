@@ -327,12 +327,17 @@ class Planner:
             for n, (rid, until) in enumerate(agent.starts):
                 opts.append((self.initial_state(agent, n), (rid, until) if until else None, n > 0))
             options.append(opts)
+        # Grace (the robots already overlap) comes from where they are now (each one's current route), not from
+        # the first piece of a new route: that piece may run through the other robot and is a real conflict.
+        now_pieces = [piece_of(opts[0][0]) for opts in options]
+        overlap = (any(conflict(now_pieces[i], now_pieces[j]) for i in range(k) for j in range(i + 1, k))
+                   or any(conflict(p, o) for p in now_pieces for o in obstacles(0)))
         for combo in product(*options):
             states = tuple(c[0] for c in combo)
             force = tuple(c[1] for c in combo)
             pieces = [piece_of(s) for s in states]
-            grace = any(conflict(pieces[i], pieces[j]) for i in range(k) for j in range(i + 1, k))
-            grace = grace or any(conflict(p, o) for p in pieces for o in obstacles(0))
+            grace = overlap and (any(conflict(pieces[i], pieces[j]) for i in range(k) for j in range(i + 1, k))
+                                 or any(conflict(p, o) for p in pieces for o in obstacles(0)))
             arrivals = tuple(0.0 if done(i, states[i]) else None for i in range(k))
             extra = sum(free[i].goals.get(pieces[i], 0.0) for i in range(k) if arrivals[i] is not None)
             extra += ROUTE_PENALTY * sum(1 for c in combo if c[2])

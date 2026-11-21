@@ -22,8 +22,11 @@ COMMAND_FIELDS = {
     "PAUSE_ROBOT": ("robot",),
     "RESUME_ROBOT": ("robot",),
     "GO_ZONE": ("robot", "zone"),
+    "SET_LEVEL": ("mission_id",),
     "RESOURCE_CLEAR_CONFIRM": ("resource",),
 }
+# Commands with an integer "level" (1~3): True = required, False = optional (GO_ZONE: mission.manual_level).
+COMMAND_LEVEL = {"GO_ZONE": False, "SET_LEVEL": True}
 
 
 class SchemaError(ValueError):
@@ -157,6 +160,8 @@ def parse_operator_cmd(text: str, *, robots=None, resources=None) -> dict:
     for field in fields:
         if field in choices_by_field:
             _choice(data[field], choices_by_field[field], field, ref)
+    if command in COMMAND_LEVEL and (COMMAND_LEVEL[command] or "level" in data):
+        _level(data, ref=ref)
     return data
 
 

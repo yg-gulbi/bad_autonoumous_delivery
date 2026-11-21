@@ -216,6 +216,14 @@ class RobotProtocol:
                 # Legacy firmware silently ignores both an invalid MOVE and CANCEL while idle.
                 self.state, self.remote_id = state, remote
                 return {"event": "CANCEL_CONFIRMED"}
+            if (self.cancel_wait and self.cancel_sent_at is not None and stamp > self.cancel_sent_at
+                    and state in ("COMPLETE", "FAILED") and remote is not None and remote == self.cancel_id
+                    and self._canceled(remote)):
+                # The mission the CANCEL was for has ended on its own and its end report was lost (link drop):
+                # PART 04 ignores a CANCEL with nothing running, so nothing is left to cancel.
+                self._telemetry(data, stamp)
+                self.state, self.remote_id = state, remote
+                return {"event": "CANCEL_CONFIRMED"}
             if self.move and self.move.remote_id and remote != self.move.remote_id:
                 return None
             self._telemetry(data, stamp)

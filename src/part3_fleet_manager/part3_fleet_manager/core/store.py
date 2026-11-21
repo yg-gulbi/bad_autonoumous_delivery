@@ -228,9 +228,10 @@ class Store:
             for job in jobs:
                 meta = json.dumps({"stop_index": job.index, "patient": job.patient, "department": job.department}, ensure_ascii=False)
                 updated = self.db.execute(
-                    """UPDATE missions SET robot=?,status=?,assigned_at=?,started_at=?,finished_at=?,cancel_reason=?,
+                    """UPDATE missions SET robot=?,level=?,status=?,assigned_at=?,started_at=?,finished_at=?,cancel_reason=?,
                        ui_json=? WHERE id=?""",
-                    (job.robot, job.status, job.assigned_at, job.started_at, job.finished_at, job.cancel_reason, meta, job.id))
+                    (job.robot, job.level, job.status, job.assigned_at, job.started_at, job.finished_at, job.cancel_reason,
+                     meta, job.id))
                 if not updated.rowcount:
                     patient_id = None
                     if job.patient:

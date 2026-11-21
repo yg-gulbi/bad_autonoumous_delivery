@@ -188,6 +188,8 @@ class MissionManager:
         """Standing in a home-zone slot: in PLAN, a slot reached by a completed MOVE (a robot stopped on the
         way inside a slot circle is not parked there); otherwise inside a slot region (zone_occupied_m)."""
         home = self.config.robots[robot].start_zone
+        if self.config.robots[robot].return_to == "DOCK" and self.links[robot].docked:
+            return True     # still on its dock (e.g. cancelled while undocking): PART 04 ignores DOCK while docked
         parked = self.traffic.parked_zone(robot) if self.traffic is not None else None
         if parked is not None:
             return parked == home
@@ -275,10 +277,11 @@ class MissionManager:
         job.sends += 1
         destination = "DOCK" if leg.dock_path else leg.destination
         slot = None if leg.dock_path else self.resources.slot_of(leg)
-        if not leg.dock_path and self.config.traffic.mode == "PLAN":
-            # The plan may stop the robot at another slot first to make way (D-45).
+        if self.config.traffic.mode == "PLAN":
+            # The plan may stop the robot at another slot first to make way (D-45), also on the way to a dock.
             destination, slot = self.resources.move_target(leg)
-        self.links[leg.robot].go(f"L-{job.id.removeprefix('M-')}-{job.sends}", destination, leg.level, slot=slot)
+        self.links[leg.robot].go(f"L-{job.id.removeprefix('M-')}-{job.sends}", destination,
+                                 self.resources.level_of(leg), slot=slot)
         r.state, r.resume_due = "SENDING", False
 
     def fault(self, robot, kind, reason, now, diagnostic=None, *, card=True):
@@ -435,6 +438,29 @@ class MissionManager:
                 self._maybe_return_after_cancel(robot, now)
             return
         raise ValueError("E-409: 취소할 임무가 없습니다.")
+
+    def set_level(self, mission_id, level, now, *, by=None):
+        """Change the Level of a waiting or running mission. PLAN plans again with it; LEGACY refuses."""
+        self.traffic.level_policy()
+        job = next((j for j in self.unassigned if j.id == mission_id), None)
+        robot = None
+        for name, r in self.robots.items():
+            if job is not None:
+                break
+            job = next((j for j in r.queue if j.id == mission_id), None)
+            if job is None and r.job is not None and r.job.id == mission_id and not r.returning:
+                job, robot = r.job, name
+        if job is None:
+            raise ValueError("E-409: 응급도를 바꿀 임무가 없습니다.")
+        if job.level == level:
+            return
+        previous, job.level = job.level, level
+        self.dirty[job.id] = job
+        self.record("LEVEL_CHANGE", now, f"Level {previous} → {level}", robot=job.robot, mission_id=job.id,
+                    level=level, previous=previous, by=by)
+        leg = robot and (self.resources.active.get(robot) or self.resources.pending.get(robot))
+        if leg:
+            self.resources.set_level(leg, level)
 
     def retry(self, robot, now, *, back=False):
         r = self.robots[robot]

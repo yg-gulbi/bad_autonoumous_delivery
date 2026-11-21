@@ -85,3 +85,50 @@ def test_static_assets_include_4o_plan_hooks():
     assert "CORRIDOR_TOP" in map_js and "traffic.plans" in map_js
     dash = (static / "pages/dashboard.js").read_text(encoding="utf-8")
     assert "plan.wait" in dash and "SEGMENTS" not in dash
+
+
+def test_quick_send_level_and_level_change_commands():
+    """4O follow-up: GO_ZONE takes an optional Level (none = mission.manual_level); SET_LEVEL needs one."""
+    go = ui_api.command({"cmd": "GO_ZONE", "robot": "robot_a", "zone": "C", "level": 3, "operator": "간호사"})
+    assert go["level"] == 3 and go["zone"] == "C"
+    plain = ui_api.command({"cmd": "GO_ZONE", "robot": "robot_a", "zone": "C", "operator": "간호사"})
+    assert "level" not in plain
+    change = ui_api.command({"cmd": "SET_LEVEL", "mission_id": "M-0007", "level": 2, "operator": "간호사"})
+    assert change["mission_id"] == "M-0007" and change["level"] == 2
+    for bad in ({"cmd": "SET_LEVEL", "mission_id": "M-0007", "operator": "간호사"},
+                {"cmd": "GO_ZONE", "robot": "robot_a", "zone": "C", "level": 5, "operator": "간호사"}):
+        try:
+            ui_api.command(bad)
+        except ValueError as exc:
+            assert "응급도" in exc.user_message()
+        else:
+            raise AssertionError(bad)
+
+    sent = []
+    client = create_app(Feed(), {}, lambda topic, payload: sent.append((topic, payload)), None).test_client()
+    reply = client.post("/api/command", json={"cmd": "SET_LEVEL", "mission_id": "M-0007", "level": 3, "operator": "간호사"})
+    assert reply.status_code == 202
+    (topic, text), = sent
+    assert topic == "/ui/operator_cmd" and '"level":3' in text and '"cmd":"SET_LEVEL"' in text
+
+
+def test_level_change_event_title():
+    cfg = load_config(PART3_CFG)
+    robot_labels = {k: v.label for k, v in cfg.robots.items()}
+    event = {"ts": 10.0, "type": "LEVEL_CHANGE", "robot": "robot_b", "mission_id": "M-0007",
+             "detail": {"reason": "Level 1 → 3", "level": 3, "previous": 1, "by": "간호사"}}
+    shown = ui_api.present_event(event, cfg.zone_names, robot_labels)
+    assert shown["title"] == "응급도 변경" and shown["detail"]["reason"] == "Level 1 → 3"
+
+
+def test_static_assets_include_level_controls():
+    static = PACKAGE / "part1_ui_dashboard/static"
+    app = (static / "app.js").read_text(encoding="utf-8")
+    assert "levelOptions" in app
+    dash = (static / "pages/dashboard.js").read_text(encoding="utf-8")
+    assert "data-go-level" in dash and "level: goLevels[id] || 1" in dash      # quick send, Level 1 by default
+    map_js = (static / "map.js").read_text(encoding="utf-8")
+    assert "map-go-level" in map_js
+    missions = (static / "pages/missions.js").read_text(encoding="utf-8")
+    # The Level change button only in PLAN (LEGACY refuses SET_LEVEL).
+    assert 'command("SET_LEVEL"' in missions and 'S?.traffic?.mode === "PLAN"' in missions

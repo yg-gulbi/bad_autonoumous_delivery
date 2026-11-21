@@ -52,7 +52,8 @@ function zoomAt(factor, x, y) {
 actions.zoom = factor => zoomAt(Number(factor), $("map").clientWidth / 2, $("map").clientHeight / 2);
 actions["map-go"] = async (value, button) => {
     const [robot, zone] = value.split(":");
-    if ((await command("GO_ZONE", {robot, zone}, button))?.ok) closeModal();
+    const level = Number($("map-go-level")?.value || 1);
+    if ((await command("GO_ZONE", {robot, zone, level}, button))?.ok) closeModal();
 };
 
 function selectMapPoint(x, y) {
@@ -64,7 +65,8 @@ function selectMapPoint(x, y) {
     } else if (hit?.z) {
         const buttons = Object.entries(S?.robots || {}).map(([id, r]) =>
             btn(r.label, "map-go", id + ":" + hit.z, "", r.state !== "IDLE"));
-        openModal("zone", dialogHead(zs(hit.z, hit.slot)) + "<p>이 구역으로 보내기</p>" + buttons.join(" "));
+        openModal("zone", dialogHead(zs(hit.z, hit.slot)) + "<p>이 구역으로 보내기</p>" +
+            `<label>응급도 <select id="map-go-level">${levelOptions(1)}</select></label>` + buttons.join(" "));
     }
 }
 
