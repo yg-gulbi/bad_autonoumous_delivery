@@ -145,8 +145,10 @@ def test_door_walk_order_into_out_of_and_between_rooms(cfg):
     assert door_route(cfg, d1, "B", 2) == [top, crossroad, door_b, room_b, b2]
     assert door_route(cfg, b1, "C", 1) == [room_b, door_b, crossroad, bottom, c1]
     assert door_route(cfg, b2, "E", 1) == [room_b, door_b, crossroad, door_e, room_e, e1]
-    # Inside one room: slot to slot as before.
-    assert door_route(cfg, b1, "B", 2) == waypoints(cfg, b1, "B", 2) == [b2]
+    # Inside one room: PART 04 still goes to the crossroad first (dest in VIA_ROOMS), out and back in (11/21
+    # 12:43:41). Only past the crossroad does it go slot to slot.
+    assert door_route(cfg, b1, "B", 2) == [room_b, door_b, crossroad, door_b, room_b, b2]
+    assert door_route(cfg, b1, "B", 2, via_done=True) == waypoints(cfg, b1, "B", 2) == [b2]
     # Past the crossroad (PART 04 VIA_PASSED) the walk still goes through the door.
     assert door_route(cfg, crossroad, "B", 1, via_done=True) == [door_b, room_b, b1]
 
@@ -168,9 +170,11 @@ def test_route_made_again_mid_walk_does_not_turn_back(cfg):
     in_corridor = between(door_b, crossroad, 0.5)
     assert door_route(cfg, in_corridor, "D", 1) == waypoints(cfg, in_corridor, "D", 1)
     # Coming in: still before the door middle, between the door and the room point, then past the room point.
-    assert door_route(cfg, between(crossroad, door_b, 0.9), "B", 2) == [door_b, room_b, b2]
-    assert door_route(cfg, between(door_b, room_b, 0.5), "B", 2) == [room_b, b2]
-    assert door_route(cfg, between(room_b, b2, 0.5), "B", 2) == [b2]
+    assert door_route(cfg, between(crossroad, door_b, 0.9), "B", 2, via_done=True) == [door_b, room_b, b2]
+    assert door_route(cfg, between(door_b, room_b, 0.5), "B", 2, via_done=True) == [room_b, b2]
+    assert door_route(cfg, between(room_b, b2, 0.5), "B", 2, via_done=True) == [b2]
+    # The same places before the crossroad (a new MOVE to B from inside room B): out to the crossroad first.
+    assert door_route(cfg, between(door_b, room_b, 0.5), "B", 2) == [door_b, crossroad, door_b, room_b, b2]
     # The kinematic mock drives the same line and still reports the crossroad (VIA_PASSED).
     robot = KinematicRobot(cfg, "robot_a", start_pose=b2)
     robot.receive("MOVE D1 2", 0.0)

@@ -163,19 +163,24 @@ function command(cmd, fields, b) { return send("command", { cmd, ...fields }, b)
 function render() { renderers[page]?.(); if (modal === "quick")
     formResults(); renderTop(); }
 
+// D-51: the bed monitor switch. Off: no stop, popup or alarm from a bed exit or a webcam loss.
+const monitorOff = m => m?.enabled === false;
+const bedExit = () => !!S?.bed_exit.value && !monitorOff(S?.bed_exit.monitor);
+
 function monitorLocked(m) {
-    return m && !m.bypass && (m.state === "LOST" || (m.state === "NEVER" && m.require_at_start));
+    return m && !monitorOff(m) && !m.bypass && (m.state === "LOST" || (m.state === "NEVER" && m.require_at_start));
 }
 
 function resumeReason(id) {
     const m = S?.bed_exit.monitor;
     if (monitorLocked(m) && (id == null || (m.targets || cfg.bed_targets || []).includes(id)))
         return "침상 감시가 끊겨 재개할 수 없습니다. 웹캠을 확인하세요";
-    return S?.bed_exit.value ? "침상 이탈 해제 대기" : "";
+    return bedExit() ? "침상 이탈 해제 대기" : "";
 }
 
 function monitorBadge() {
     const m = S?.bed_exit.monitor;
+    if (monitorOff(m)) return ["침상 감시 꺼짐", "amber-text"];
     if (S?.bed_exit.value) return ["침상 감시 이탈 감지", "red-text"];
     if (m?.bypass) return ["감시 없이 운행 중", "red-text"];
     if (m?.state === "OK") return ["침상 감시 " + Math.round(m.rate_hz) + " Hz", ""];
@@ -195,8 +200,9 @@ function situation(fresh) {
     if (!fresh) add(4, "관제 연결 끊김", "관제 상태 수신을 기다립니다.");
     if (!S) return issues;
     const mon = S.bed_exit.monitor, corridor = S.resources.CORRIDOR;
-    if (S.bed_exit.value) add(4, "침상 이탈 감지", "침상 카메라로 환자 상태를 확인하세요.");
-    if (monitorLocked(mon) || mon?.bypass) add(4, monitorBadge()[0], mon?.bypass ? "담당자가 감시 없이 운행을 선택했습니다." : "웹캠 신호와 대상 로봇을 확인하세요.");
+    if (monitorOff(mon)) add(1, "침상 감시 꺼짐", "침상 이탈·감시 끊김으로 로봇을 세우지 않습니다. 위쪽 스위치로 다시 켭니다.", false, "attention");
+    else if (S.bed_exit.value) add(4, "침상 이탈 감지", "침상 카메라로 환자 상태를 확인하세요.");
+    if (!monitorOff(mon) && (monitorLocked(mon) || mon?.bypass)) add(4, monitorBadge()[0], mon?.bypass ? "담당자가 감시 없이 운행을 선택했습니다." : "웹캠 신호와 대상 로봇을 확인하세요.");
     const units = Object.entries(S.robots);
     const bumped = units.filter(([,r]) => (r.pause_causes || [r.paused_by]).includes("BUMP"));
     if (bumped.length) add(4, "범퍼 충돌", stopAction(bumped.map(([,r]) => r))[0]);
@@ -243,7 +249,7 @@ function situation(fresh) {
         if (r.state === "MOVING" && r.stall_s > 0 && !Object.values(S.resources).some(res => res.blocked_robots?.includes(id)))
             add(1, "일시 정체", r.label + " · " + Math.floor(r.stall_s) + "초 동안 이동 없음", true);
         if (r.state === "FAULT") add(1, "주행 장애", r.label);
-        if (r.state === "SAFE_PAUSE" && !manual.some(([key]) => key === id) && !bumped.some(([key]) => key === id) && !S.bed_exit.value && !monitorLocked(mon))
+        if (r.state === "SAFE_PAUSE" && !manual.some(([key]) => key === id) && !bumped.some(([key]) => key === id) && !bedExit() && !monitorLocked(mon))
             stopLine(3, "안전 정지", [r]);
     }
     return issues.sort((a,b) => b.severity - a.severity);
@@ -268,6 +274,11 @@ function renderTop() {
     const [monitor, tone] = monitorBadge();
     $("bed-monitor").textContent = monitor;
     $("bed-monitor").className = tone;
+    const bedSwitch = $("bed-switch");
+    if (bedSwitch) {
+        bedSwitch.setAttribute("aria-checked", String(!monitorOff(S?.bed_exit.monitor)));
+        bedSwitch.disabled = !S;
+    }
     $("online").textContent = "로봇 " + (S?.summary?.online ?? 0) + "대 연결";
     $("active-count").textContent = "진행 작업 " + (S?.summary?.active ?? 0) + "건";
     $("queued-count").textContent = "배정 대기 " + (S?.missions.filter(m => m.status === "QUEUED").length ?? 0) + "건";
@@ -426,6 +437,8 @@ function handleAlarmEvent(e) {
         }
     } else if (e.type === "BED_MONITOR_BACK") {
         clearLostAlarms(e.ts);
+    } else if (e.type === "BED_MONITOR_DISABLED") {
+        clearBedAlarms();
     } else if (e.type === "BED_MONITOR_WARN") {
         const message = e.detail.reason, now = performance.now();
         if (now - (monitorWarnings.get(message) ?? -Infinity) >= 30_000) {
@@ -434,6 +447,28 @@ function handleAlarmEvent(e) {
         }
     }
 }
+
+function clearBedAlarms() {
+    // D-51: switching the bed monitor off drops its popups (bed exit, webcam loss) and their reopen copies.
+    const bed = e => ["BED_EXIT", "BED_MONITOR_LOST"].includes(e?.type);
+    const close = modal === "alarm" && bed(alerts[0]);
+    alerts = alerts.filter(e => !bed(e));
+    for (const [key, e] of [...acknowledgedAlarms]) if (bed(e)) acknowledgedAlarms.delete(key);
+    if (close) { closeModal(); nextNotice(); }
+}
+
+// The same webcam warning comes again every half second when the rate sits near min_rate_hz (11/21: 1,328 times).
+// The live record keeps one line per warning text with its count, so it does not push everything else out.
+function mergeRepeat(list, e) {
+    if (e.type !== "BED_MONITOR_WARN") return false;
+    const i = list.findLastIndex(o => o.type === e.type && o.detail.reason === e.detail.reason);
+    if (i < 0) return false;
+    const old = list.splice(i, 1)[0];
+    list.push({...e, detail: {...e.detail, repeat: (old.detail.repeat || 1) + (e.detail.repeat || 1),
+                              first_ts: old.detail.first_ts ?? old.ts}});
+    return true;
+}
+const repeatText = e => (e.detail.repeat || 1) > 1 ? ` · ${e.detail.repeat.toLocaleString("ko-KR")}회 (처음 ${tm(e.detail.first_ts)})` : "";
 
 function dismissAlarm() {
     const entry = alerts.shift();
@@ -498,6 +533,11 @@ Object.assign(actions, { close: () => { if (modal === "card")
     cancel: id => openModal("confirm", dialogHead("임무 취소") + `<p>${h(id)} 임무를 취소하시겠습니까?</p>` + btn("임무 취소 실행", "cancel-ok", id, "danger")),
     "cancel-ok": async (id, b) => { const ack = await command("CANCEL_MISSION", { mission_id: id }, b); if (ack?.ok)
         closeModal(); },
+    "bed-switch": (_, b) => monitorOff(S?.bed_exit.monitor)
+        ? command("BED_MONITOR_SET", { enabled: true }, b)
+        : openModal("confirm", dialogHead("침상 감시 끄기") + "<p>침상 감시를 끄면 침상 이탈과 감시 끊김으로 로봇을 세우지 않고 경보도 띄우지 않습니다. 이미 멈춘 로봇은 그대로 멈춰 있고, 재개는 운영자가 합니다.</p>" +
+            btn("침상 감시 끄기", "bed-off", "", "danger")),
+    "bed-off": async (_, b) => { if ((await command("BED_MONITOR_SET", { enabled: false }, b))?.ok) closeModal(); },
     clear: id => openModal("confirm", dialogHead("현장 확인 후 " + resLabel(id) + " 비움") + `<p>현장에서 ${h(resLabel(id))}의 점유 상태를 확인했습니까?</p>` + btn(resLabel(id) + " 비움 확인", "clear-ok", id, "danger")),
     "clear-ok": async (id, b) => { if ((await command("RESOURCE_CLEAR_CONFIRM", { resource: id }, b))?.ok)
         closeModal(); },

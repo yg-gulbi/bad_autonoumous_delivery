@@ -24,9 +24,12 @@ COMMAND_FIELDS = {
     "GO_ZONE": ("robot", "zone"),
     "SET_LEVEL": ("mission_id",),
     "RESOURCE_CLEAR_CONFIRM": ("resource",),
+    "BED_MONITOR_SET": (),
 }
 # Commands with an integer "level" (1~3): True = required, False = optional (GO_ZONE: mission.manual_level).
 COMMAND_LEVEL = {"GO_ZONE": False, "SET_LEVEL": True}
+# Commands with a required true/false field.
+COMMAND_FLAGS = {"BED_MONITOR_SET": "enabled"}
 
 
 class SchemaError(ValueError):
@@ -162,6 +165,8 @@ def parse_operator_cmd(text: str, *, robots=None, resources=None) -> dict:
             _choice(data[field], choices_by_field[field], field, ref)
     if command in COMMAND_LEVEL and (COMMAND_LEVEL[command] or "level" in data):
         _level(data, ref=ref)
+    if command in COMMAND_FLAGS and type(data.get(COMMAND_FLAGS[command])) is not bool:
+        raise SchemaError(f"{COMMAND_FLAGS[command]}: true 또는 false가 필요합니다", ref)
     return data
 
 
@@ -338,7 +343,9 @@ def parse_fleet_state(text: str) -> dict:
             raise SchemaError("bed_exit.monitor: 감시 상태 객체가 필요합니다")
         _fields(monitor, {"state": str, "last_rx": (*NUMBER, NULL), "rate_hz": NUMBER,
                           "since": NUMBER, "bypass": bool}, path="bed_exit.monitor.")
-        _choice(monitor["state"], ("NEVER", "OK", "WARN", "LOST"), "bed_exit.monitor.state", None)
+        _choice(monitor["state"], ("NEVER", "OK", "WARN", "LOST", "OFF"), "bed_exit.monitor.state", None)
+        if "enabled" in monitor:
+            _fields(monitor, {"enabled": bool}, path="bed_exit.monitor.")
     if "traffic" in data:
         traffic = data["traffic"]
         if not isinstance(traffic, dict):

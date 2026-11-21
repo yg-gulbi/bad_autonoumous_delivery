@@ -77,6 +77,8 @@ def command(form, *, robots=None, resources=None):
     data = {key: form.get(key) for key in schemas.COMMAND_FIELDS[cmd]}
     if cmd in schemas.COMMAND_LEVEL and form.get("level") is not None:
         data["level"] = form["level"]      # GO_ZONE without a level goes at mission.manual_level
+    if cmd in schemas.COMMAND_FLAGS:
+        data[schemas.COMMAND_FLAGS[cmd]] = form.get(schemas.COMMAND_FLAGS[cmd])   # BED_MONITOR_SET: enabled
     data.update(v=1, cmd=cmd, cmd_id=request_id(), by=_operator(form))
     return schemas.parse_operator_cmd(schemas.dumps(data), robots=robots, resources=resources)
 
@@ -112,6 +114,7 @@ EVENTS = {
     "PAUSE": "{robot} 정지", "RESUME": "{robot} 재개", "RESUME_REJECTED": "재개 요청 거절",
     "BED_MONITOR_WARN": "침상 감시 경고", "BED_MONITOR_LOST": "침상 감시 끊김",
     "BED_MONITOR_BACK": "침상 감시 복구", "BED_MONITOR_BYPASS": "침상 감시 없이 운행",
+    "BED_MONITOR_ENABLED": "침상 감시 켬", "BED_MONITOR_DISABLED": "침상 감시 끔",
     "BED_EXIT": "침상 이탈 감지", "BED_EXIT_CLEAR": "침상 이탈 해제", "BUMP": "{robot} 범퍼 감지",
     "MOVE_REJECTED": "{robot} 이동 명령 거절", "NAV_FAILED": "{robot} 주행 실패", "FAULT": "{robot} 장애 발생",
     "CARD_OPEN": "운영자 결정 요청", "CARD_CLOSED": "결정 카드 종료", "LINK_LOST": "{robot} 연결 끊김",

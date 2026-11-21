@@ -24,6 +24,11 @@ def start(context):
         if required.lower() not in ("true", "false"):
             raise ValueError("bed_monitor_require_at_start 값은 true 또는 false여야 합니다.")
         manager["bed_monitor_require_at_start"] = required.lower() == "true"
+    enabled = value("bed_monitor_enabled")
+    if enabled:
+        if enabled.lower() not in ("true", "false"):
+            raise ValueError("bed_monitor_enabled 값은 true 또는 false여야 합니다.")
+        manager["bed_monitor_enabled"] = enabled.lower() == "true"
     ui = {"fleet_yaml": fleet, "db_path": db, "demo": False, "dev_tools": False, "mode_label": "live",
           "ui_config": value("ui_config")}
     if value("map_yaml"):
@@ -42,6 +47,8 @@ def generate_launch_description():
         DeclareLaunchArgument("corridor_mode", default_value="", description="Default from fleet.yaml"),
         DeclareLaunchArgument("traffic_mode", default_value="", description="LEGACY or PLAN (empty uses fleet.yaml)"),
         DeclareLaunchArgument("bed_monitor_require_at_start", default_value="", description="Default from fleet.yaml"),
+        DeclareLaunchArgument("bed_monitor_enabled", default_value="",
+                              description="false: bed monitor off (no bed-exit stop); empty uses fleet.yaml"),
         DeclareLaunchArgument("ui_config", default_value=str(ui)),
         OpaqueFunction(function=start),
     ])

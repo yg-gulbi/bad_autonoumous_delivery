@@ -75,7 +75,7 @@ flowchart TB
 
 어두운 위쪽 막대에 B.A.D 병원 이송 관제, 페이지 탭 다섯 개, 모드, 담당자 입력과 시각을 둔다. 담당자 기본값은 `operator`이며 요청과 조작 기록에 사용한다.
 
-명령 줄 왼쪽에 관제 연결(최근 2초 수신), 연결 로봇 수, 침상 감시, 진행 작업 수, 배정 대기 수를 표시한다. 오른쪽 [이송 요청]은 등록 창을 연다. [안전 정지 요청]은 즉시 `PAUSE_ALL`을 보내며 안전 정지 중에는 같은 자리에 [전체 재개]가 나타난다. 침상 이탈·감시 끊김 중에는 재개 금지 이유를 표시한다.
+명령 줄 왼쪽에 관제 연결(최근 2초 수신), 연결 로봇 수, 침상 감시, 진행 작업 수, 배정 대기 수를 표시한다. 침상 감시 배지 옆에 **침상 감시 스위치**가 있다(4O 후속 3, D-51). 끌 때는 확인 창("침상 감시를 끄면 침상 이탈과 감시 끊김으로 로봇을 세우지 않고 경보도 띄우지 않습니다…")을 거쳐 `BED_MONITOR_SET {enabled: false}`를 보내고, 켤 때는 바로 `{enabled: true}`를 보낸다. 꺼져 있으면 배지는 "침상 감시 꺼짐"(주황)이고, 상황 줄에는 침상 이탈·감시 끊김 대신 "침상 감시 꺼짐"만 나온다. 꺼지는 순간 열려 있던 침상 이탈·감시 끊김 경보 창은 닫힌다. 오른쪽 [이송 요청]은 등록 창을 연다. [안전 정지 요청]은 즉시 `PAUSE_ALL`을 보내며 안전 정지 중에는 같은 자리에 [전체 재개]가 나타난다. 침상 이탈·감시 끊김 중에는 재개 금지 이유를 표시한다.
 
 상황 줄은 모든 페이지에 있다. 평상시 회색으로 “이상 없음”을 표시한다. 양보·대기·교착·점유 불명은 주황색으로 표시하고 [판단 근거]를 연결한다. 침상 이탈·범퍼·침상 감시 끊김·로봇 또는 관제 연결 끊김은 빨강이다. 표시 순서는 빨강 경보 → 운영자 전체·개별 정지 → 주황 근접 정지 → 주황 대기·양보·목적지 대기다. 가장 높은 상황과 “외 n건”을 표시한다. 전체 정지 한 번은 한 건으로 센다. 경보 창에서 [확인]을 눌러도 실제 조건이 풀릴 때까지 상황 줄을 유지한다.
 
@@ -319,6 +319,8 @@ labels:
   - `CORRIDOR_YIELD_START` → "{로봇} 복도 양보 시작"
   - `MISSION_CREATED` → "{종류} 요청 등록", `ARRIVE` → "{로봇} · {구역} 도착", `CONFIRM_STEP` → "{구역} 확인 완료"
   - 4O PLAN: `PLAN_UPDATE` → "두 로봇 다시 계획", `PLAN_WAIT` → "{로봇} 계획 순서 대기", `PLAN_YIELD_MOVE` → "{로봇} 길 비켜 주는 중". 세 종류 모두 운영 기록의 "판단" 필터에 들어간다. 지도에는 `traffic.plans`의 계획 경로를 가는 선으로 그린다. `LEVEL_CHANGE` → "응급도 변경" (문장 "Level 1 → 3", 작업 기록에 남는다).
+  - 4O 후속 3: `BED_MONITOR_ENABLED` → "침상 감시 켬", `BED_MONITOR_DISABLED` → "침상 감시 끔" (`by`가 남는다). UNKNOWN 칸 때문에 기다리는 로봇의 대기 이유는 "교차로·101호 병실(E) 문: 현장 확인 필요"다. 비켜서기 MOVE의 `LEG_START` 문장은 "101호 병실(E) 2번 자리 이동 시작 (비켜서기, 목적지 조제실(F) 2번 자리)"다.
+  - 같은 감시 경고 묶기 (D-51): 실시간 기록(SSE 스냅숏과 화면의 최근 기록)은 `BED_MONITOR_WARN`을 문구마다 한 줄로 두고 `detail.repeat`(횟수)·`first_ts`(처음 시각)를 붙여 맨 뒤로 옮긴다. 운영 기록 표(`/api/events`)는 연달아 온 같은 문구의 `BED_MONITOR_WARN`을 한 줄로 묶어 "· 1,328회 (처음 11:59:46)"처럼 보인다. 필터는 묶기 전에 적용하고, CSV 내보내기와 DB에는 모든 행이 그대로 있다.
 - 보조 문장은 `detail.reason`을 그대로 쓰고, 없으면 비운다.
 - 실시간 화면과 DB 기록 조회(운영 기록, 작업 상세의 기록)가 같은 문장 함수를 쓴다.
 - 옛 기록처럼 `reason`이 코드 값이거나 로봇 ID가 들어 있으면 그대로 보이지 않는다. 종류별 문장으로 바꾸고, ID는 표시 이름으로 바꾼다:
@@ -751,7 +753,7 @@ sequenceDiagram
 경보 창의 [확인]은 창만 닫는다. 로봇을 다시 움직이는 것은 L10 재개다.
 
 - 경보 여섯 종류는 종류와 대상 로봇 집합으로 구분한다. 같은 경보가 열려 있거나 대기 중이면 감지 시각과 경과 시간만 갱신한다. 해당 경보를 확인한 뒤에는 상황 줄을 유지하고, 대상 로봇에 그 원인의 새 `PAUSE` 이벤트가 도착할 때 다시 띄운다. 확인 상태는 열린 화면에서 탭을 이동하거나 이벤트 스트림이 다시 연결되어도 유지된다.
-- `BED_MONITOR_BACK`이 오면 열려 있거나 대기 중인 미확인 끊김 경보를 제거하고 다음 알림을 표시한다. 감시 경고(`BED_MONITOR_WARN`)는 문구별로 첫 토스트를 표시한 뒤 30초 동안 같은 토스트를 생략한다. 운영 기록에는 수신한 이벤트를 모두 남긴다.
+- `BED_MONITOR_BACK`이 오면 열려 있거나 대기 중인 미확인 끊김 경보를 제거하고 다음 알림을 표시한다. 감시 경고(`BED_MONITOR_WARN`)는 문구별로 첫 토스트를 표시한 뒤 30초 동안 같은 토스트를 생략한다. 운영 기록(DB·CSV)에는 수신한 이벤트를 모두 남기고, 화면 기록은 같은 문구를 한 줄로 묶어 보인다(D-51).
 
 경보 창의 "관제 조치"(침상 이탈·범퍼·침상 감시 끊김)는 관제의 정지 원인과 로봇 STATE(`robots.<id>.part4_state`)를 함께 본다 (4K, D-32).
 
@@ -802,7 +804,7 @@ sequenceDiagram
 | `GET /events` | SSE (실시간 상태·이벤트·카드·응답) | L1 |
 | `GET /api/map`, `/map/meta`, `/map/image` | 지도 설정, 평면도·변환, 정리한 실제 맵 | L1 |
 | `POST /api/mission` | 임무 요청 → `/ui/mission_req` | L2, L3 |
-| `POST /api/command` | `CONFIRM_STEP`, `CANCEL_MISSION`, `RETRY`, `PAUSE_ROBOT`, `RESUME_ROBOT`, `PAUSE_ALL`, `RESUME_ALL`, `GO_ZONE`, `SET_LEVEL`, `RESOURCE_CLEAR_CONFIRM` → `/ui/operator_cmd` | L6~L10, L13 |
+| `POST /api/command` | `CONFIRM_STEP`, `CANCEL_MISSION`, `RETRY`, `PAUSE_ROBOT`, `RESUME_ROBOT`, `PAUSE_ALL`, `RESUME_ALL`, `GO_ZONE`, `SET_LEVEL`, `RESOURCE_CLEAR_CONFIRM`, `BED_MONITOR_SET` → `/ui/operator_cmd` | L6~L10, L13 |
 | `POST /api/decision` | 결정 카드 선택 → `/ui/decision` | L11 |
 | `POST /api/service/pause`, `/api/service/resume` | `/robot/pause`·`/robot/resume` 호출 (화면 버튼은 쓰지 않음. 누른 사람이 안 남는다) | L10 |
 | `GET /api/missions…`, `/api/events…`, `/api/cards`, `/api/kpi`, `/api/patients/recent` | 기록 조회 (`bad.db` 읽기 전용) | L14 |

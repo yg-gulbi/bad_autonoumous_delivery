@@ -162,7 +162,26 @@ def history_api(path, names, robots=None):
     @api.get("/events")
     def events():
         sql, args = event_query()
-        return jsonify(paged(g.history_db, sql, args, event))
+        # Consecutive BED_MONITOR_WARN rows with the same text are one line with their count (D-51). The CSV
+        # below keeps every row.
+        grouped = f"""WITH f AS ({sql.removesuffix(" ORDER BY id DESC")}),
+            k AS (SELECT f.*, CASE WHEN type='BED_MONITOR_WARN' THEN json_extract(detail_json,'$.reason') END AS wkey FROM f),
+            p AS (SELECT k.*, LAG(wkey) OVER (ORDER BY id) AS pkey FROM k),
+            q AS (SELECT p.*, SUM(CASE WHEN wkey IS NOT NULL AND wkey = pkey THEN 0 ELSE 1 END) OVER (ORDER BY id) AS grp FROM p),
+            r AS (SELECT q.*, COUNT(*) OVER (PARTITION BY grp) AS repeat, MIN(ts) OVER (PARTITION BY grp) AS first_ts,
+                  ROW_NUMBER() OVER (PARTITION BY grp ORDER BY id DESC) AS rn FROM q)
+            SELECT * FROM r WHERE rn=1 ORDER BY id DESC"""
+
+        def row(r):
+            data = dict(r)
+            repeat, first = data.pop("repeat"), data.pop("first_ts")
+            for key in ("wkey", "pkey", "grp", "rn"):
+                data.pop(key, None)
+            item = event(data)
+            if repeat > 1:
+                item["detail"] = {**item["detail"], "repeat": repeat, "first_ts": first}
+            return item
+        return jsonify(paged(g.history_db, grouped, args, row))
 
     @api.get("/events.csv")
     def export():

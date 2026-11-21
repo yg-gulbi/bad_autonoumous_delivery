@@ -329,6 +329,29 @@ class SegmentBoard:
             seg.uncertain.clear()
         return released
 
+    def recover(self, robot: str, now: float, reason: str, **detail) -> list[str]:
+        """The robot is back online at a fresh pose after a short link loss in which it cannot have moved past
+        its stop line (D-52): it keeps the UNKNOWN segments it is inside, the others are released without an
+        operator check. Segments that are UNKNOWN for another robot as well stay UNKNOWN for that robot."""
+        released = []
+        for name, seg in self.segments.items():
+            if robot not in seg.uncertain:
+                continue
+            inside = robot in self.inside(name)
+            seg.uncertain.discard(robot)
+            if inside:
+                holding = seg.holders.setdefault(robot, SegmentHolding())
+                if holding.entered_at is None:
+                    holding.entered_at = now
+                    self.record("RESOURCE_ENTER", now, f"{self.robot_label(robot)} · {seg.spec.label} 진입 확인",
+                                robot=robot, resources=[name])
+                holding.outside_since = None
+            else:
+                seg.holders.pop(robot, None)
+                released.append(name)
+                self.record("RESOURCE_RELEASE", now, reason, robot=robot, resources=[name], auto=True, **detail)
+        return released
+
     def block(self, robot: str, pose: g.Point | None, now: float) -> str | None:
         if pose is None:
             return None

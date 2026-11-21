@@ -23,6 +23,7 @@ robot_link:
   link_timeout_s: 3.0           # STATE가 1 Hz라서 3초
   control_retry_s: 1.5          # PAUSE 뒤 이 시간이 지나도 STATE가 MOVING이면 PAUSE를 다시 보냄 (STATE 1 Hz, D-32)
   control_retries: 3            # 다시 보낸 횟수가 이 값을 넘으면 "정지 미확인" 카드 (D-32)
+  command_grace_s: 5.0          # MOVE·RESUME 뒤 첫 STATE까지는 끊김 판정을 link_timeout_s + 이 값으로 (PART 04 wait_for_server 최대 5초, D-53)
 
 zones:                          # PART 04 goal_manager.py SLOTS와 같은 값. x, y = 1번 자리, slot2 = 2번 자리 (D-30)
   A: {x: -2.383, y:  1.027, slot2: {x: -2.458, y:  0.282}, slot2_blocks_exit: true, name: "응급실"}   # 1번 안쪽, 2번 입구 쪽
@@ -101,6 +102,7 @@ safety:
     recover_s: 2.0
     min_rate_hz: 10.0
     require_at_start: true
+    enabled: true                # false = 침상 감시 꺼짐: 침상 이탈·감시 끊김으로 로봇을 세우거나 경보를 띄우지 않음 (화면 스위치, 실행 인자 bed_monitor_enabled:=, D-51)
   bed_exit_pause_targets: [robot_a]   # 팀 확정 필요: [robot_a] 또는 [robot_a, robot_b]
 
 mission:

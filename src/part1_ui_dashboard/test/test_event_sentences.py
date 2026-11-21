@@ -196,6 +196,13 @@ def test_41_actual_fleet_event_titles_reasons_and_journal(tmp_path,monkeypatch):
         sim.frames[A].update(state="COMPLETE",percent=100,pose=sim.pose("C"))
         collect(sim,11)
 
+        # D-51: the bed monitor switched off and on again from the screen.
+        sim = simulator()
+        sim.cmd("BED_MONITOR_SET", enabled=False)
+        collect(sim,0)
+        sim.cmd("BED_MONITOR_SET", enabled=True)
+        collect(sim,1)
+
         sim = simulator()
         sim.cmd("GO_ZONE", robot=A, zone="F")
         collect(sim,0)

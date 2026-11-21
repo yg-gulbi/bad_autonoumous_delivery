@@ -200,6 +200,14 @@ class Planner:
         fallback.reason = reason
         return fallback
 
+    def reachable(self, agent, walls, *, limit_ms=50.0):
+        """Can the agent reach a goal with only the fixed obstacles ``walls`` (no other robot)? True, False when
+        no way exists, None when the search ran out of time (not known)."""
+        result = self._search([agent, *walls], {}, time.perf_counter() + limit_ms / 1000.0)
+        if result.ok:
+            return True
+        return None if result.reason == "계획 시간 초과" else False
+
     def prioritized(self, agents, *, limit_ms=200.0):
         """Plan one agent at a time in descending weight against the trajectories already fixed.
 

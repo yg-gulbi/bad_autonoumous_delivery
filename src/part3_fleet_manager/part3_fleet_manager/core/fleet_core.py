@@ -121,6 +121,8 @@ class FleetCore:
         elif action == "SET_LEVEL":
             self.mission.set_level(cmd["mission_id"], cmd["level"], now, by=cmd["by"])
             return cmd["mission_id"]
+        elif action == "BED_MONITOR_SET":
+            self.safety.set_monitor(cmd["enabled"], now, by=cmd["by"])
 
     def _choose(self, data, now):
         key, choice, by = data["card_id"], data["choice"], data["by"]
@@ -442,7 +444,8 @@ class FleetCore:
             traffic_stop = self.traffic.traffic_stop(robot)
             command = self.mission.wire_step(robot, now, motions.get(robot), traffic_stop=traffic_stop,
                                              stalled=robot in self.blocks or self.stalls[robot].short,
-                                             hold_restart=self.collision.hold_restart)
+                                             hold_restart=self.collision.hold_restart,
+                                             hold_start=not self.traffic.may_start(robot))
             if command:
                 if command.startswith("MOVE ") or command == "DOCK":
                     self.collision.access.sent(robot, now)

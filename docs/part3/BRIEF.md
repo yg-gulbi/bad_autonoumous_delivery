@@ -283,6 +283,7 @@ PART 04의 ROS 패키지 이름은 `hospital_nav`, 소스 폴더는 `src/part4_a
 | `/<ns>/dock_status` | `irobot_create_msgs/DockStatus` | sensor data(best effort) | STATE의 도킹 값이 없거나 오래됐을 때 보조 | STATE의 `docked` 사용 |
 
 - **amcl_pose는 로봇이 움직일 때만 새로 온다.** 그래서 "로봇과 연결되어 있나"는 pose 나이가 아니라 **STATE 수신 나이**로 판단한다 (`link_timeout_s`). 위치값은 amcl_pose와 STATE pose 중 더 최근 것을 쓴다.
+  - 관제가 MOVE·DOCK·RESUME을 보낸 뒤 첫 STATE까지는 `link_timeout_s` + `command_grace_s`(3 + 5초)다. PART 04는 그 명령을 받으면 `_go()` → `nav.send_pose()` 안의 `wait_for_server`(최대 5초)를 잠금을 쥔 채 기다려 그동안 STATE를 보내지 않는다(11/21 12:35:05). 그동안 로봇은 아직 출발 전이다. 두 모드 공통 (4O 후속 3, D-53).
 - `hazard_detection`에는 범퍼 말고도 `BACKUP_LIMIT` 같은 항목이 주기적으로 섞여 온다. 관제는 `type == BUMP`만 범퍼 충돌로 본다.
 - `irobot_create_msgs`가 없는 환경에서도 노드가 뜬다. import에 실패하면 선택 원본 토픽을 사용할 수 있던 경우 경고를 남기며 STATE는 계속 처리한다.
 
@@ -338,6 +339,7 @@ PART 04의 ROS 패키지 이름은 `hospital_nav`, 소스 폴더는 `src/part4_a
 | `GO_ZONE` | `robot`, `zone`, 선택 `level`(1~3) | 지정 구역으로 보내기 (임무 없는 로봇만. 자원 규칙은 똑같이 적용). `level`이 없으면 `mission.manual_level` |
 | `SET_LEVEL` | `mission_id`, `level`(1~3) | 대기·진행 중 임무의 응급도 변경. PLAN만: 그 임무의 구간을 새 Level로 다시 계획한다. LEGACY는 `E-409` (4O 후속, D-48) |
 | `RESOURCE_CLEAR_CONFIRM` | `resource` | 점유 불명(`UNKNOWN`) 자원을 사람이 확인하고 비움 |
+| `BED_MONITOR_SET` | `enabled`(true/false) | 침상 감시 켜기·끄기 (두 모드, 4O 후속 3, D-51). 끄면 침상 이탈·감시 끊김으로 세우지 않고 경보·카드를 띄우지 않는다. 기록 `BED_MONITOR_ENABLED`·`BED_MONITOR_DISABLED`(`by`) |
 
 모든 명령에 `/ui/ack`로 답한다.
 
@@ -442,7 +444,7 @@ PART 04의 ROS 패키지 이름은 `hospital_nav`, 소스 폴더는 `src/part4_a
  "detail": {"resources": ["CORRIDOR", "ROOM_E"], "reason": "복도 비어 있음 + Level 3 > Level 2 → 약품 운송 로봇 허가"}}
 ```
 
-이벤트 종류: `MISSION_CREATED`, `MISSION_REJECTED`, `LEG_START`, `ARRIVE`, `CONFIRM_STEP`, `MISSION_DONE`, `MISSION_CANCELED`, `RESOURCE_REQUEST`, `RESOURCE_GRANT`, `RESOURCE_HOLD`, `RESOURCE_ENTER`, `RESOURCE_RELEASE`, `RESOURCE_UNKNOWN`, `RESOURCE_CLEAR_CONFIRM`, `DEADLOCK_DETECTED`, `YIELD_START`, `YIELD_DONE`, `CORRIDOR_YIELD_START`, `CORRIDOR_YIELD_END`, `CORRIDOR_YIELD_TIMEOUT`, `CORRIDOR_FOLLOW_STOP`, `CORRIDOR_FOLLOW_CLEAR`, `ZONE_OCCUPIED_HOLD`, `ZONE_OCCUPIED_CLEAR`, `PROXIMITY_STOP`, `PROXIMITY_CLEAR`, `STALL_SHORT`, `STALL_LONG`, `BLOCKED`, `UNBLOCKED`, `PAUSE`, `RESUME`, `RESUME_REJECTED`, `BED_EXIT`, `BED_EXIT_CLEAR`, `BUMP`, `MOVE_REJECTED`, `NAV_FAILED`, `FAULT`, `CARD_OPEN`, `CARD_CLOSED`, `LINK_LOST`, `LINK_BACK`, `WARNING`, `BED_MONITOR_WARN`, `BED_MONITOR_LOST`, `BED_MONITOR_BACK`, `BED_MONITOR_BYPASS`, `OBSTACLE_INSPECT`, `OBSTACLE_RESULT`, `OBSTACLE_REPORT`, `OBSTACLE_RETRY`, `STOP_RESENT`, `STOP_UNCONFIRMED`, `ARRIVED_FROM_STATE`, `PLAN_UPDATE`, `PLAN_WAIT`, `PLAN_YIELD_MOVE`, `LEVEL_CHANGE`.
+이벤트 종류: `MISSION_CREATED`, `MISSION_REJECTED`, `LEG_START`, `ARRIVE`, `CONFIRM_STEP`, `MISSION_DONE`, `MISSION_CANCELED`, `RESOURCE_REQUEST`, `RESOURCE_GRANT`, `RESOURCE_HOLD`, `RESOURCE_ENTER`, `RESOURCE_RELEASE`, `RESOURCE_UNKNOWN`, `RESOURCE_CLEAR_CONFIRM`, `DEADLOCK_DETECTED`, `YIELD_START`, `YIELD_DONE`, `CORRIDOR_YIELD_START`, `CORRIDOR_YIELD_END`, `CORRIDOR_YIELD_TIMEOUT`, `CORRIDOR_FOLLOW_STOP`, `CORRIDOR_FOLLOW_CLEAR`, `ZONE_OCCUPIED_HOLD`, `ZONE_OCCUPIED_CLEAR`, `PROXIMITY_STOP`, `PROXIMITY_CLEAR`, `STALL_SHORT`, `STALL_LONG`, `BLOCKED`, `UNBLOCKED`, `PAUSE`, `RESUME`, `RESUME_REJECTED`, `BED_EXIT`, `BED_EXIT_CLEAR`, `BUMP`, `MOVE_REJECTED`, `NAV_FAILED`, `FAULT`, `CARD_OPEN`, `CARD_CLOSED`, `LINK_LOST`, `LINK_BACK`, `WARNING`, `BED_MONITOR_WARN`, `BED_MONITOR_LOST`, `BED_MONITOR_BACK`, `BED_MONITOR_BYPASS`, `OBSTACLE_INSPECT`, `OBSTACLE_RESULT`, `OBSTACLE_REPORT`, `OBSTACLE_RETRY`, `STOP_RESENT`, `STOP_UNCONFIRMED`, `ARRIVED_FROM_STATE`, `PLAN_UPDATE`, `PLAN_WAIT`, `PLAN_YIELD_MOVE`, `LEVEL_CHANGE`, `BED_MONITOR_ENABLED`, `BED_MONITOR_DISABLED`.
 
 - 4O PLAN: `PLAN_UPDATE`는 다시 계획한 이유·시간·비용 (`reason_code`, `plan_ms`, `cost`, `method`, `fallback`, `plans`). `PLAN_WAIT`는 계획 순서 때문에 지점 앞에서 기다림 (`point`, `peer`). `PLAN_YIELD_MOVE`는 길을 비켜 주려고 다른 자리로 가는 MOVE와 그 도착 (`target`, `arrived`). 비켜 주는 자리 도착은 정류장 도착이 아니어서 확인 대기·정지 기록을 남기지 않는다.
 
@@ -510,7 +512,7 @@ PART 04의 ROS 패키지 이름은 `hospital_nav`, 소스 폴더는 `src/part4_a
 | `GIVE_WAY` | 복도에서 마주 오는 우선 로봇을 위해 잠깐 멈춤 (5.3절 11번) |
 | `SAFE_PAUSE` | 침상 이탈·침상 감시 끊김·수동 정지·범퍼로 멈춤 |
 | `FAULT` | 실패. 카드로 사람 판단 대기 |
-| `OFFLINE` | STATE가 `link_timeout_s` 넘게 안 옴 |
+| `OFFLINE` | STATE가 `link_timeout_s` 넘게 안 옴 (MOVE·DOCK·RESUME 뒤 첫 STATE까지는 + `command_grace_s`) |
 
 - **두 로봇은 각자 따로 움직인다.** 로봇마다 상태머신이 따로 있고, 매 tick 두 로봇을 모두 판단한다. 한 로봇이 주행·대기·확인 중이어도 다른 로봇은 자기 임무를 계속한다. 복도·방 자원, 복도 양보, 같은 방향 뒤 로봇 보호, 범퍼 이웃 정지는 두 로봇을 함께 판단한다.
 - **배정** (`assignment.mode`)
@@ -671,8 +673,13 @@ PART 04의 ROS 패키지 이름은 `hospital_nav`, 소스 폴더는 `src/part4_a
 1. **지점 그래프** (`traffic.graph`): 자리 12개, 약품 운송 로봇 도크, 교차로, B·E 문, B·E 방 안, 위·아래 홀 입구, 그리고 복도 칸(`cell_m` 0.5 m로 자동 분할)이다. 지점 사이 경로는 `plan_graph.door_route` 선(`route_planner` 경로에 B·E 방을 드나들 때 교차로 → 문 가운데 → 방 안 지점 → 자리를 넣은 선)을 지점 영역으로 자른 실제 선이다. 걸리는 시간은 거리 ÷ `plan_speed_mps`(기본 mock 속도)다.
 2. **충돌 쌍**: 두 위치의 선 사이 거리가 근접 정지 거리보다 짧으면 동시에 쓸 수 없다. 둘 다 움직이면 `proximity_stop_m`, 한쪽이 자리에 서 있으면 `slot_stop_m`, 둘 다 서 있으면 충돌이 아니다. 복도·교차로·문은 대수 제한(single, 복도는 방향별 one_way)도 같이 본다.
 3. **계획**: 상태는 (A 위치, B 위치, 시간), 한 단계 `plan_step_s`(0.5초)다. 행동은 다음 지점으로 가기, 기다리기, 서 있을 때 다른 자리로 가는 새 MOVE다. 충돌 쌍과 자리 맞바꾸기는 허용하지 않는다. 비용은 Σ `level_weights[Level]` × 도착 시각이고, 임무 없는 로봇은 지금 자리를 목표로 `idle_weight`를 쓴다. 목표 자리는 1번과 2번 모두 후보이고 같으면 1번이다. 정지선(`stop_margin_m`) 안의 지점은 이미 정해진 것으로 두고, 지나온 지점으로 되돌리지 않는다. 시간 한도(`plan_limit_ms`)를 넘거나 세 대 이상이면 Level 순서로 한 대씩 계획하고 `PLAN_UPDATE`에 적는다.
-4. **실행 (ADG)**: 계획의 순서를 충돌 쌍마다 "앞 로봇이 지점을 `clear_margin_m`만큼 지나 `clear_hold_s` 동안 벗어남"으로 바꿔 지킨다. 다음 지점이 아직 막혀 있으면 정지선에서 `PAUSE`, 풀리면 `RESUME`. PART 04에는 MOVE·PAUSE·RESUME·CANCEL만 보낸다. 다른 자리로 가는 MOVE는 "길 비켜 주는 중"이다.
-5. **다시 계획**: 새 구간 요청, 취소, Level 상향 재접수, 응급도 변경(`SET_LEVEL`), 구간 도착, 계획보다 `replan_delay_s` 넘게 늦음, 안전 정지 해제, 연결 끊김·복구 때. 들어간 지점은 바꾸지 않는다. 취소는 새 목표다(복귀, `return_after_cancel` 기본 true). 연결이 끊긴 로봇은 지금 지점과 남은 MOVE 경로를 막은 것으로 두고 칸은 `UNKNOWN`이 된다. 주행 중 끊기면 남은 MOVE 경로의 빈 칸도 그 로봇 몫(`UNKNOWN`)이다. 응급도 변경은 그 구간의 Level 가중치만 바꾼다(D-48·D-49).
+4. **실행 (ADG)**: 계획의 순서를 충돌 쌍마다 "앞 로봇이 지점을 `clear_margin_m`만큼 지나 `clear_hold_s` 동안 벗어남"으로 바꿔 지킨다. 다음 지점이 아직 막혀 있으면 정지선에서 `PAUSE`, 풀리면 `RESUME`. PART 04에는 MOVE·PAUSE·RESUME·CANCEL만 보낸다. 다른 자리로 가는 MOVE는 "길 비켜 주는 중"이고, 그 MOVE의 `LEG_START`는 가는 자리(`target`·`target_slot`, `aside: true`)와 구간 목적지(`destination`)를 함께 적는다.
+   - **출발 허가** (4O 후속 3, D-55): PART 04로 가는 MOVE(첫 전송·재전송)·DOCK·RESUME은 그 tick에 실행기가 허가한 로봇(`PlanManager.go`: 정지선 판단을 지난 로봇)에게만 나간다. 운영자 재개, 카드 선택, 재시도는 자기 정지만 풀고, 계획이 기다리라고 하면 로봇은 멈춘 채로 있다. PAUSE·CANCEL은 언제나 나간다. 한 로봇에는 tick마다 명령이 하나뿐이라 비켜서기 MOVE와 구간 MOVE가 같이 나가지 않는다.
+   - **B·E 방 안 이동**: PART 04는 목적지가 B·E인 MOVE를 그 방 안에서 받아도 교차로를 먼저 거친다(`dest in VIA_ROOMS`). 계획 그래프와 두 mock도 그렇게 걷는다: 방 안에서 같은 방 자리로 가는 MOVE는 방 안 지점 → 문 → 교차로 → 문 → 방 안 지점 → 자리다. 교차로를 지난 뒤(`VIA_PASSED`)에만 방 안에서 바로 간다.
+5. **다시 계획**: 새 구간 요청, 취소, Level 상향 재접수, 응급도 변경(`SET_LEVEL`), 구간 도착, 계획보다 `replan_delay_s` 넘게 늦음, 안전 정지 해제, 연결 끊김·복구 때. 들어간 지점은 바꾸지 않는다. 취소는 새 목표다(복귀, `return_after_cancel` 기본 true). 연결이 끊긴 로봇은 지금 지점과 남은 MOVE 경로를 막은 것으로 두고 칸은 `UNKNOWN`이 된다. 주행 중 끊기면 남은 MOVE 경로의 빈 칸도 그 로봇 몫(`UNKNOWN`)이다. 이것은 끊겨 있는 동안만이다. 응급도 변경은 그 구간의 Level 가중치만 바꾼다(D-48·D-49).
+   - **다시 연결되면** (D-52): `LINK_BACK`의 새 위치로 그 로봇의 `UNKNOWN` 칸을 정리한다. 끊긴 시간(`LINK_LOST`부터) × 계획 속도와, 끊기기 전 위치에서 움직인 거리가 둘 다 `stop_margin_m` 이하면 로봇이 실제로 안에 있는 칸만 남기고 나머지는 자동으로 반납한다(`RESOURCE_RELEASE`, `auto: true`). 어느 하나라도 넘으면 움직였을 수 있으므로 지금처럼 운영자 현장 확인(`RESOURCE_CLEAR_CONFIRM`)을 기다린다(`RESOURCE_UNKNOWN` "현장 확인이 필요합니다").
+   - **`UNKNOWN` 칸** (D-54): 계획에서는 어느 로봇의 위치도 아니고 아무도 지나갈 수 없는 칸이다. 길이 그 칸을 지나야만 하는 로봇은 비켜서기 없이 제자리에서 기다리고("교차로·101호 병실(E) 문: 현장 확인 필요"), 다른 로봇을 그 로봇 때문에 비켜 세우지 않는다. 현장 확인이 끝나면 다시 계획한다.
+   - **움직이지 않는 로봇** (D-56): 정류장 확인을 기다리는 로봇(`WAIT_CONFIRM`)은 계획에서 움직일 수 없는 로봇이다(환자를 태우는 중일 수 있다). 연결이 끊긴 로봇과 허가가 났지만 출발 전인 로봇이 자리에 서 있어도 계획의 근접 거리는 0.6 m다(`collision.py`가 그렇게 본다).
 6. 근접 정지, 0.9 m 출발 확인, 침상 이탈, 장애물, 정지 확인, 멈춤, 도크, 정면·교착 카드는 LEGACY와 같다.
 
 ### 5.4 `deadlock` — 교착 감지와 해소
@@ -766,6 +773,8 @@ PART 04 사진 + PART 06 1번 프로그램으로 판별한다. 관제는 촬영 
   - `NEVER`: `bed_monitor.require_at_start: true`면 `LOST`와 같게 다룬다 (실제 시연. 감시 없이 출발하지 않는다). `false`면 경고만 한다 (mock 시험, `fleet_mock.launch.py`가 false로 띄운다).
   - 받은 횟수로 수신 속도(`rate_hz`, 최근 3초)를 계산한다. `min_rate_hz`(10 Hz)보다 낮으면 `BED_MONITOR_WARN`("침상 감시 불안정")만 낸다.
   - [감시 없이 운행]: 카메라를 바로 고칠 수 없을 때 사람이 고른다. `bypass: true`가 되고 재개가 허용된다. 누가 골랐는지 `BED_MONITOR_BYPASS`에 남긴다. 신호가 돌아오면 `bypass`는 저절로 풀린다. 화면은 `bypass` 동안 "침상 감시 없이 운행 중" 띠를 계속 보여 준다.
+  - **켜기·끄기** (4O 후속 3, D-51): 화면 위쪽 스위치(`BED_MONITOR_SET {enabled}`), 설정 `safety.bed_monitor.enabled`(기본 true), 실행 인자 `bed_monitor_enabled:=`. 끄면 상태가 `OFF`이고 침상 이탈·감시 끊김·감시 경고로 로봇을 세우지 않으며 `BED_EXIT`·`BED_EXIT_CLEAR`·`BED_MONITOR_WARN`·`BED_MONITOR_LOST`를 기록하지 않고 카드·경보도 없다. 열려 있던 `BED_MONITOR_LOST` 카드는 닫는다. 이미 멈춘 로봇은 그대로이고 재개 거절만 풀린다. 다시 켜면 처음 켤 때처럼 판단한다(신호가 없으면 `LOST`, 침상 이탈 중이면 `BED_EXIT`와 정지). 켜고 끈 기록은 `BED_MONITOR_ENABLED`·`BED_MONITOR_DISABLED`에 `by`와 함께 남는다. 켜져 있을 때 동작은 위와 같다.
+  - 같은 감시 경고가 반복되면(11/21: "침상 감시 불안정" 1,328번, 수신 속도가 10 Hz 근처에서 오르내림) 화면 기록에서 한 줄로 묶는다(14장). 판정과 DB 기록은 그대로다.
 
 ### 5.7 `decisions` — 결정 카드
 
@@ -886,6 +895,7 @@ robot_link:
   link_timeout_s: 3.0           # STATE가 1 Hz라서 3초
   control_retry_s: 1.5          # PAUSE 뒤 이 시간이 지나도 STATE가 MOVING이면 PAUSE를 다시 보냄 (STATE 1 Hz, D-32)
   control_retries: 3            # 다시 보낸 횟수가 이 값을 넘으면 "정지 미확인" 카드 (D-32)
+  command_grace_s: 5.0          # MOVE·DOCK·RESUME 뒤 첫 STATE까지는 끊김 판정을 link_timeout_s + 이 값으로 (PART 04 wait_for_server 최대 5초, D-53)
 
 zones:                          # PART 04 goal_manager.py SLOTS와 같은 값. x, y = 1번 자리, slot2 = 2번 자리 (D-30)
   A: {x: -2.383, y:  1.027, slot2: {x: -2.458, y:  0.282}, slot2_blocks_exit: true, name: "응급실"}   # 1번 안쪽, 2번 입구 쪽
@@ -964,6 +974,7 @@ safety:
     recover_s: 2.0
     min_rate_hz: 10.0
     require_at_start: true
+    enabled: true                # false = 침상 감시 꺼짐 (화면 스위치, 실행 인자 bed_monitor_enabled:=, D-51)
   bed_exit_pause_targets: [robot_a]   # 팀 확정 필요: [robot_a] 또는 [robot_a, robot_b]
 
 mission:
@@ -1101,8 +1112,9 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH=src/part1_ui_dashboard:s
   - mock 시험용 `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`·격리 도메인은 실제 실행에서 쓰지 않는다. 반대로 mock은 반드시 격리해서 띄운다 (mock 로봇도 `/robot2`·`/robot3` 이름을 쓴다).
 - **PART 04 `keyboard_control`과 같이 띄우지 않는다.** 그것도 `/<ns>/hospital_nav/command`로 명령을 보내는 시험용 관제다. 둘이 같이 돌면 한 로봇에 명령이 두 군데서 간다.
 - 관제 PC는 팀 Python 가상환경(`rokey_venv`)을 켠 터미널에서 실행한다. 코드가 venv 밖 경로를 가정하지 않는다.
-- **실행 파일** `ros2 launch part1_ui_dashboard real.launch.py`: 관제 + 화면만 띄운다 (mock 로봇·mock 분류기 없음, 시험 도구 끔, "실기 모드" 표시). 인자: `config_file`, `map_yaml`, `db_path`(기본 `~/.bad/bad_real.db`), `bed_monitor_require_at_start`(비우면 `fleet.yaml` 값), `corridor_mode`(비우면 `fleet.yaml` 값. 현장에서 `EXCLUSIVE` 등으로 바로 바꿀 때), `ui_config`.
+- **실행 파일** `ros2 launch part1_ui_dashboard real.launch.py`: 관제 + 화면만 띄운다 (mock 로봇·mock 분류기 없음, 시험 도구 끔, "실기 모드" 표시). 인자: `config_file`, `map_yaml`, `db_path`(기본 `~/.bad/bad_real.db`), `bed_monitor_require_at_start`(비우면 `fleet.yaml` 값), `bed_monitor_enabled`(비우면 `fleet.yaml` 값, `false`면 침상 감시 꺼짐), `traffic_mode`(비우면 `fleet.yaml` 값), `corridor_mode`(비우면 `fleet.yaml` 값. 현장에서 `EXCLUSIVE` 등으로 바로 바꿀 때), `ui_config`.
 - **연결 점검 도구** `ros2 run part3_fleet_manager preflight`: 읽기만 하고 명령·주행 목표·서비스 호출·촬영 요청을 하나도 보내지 않는다.
+  - 교통 판단 모드: `--traffic-mode PLAN|LEGACY`(관제를 띄울 `traffic_mode:=` 값)가 있으면 그 값, 없으면 `fleet.yaml`이다. 줄 끝에 어디서 온 값인지 적는다. 관측하는 10초 안에 실행 중인 관제의 `/fleet/state`가 오면 그 모드를 함께 보이고, 다르면 경고한다(4O 후속 3).
   - 셸 환경 출력: `ROS_DOMAIN_ID`, `ROS_DISCOVERY_SERVER`, `ROS_SUPER_CLIENT`, `ROS_AUTOMATIC_DISCOVERY_RANGE`, `RMW_IMPLEMENTATION`. LOCALHOST 범위거나 `ROS_DISCOVERY_SERVER`가 비어 있으면 경고.
   - 발견 서버: 지정한 주소·포트가 이 PC의 Fast DDS 서버 프로세스 것인지 확인한다. 서버를 다른 PC에서 띄우면 이 줄은 "확인 불가"로 나온다. 그때 로봇 줄이 모두 OK면 실행해도 된다.
   - 두 로봇을 10초간 동시에 관측한다. 최신 STATE의 알려진 상태명, 유효한 battery·pose·docked가 로봇별 필수 항목이다. 원본 배터리·도크·AMCL·Nav2 그래프는 참고로 표시한다. 범퍼 구독이 꺼져 있으면 ‘사용 안 함’이다.

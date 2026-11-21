@@ -194,8 +194,9 @@ def door_route(config, pose, destination, slot=1, *, via_done=False):
     """``route_planner.waypoints`` with the walk through a B·E door: crossroad -> door middle -> point in
     the room -> slot, and the same way back out (B -> E: room B point, door B, crossroad, door E, room E
     point). A route made again from where a driving robot is now leaves out the walk points it is already
-    past: a robot is past a point once it is nearer the next point than that point is. A robot inside a
-    room goes straight to a slot of the same room, unless it is still coming in through the door."""
+    past: a robot is past a point once it is nearer the next point than that point is. A MOVE to a slot of
+    the room the robot is in also goes out to the crossroad and back (PART 04 does so); only after the
+    crossroad (``via_done``) does a robot inside a room go straight to the slot."""
     path = list(waypoints(config, pose, destination, slot, via_done=via_done))
     walks = door_walks(config)
     if not walks:
@@ -206,6 +207,11 @@ def door_route(config, pose, destination, slot=1, *, via_done=False):
         if end not in walks:
             return path
         door, room = walks[end]
+        if not via_done:
+            # PART 04 drives every MOVE to room B or E to the crossroad first (``dest in VIA_ROOMS``), also from
+            # inside that room: out through the door, the crossroad, and back in (11/21 12:43:41).
+            out = [room, door] if dist(pose, door) >= dist(room, door) else [door]
+            return [*out, config.corridor.crossroad, door, room, goal]
         if dist(pose, door) >= dist(room, door):
             return path                     # standing in the room: slot to slot
         return [room, goal] if dist(pose, room) < dist(door, room) else [door, room, goal]
@@ -244,6 +250,7 @@ class Piece:
     standing: bool = False  # a robot stopped here (end of a route)
     at_slot: bool = False   # standing at a zone slot (proximity uses slot_stop_m)
     extra: tuple = ()       # segments still held on the board at the plan start (not yet released)
+    fence: bool = False     # an UNKNOWN segment nobody may use (no line of its own for the proximity rule)
 
 
 @dataclass(frozen=True)
@@ -420,16 +427,16 @@ class PlanGraph:
             return min(self.cells, key=lambda n: self.points[n].region.distance(xy))
         return self.region_points[region]
 
-    def _piece(self, point, line, *, standing=False, at_slot=False, extra=()):
+    def _piece(self, point, line, *, standing=False, at_slot=False, extra=(), fence=False):
         rounded = tuple((round(x, 3), round(y, 3)) for x, y in line)
         extra = tuple(sorted(extra))
-        key = (point, rounded, standing, at_slot, extra)
+        key = (point, rounded, standing, at_slot, extra, fence)
         found = self._piece_keys.get(key)
         if found is not None:
             return found
         length = _length(line)
         steps = 1 if standing else max(1, round(length / self.step_m))
-        piece = Piece(self._next_piece, point, tuple(line), length, steps, standing, at_slot, extra)
+        piece = Piece(self._next_piece, point, tuple(line), length, steps, standing, at_slot, extra, fence)
         self._next_piece += 1
         self.pieces[piece.id] = piece
         self._piece_keys[key] = piece.id
@@ -491,19 +498,33 @@ class PlanGraph:
         self._route_keys[key] = route.id
         return route.id
 
-    def stand(self, xy, extra=()):
+    def stand(self, xy, extra=(), *, slot_rule=True):
         """Standing piece at a free pose (stopped on the way). It does not occupy a slot, but inside a slot
-        circle the proximity rule treats it as standing at a slot (collision.parked_slot)."""
-        at_slot = any(p.kind == "slot" and p.region.contains(xy) for p in self.endpoints.values())
+        circle the proximity rule treats it as standing at a slot (collision.parked_slot). ``slot_rule``
+        False: the proximity rule keeps proximity_stop_m for this robot (offline, or granted and not started)."""
+        at_slot = slot_rule and any(p.kind == "slot" and p.region.contains(xy) for p in self.endpoints.values())
         return self._piece(self._classify(xy, ()), ((round(xy[0], 3), round(xy[1], 3)),), standing=True,
                            at_slot=at_slot, extra=extra)
 
-    def parked(self, endpoint, extra=()):
+    def parked(self, endpoint, extra=(), *, slot_rule=True):
         """Standing piece at an endpoint, with segments it still holds (same place as ``park``)."""
-        if not extra:
-            return self.park[endpoint]
         point = self.endpoints[endpoint]
-        return self._piece(endpoint, (point.anchor,), standing=True, at_slot=point.kind == "slot", extra=extra)
+        at_slot = slot_rule and point.kind == "slot"
+        if not extra and at_slot == (point.kind == "slot"):
+            return self.park[endpoint]
+        return self._piece(endpoint, (point.anchor,), standing=True, at_slot=at_slot, extra=extra)
+
+    def fence(self, segment):
+        """A position that takes a whole segment and nothing else: an UNKNOWN segment on the board, which no
+        robot may use until the operator has checked it (it is not where any robot stands, D-54)."""
+        spec = self.config.traffic.segments[segment]
+        if spec.circle is not None:
+            anchor = tuple(spec.circle[:2])
+        elif spec.polygon:
+            anchor = tuple(sum(c) / len(spec.polygon) for c in zip(*spec.polygon))
+        else:
+            anchor = (0.0, 0.0)
+        return self._piece("FENCE:" + segment, (anchor,), standing=True, extra=((segment, 0),), fence=True)
 
     def stay_route(self, endpoint=None, *, piece=None):
         """A route with no pieces: standing at an endpoint (its park) or at a free standing piece."""
@@ -531,7 +552,7 @@ class PlanGraph:
     def threshold(self, a, b):
         """Proximity threshold between two positions; None when both stand still (no stop can occur)."""
         pa, pb = self.pieces[a], self.pieces[b]
-        if pa.standing and pb.standing:
+        if (pa.standing and pb.standing) or pa.fence or pb.fence:
             return None
         if (pa.standing and pa.at_slot) or (pb.standing and pb.at_slot):
             return min(self.stop_m, self.slot_stop_m)
@@ -543,6 +564,9 @@ class PlanGraph:
         if found is not None:
             return found
         piece = self.pieces[piece_id]
+        if piece.fence:
+            self._segs[piece_id] = out = dict(piece.extra)
+            return out
         out = {}
         point = self.points.get(piece.point)
         if point is not None and point.kind == "slot":

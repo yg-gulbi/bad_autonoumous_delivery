@@ -9,6 +9,11 @@ and sent again three times within 5 s, a second cancel before the first is confi
 feed runs all the time), an obstacle (Nav2 gives up, PART 06 verdict, card), both robots losing the link at
 once, a link loss longer than link_timeout_s (of a robot that is not driving). On odd seeds robot_b returns to its dock and starts docked, so
 every one of its trips leaves the dock and ends docked.
+
+Follow-up 3 (D-51~): an operator stop and resume of a robot the plan holds at a stop line, a link loss of about a second
+(3.3~4.0 s without STATE, any robot) that the plan settles by itself, and the bed monitor switched off for 5~20 s. The
+operator checks an UNKNOWN segment only 3 s after its robots are back (so the automatic settling is measured), and
+one more check: every MOVE, DOCK and RESUME that goes out had the plan executor's permission in that tick (D-55).
 """
 import os
 import random
@@ -55,12 +60,16 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
              "prox_stops": 0, "prox_stops_planned": 0, "replans": 0, "plan_ms_max": 0.0, "fallbacks": 0,
              "quick_sends": 0, "level_changes": 0, "bursts": 0, "double_cancels": 0, "bed_exits": 0,
              "obstacles": 0, "double_drops": 0, "long_drops": 0, "undocks": 0, "docks": 0,
-             "rejected": 0}
+             "rejected": 0, "held_pauses": 0, "short_losses": 0, "link_losses": 0, "auto_settled": 0,
+             "auto_released": 0, "operator_checks": 0, "bed_switches": 0, "moves_checked": 0}
     injected_until = {"t": -1.0}   # proximity stops right after a manual pause or link drop are not plan failures
     scheduled: list[tuple[float, object]] = []   # (time, action) for events made of several steps
     last_resume: dict[str, float] = {}
     verdict_for: dict[str, float] = {}
     sent_home: dict[str, float] = {}
+    online_since: dict[str, float] = {r: 0.0 for r in cfg.robots}
+    checked: dict[str, float] = {}
+    bed_off = {"since": None}
 
     def schedule(at, action):
         scheduled.append((at, action))
@@ -208,11 +217,20 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
                     sent_home[r] = now
                     sim.cmd("GO_ZONE", robot=r, zone=home)
                     log.append(f"t={now:.1f} GO_HOME {r} {home}")
-        # If a boundary drop ever caused UNKNOWN while robot is back online, operator confirms clear.
+        # UNKNOWN left after its robots are back (they may have moved, D-52): the operator checks it 3 s later.
         sm = sim.core.resources
+        for r in sim.robots:
+            if not sim.core.link_ok[r]:
+                online_since[r] = None
+            elif online_since[r] is None:
+                online_since[r] = now
         for name, seg in sm.segments.items():
-            if seg.state == "UNKNOWN" and all(sim.core.link_ok[r] for r in seg.uncertain):
+            if seg.state == "UNKNOWN" and all(online_since[r] is not None and now - online_since[r] >= 3.0
+                                              for r in seg.uncertain):
                 sim.cmd("RESOURCE_CLEAR_CONFIRM", resource=name)
+                if now - checked.get(name, -inf) > 1.0:
+                    stats["operator_checks"] += 1
+                checked[name] = now
                 log.append(f"t={now:.1f} CLEAR_UNKNOWN {name}")
         # Operator retries any robot waiting in FAULT after a head-on retreat back to previous zone.
         for r, unit in sim.core.mission.robots.items():
@@ -264,7 +282,7 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
         ] + [(None, j) for j in sim.core.mission.unassigned]
 
         roll = rng.random()
-        if roll < 0.40 and len(active_missions) + len(queued_missions) < 6:
+        if roll < 0.36 and len(active_missions) + len(queued_missions) < 6:
             # New random mission (kind, level, zones)
             kind = rng.choice(("PATIENT", "MED", "CALL"))
             lvl = rng.choice((1, 2, 3))
@@ -282,7 +300,7 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
                 log.append(f"t={now:.1f} NEW CALL L{lvl} {z} ({ref})")
             submitted_refs.append(ref)
             stats["missions"] += 1
-        elif roll < 0.52 and active_missions:
+        elif roll < 0.47 and active_missions:
             # Cancel an active mission at any time (including mid-corridor!), sometimes re-submitting with higher Level!
             r, job = rng.choice(active_missions)
             sim.cancel(job.id)
@@ -307,7 +325,7 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
                     log.append(f"t={now:.1f} REQUEUE CALL L{new_lvl} {z} ({ref})")
                 submitted_refs.append(ref)
                 stats["requeues"] += 1
-        elif roll < 0.58:
+        elif roll < 0.52:
             # Pause a robot for 2~6 s, then resume.
             r = rng.choice((A, B))
             if r not in paused_until and not sim.core.safety.causes[r]:
@@ -317,7 +335,7 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
                 injected_until["t"] = max(injected_until["t"], now + dur + 10.0)
                 stats["pauses"] += 1
                 log.append(f"t={now:.1f} PAUSE {r} for {dur:.1f}s")
-        elif roll < 0.62:
+        elif roll < 0.55:
             # 2 s link drop.
             r = rng.choice((A, B))
             if now >= sim.robots[r].drop_until:
@@ -325,7 +343,7 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
                 injected_until["t"] = max(injected_until["t"], now + 12.0)
                 stats["drops"] += 1
                 log.append(f"t={now:.1f} DROP_LINK {r} 2.0s")
-        elif roll < 0.68:
+        elif roll < 0.60:
             # Quick send (GO_ZONE) with a Level to a robot without a mission.
             idle = [r for r, u in sim.core.mission.robots.items() if not u.job and not u.queue and not u.canceling]
             if idle:
@@ -333,7 +351,7 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
                 sim.cmd("GO_ZONE", robot=r, zone=zone, level=level)
                 stats["quick_sends"] += 1
                 log.append(f"t={now:.1f} GO_ZONE {r} {zone} L{level}")
-        elif roll < 0.74:
+        elif roll < 0.65:
             # Level change of a waiting or running mission.
             jobs = [j for _, j in active_missions + queued_missions]
             if jobs:
@@ -342,7 +360,7 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
                 sim.cmd("SET_LEVEL", mission_id=job.id, level=level)
                 stats["level_changes"] += 1
                 log.append(f"t={now:.1f} SET_LEVEL {job.id} L{job.level}->L{level}")
-        elif roll < 0.78:
+        elif roll < 0.69:
             # The same mission sent, cancelled and sent again three times within 5 s (the last one stays).
             kind, level = rng.choice(("PATIENT", "MED", "CALL")), rng.choice((1, 2, 3))
             zones = rng.sample(ZONES, 2)
@@ -369,7 +387,7 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
             for i, action in enumerate((send, cancel_last, send, cancel_last, send, cancel_last, send)):
                 schedule(now + 0.6 * i, action)
             stats["bursts"] += 1
-        elif roll < 0.82:
+        elif roll < 0.73:
             # Cancel a running mission twice (same tick and again before the robot confirms the CANCEL),
             # and its robot's next waiting mission right after.
             if active_missions:
@@ -383,7 +401,7 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
                 stats["cancels"] += 1
                 stats["double_cancels"] += 1
                 log.append(f"t={now:.1f} DOUBLE_CANCEL {job.id} ({r}, robot {sim.robots[r].state})")
-        elif roll < 0.86:
+        elif roll < 0.77:
             # Bed exit for 1~4 s (the feed keeps running); robot_a is held until the operator resumes.
             dur = rng.uniform(1.0, 4.0)
             sim.bed_value = True
@@ -394,7 +412,7 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
             injected(now + dur + 10.0)
             stats["bed_exits"] += 1
             log.append(f"t={now:.1f} BED_EXIT {dur:.1f}s")
-        elif roll < 0.90:
+        elif roll < 0.81:
             # Obstacle in front of a driving robot: it stops, Nav2 gives up, PART 06 answers, a card opens.
             moving = [r for r, bot in sim.robots.items() if bot.state == "MOVING" and bot.blocked_since is None]
             if moving:
@@ -403,14 +421,14 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
                 injected(now + sim.cfg.mock.abort_after_s + 10.0)
                 stats["obstacles"] += 1
                 log.append(f"t={now:.1f} OBSTACLE {r} at {sim.robots[r].pose}")
-        elif roll < 0.94:
+        elif roll < 0.84:
             # Both robots lose the link for 2 s at the same time.
             for r in (A, B):
                 sim.drop_link(r, 2.0)
             injected(now + 12.0)
             stats["double_drops"] += 1
             log.append(f"t={now:.1f} DROP_LINK both 2.0s")
-        else:
+        elif roll < 0.87:
             # A robot that is not driving loses the link longer than link_timeout_s. (A robot driving toward a
             # closed stop line cannot be stopped once a PAUSE is lost for longer than the stop line lasts; the
             # report measures that case separately.)
@@ -422,10 +440,64 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
                 injected(now + dur + 10.0)
                 stats["long_drops"] += 1
                 log.append(f"t={now:.1f} DROP_LINK {r} {dur:.1f}s (long, {sim.robots[r].state})")
+        elif roll < 0.92:
+            # The operator stops a robot the plan holds at its stop line, and resumes it 1~3 s later: the plan
+            # keeps it still while it must wait (11/21 12:43:25).
+            sm = sim.core.resources
+            held = [r for r in sim.robots if r in sm.held and not sim.core.safety.causes[r] and r not in paused_until]
+            if held:
+                r, dur = rng.choice(held), rng.uniform(1.0, 3.0)
+                sim.pause(r)
+                paused_until[r] = now + dur
+                injected(now + dur + 10.0)
+                stats["held_pauses"] += 1
+                log.append(f"t={now:.1f} PAUSE_HELD {r} for {dur:.1f}s ({sm.held[r]['reason']})")
+        elif roll < 0.97:
+            # A link loss of about a second (11/21 12:35): 3.3~4.0 s without STATE, LINK_LOST for up to a second.
+            # Any robot, also a driving one (at 0.2 m/s it stays inside the 0.9 m stop line margin).
+            r = rng.choice((A, B))
+            if now >= sim.robots[r].drop_until:
+                dur = rng.uniform(3.3, 4.0)
+                sim.drop_link(r, dur)
+                injected(now + dur + 10.0)
+                stats["short_losses"] += 1
+                log.append(f"t={now:.1f} DROP_LINK {r} {dur:.1f}s (short, {sim.robots[r].state})")
+        elif bed_off["since"] is None:
+            # The bed monitor switched off from the screen for 5~20 s, then on again (D-51).
+            dur = rng.uniform(5.0, 20.0)
+            sim.cmd("BED_MONITOR_SET", enabled=False)
+            bed_off["since"] = now
+
+            def bed_on():
+                sim.cmd("BED_MONITOR_SET", enabled=True)
+                bed_off["since"] = None
+                log.append(f"t={sim.now:.1f} BED_MONITOR on")
+            schedule(now + dur, bed_on)
+            injected(now + dur + 10.0)
+            stats["bed_switches"] += 1
+            log.append(f"t={now:.1f} BED_MONITOR off for {dur:.1f}s")
 
     def count_events(out):
         stats["rejected"] += sum(1 for ack in out.acks if not ack.get("ok"))
+        sm = sim.core.resources
+        for c in out.commands:
+            # D-55: every MOVE, DOCK and RESUME to PART 04 went through the plan's executor in this tick.
+            if c.command.startswith(("MOVE", "DOCK", "RESUME")):
+                stats["moves_checked"] += 1
+                if c.robot not in sm.go:
+                    fail(f"Check 6: {c.command} to {c.robot} without the plan's permission (held={sm.held.get(c.robot)})")
+        monitor_off = not sim.core.safety.monitor.enabled
         for e in out.events:
+            if monitor_off and (e["type"] in ("BED_EXIT", "BED_EXIT_CLEAR", "BED_MONITOR_WARN", "BED_MONITOR_LOST")
+                                or (e["type"] == "PAUSE" and e["detail"].get("cause") in ("BED_EXIT", "BED_MONITOR_LOST"))):
+                fail(f"Bed monitor off but {e['type']} {e['detail'].get('cause', '')}")
+            if e["type"] == "LINK_LOST":
+                stats["link_losses"] += 1
+            elif e["type"] == "LINK_BACK" and e["ts"] > 0.5:
+                if not any(r is e["robot"] or r == e["robot"] for seg in sm.segments.values() for r in seg.uncertain):
+                    stats["auto_settled"] += 1
+            elif e["type"] == "RESOURCE_RELEASE" and e["detail"].get("auto"):
+                stats["auto_released"] += 1
             if e["type"] == "PROXIMITY_STOP":
                 stats["prox_stops"] += 1
                 if e["ts"] > injected_until["t"] and not any(sim.core.safety.causes[r] for r in sim.robots):

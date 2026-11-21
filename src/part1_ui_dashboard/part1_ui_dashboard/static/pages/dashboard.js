@@ -189,7 +189,7 @@ renderers.dashboard = () => {
         <td>${h(routeText(m))}</td><td>Level ${m.level}</td><td>${h(m.robot ? robotName(m.robot) : "미배정")}</td></tr>`).join("") +
         '</tbody></table>' + (jobs.length ? "" : empty("해당 작업 없음")));
     put("latest", cardTitle("최근 기록", btn("전체 기록","logs","","linkbtn")) +
-        (E.length ? E.slice(-3).reverse().map(e => `<div class="timeline"><time>${tm(e.ts)}</time><b>${h(e.title)}</b><span>${h(e.title.replace(/[ ·]/g,"") === e.detail.reason.replace(/[ ·]/g,"") ? "" : e.detail.reason)}</span></div>`).join("") : empty("수신된 이벤트가 없습니다.")));
+        (E.length ? E.slice(-3).reverse().map(e => `<div class="timeline"><time>${tm(e.ts)}</time><b>${h(e.title)}</b><span>${h((e.title.replace(/[ ·]/g,"") === e.detail.reason.replace(/[ ·]/g,"") ? "" : e.detail.reason) + repeatText(e))}</span></div>`).join("") : empty("수신된 이벤트가 없습니다.")));
 };
 
 

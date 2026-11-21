@@ -66,6 +66,9 @@ class RobotLinkCfg:
     start_timeout_s: float = 120.0
     control_retry_s: float = 1.5   # 4K: resend PAUSE if STATE is still MOVING after this long
     control_retries: int = 3       # 4K: more resends than this opens the STOP_UNCONFIRMED card
+    # 4O: after a MOVE/DOCK/RESUME, PART 04 may hold its STATE up to this long while it starts Nav2
+    # (wait_for_server). Until the next STATE the link counts as lost after link_timeout_s + command_grace_s.
+    command_grace_s: float = 5.0
 
 
 @dataclass(frozen=True)
@@ -145,6 +148,7 @@ class BedMonitorCfg:
     min_rate_hz: float = 10.0
     require_at_start: bool = True
     exit_clear_hold_s: float = 1.0
+    enabled: bool = True          # off: bed exit and webcam loss neither stop robots nor raise alarms (D-51)
 
 
 @dataclass(frozen=True)
@@ -430,6 +434,8 @@ def _load_robot_link(data: Mapping) -> RobotLinkCfg:
         control_retries=retries,
         request_id=_text(data.get("request_id"), "robot_link.request_id", ("auto", "always", "never")),
         start_timeout_s=_number(data.get("start_timeout_s", 120.0), "robot_link.start_timeout_s", positive=True),
+        command_grace_s=_number(data.get("command_grace_s", RobotLinkCfg.command_grace_s),
+                                "robot_link.command_grace_s", minimum=0),
         **topics,
         **_numbers(data, "robot_link", ("accept_timeout_s", "link_timeout_s"), positive=True),
     )
@@ -664,7 +670,8 @@ def config_from_dict(data: Mapping) -> FleetConfig:
     monitor = BedMonitorCfg(**_numbers(policy, "safety.bed_monitor", ("warn_s", "lost_s", "recover_s", "min_rate_hz"),
                                        positive=True),
                             exit_clear_hold_s=_number(policy["exit_clear_hold_s"], "safety.bed_monitor.exit_clear_hold_s", minimum=0),
-                            require_at_start=_value(policy, "require_at_start", "safety.bed_monitor", bool))
+                            require_at_start=_value(policy, "require_at_start", "safety.bed_monitor", bool),
+                            enabled=_value(policy, "enabled", "safety.bed_monitor", bool))
     if monitor.warn_s >= monitor.lost_s:
         raise ConfigError("safety.bed_monitor.lost_s: warn_s보다 커야 합니다")
     manual_level = cfg["mission"].get("manual_level", MissionCfg.manual_level)

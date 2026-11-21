@@ -1,5 +1,6 @@
 """Observe the control room's ROS graph for ten seconds. No robot or camera commands."""
 import argparse
+from dataclasses import replace
 import json
 from functools import partial
 from math import isfinite
@@ -19,9 +20,9 @@ from rclpy.utilities import remove_ros_args
 from sensor_msgs.msg import BatteryState
 from std_msgs.msg import Bool, String
 
-from .core.config import ConfigError, load_config
+from .core.config import TRAFFIC_MODES, ConfigError, load_config
 from .preflight_checks import (classifier_line, compare_points, discovery_ports, find_goal_file, goal_points,
-                               slot_line, state_rows, traffic_mode_line)
+                               running_mode_line, slot_line, state_rows, traffic_mode_line)
 from .robot_link import AMCL_QOS, DockStatus, HazardDetectionVector
 
 ENVIRONMENT = ("ROS_DOMAIN_ID", "ROS_DISCOVERY_SERVER", "ROS_SUPER_CLIENT", "ROS_AUTOMATIC_DISCOVERY_RANGE",
@@ -60,7 +61,9 @@ class Observations(Node):
         self.states = {}
         self.seen = {}
         self.slots = {}  # ns -> STATE carried a "slot" key (4J PART 04)
+        self.running_mode = None  # traffic.mode of a running control room (/fleet/state)
         self.create_subscription(Bool, "/patient/bed_exit", self.bed, 10)
+        self.create_subscription(String, "/fleet/state", self.fleet_state, 10)
         topics = config.robot_link
         for unit in config.robots.values():
             ns = unit.ns
@@ -78,6 +81,15 @@ class Observations(Node):
     def bed(self, msg):
         self.bed_samples += 1
         self.bed_value = msg.data
+
+    def fleet_state(self, msg):
+        try:
+            state = json.loads(msg.data)
+        except (ValueError, RecursionError):
+            return
+        mode = (state.get("traffic") or {}).get("mode") if isinstance(state, dict) else None
+        if mode in TRAFFIC_MODES:
+            self.running_mode = mode
 
     def status(self, ns, msg):
         try:
@@ -156,6 +168,7 @@ class Observations(Node):
             print(f"  {result} · " + ("발행자 있음" if found else fallback))
         text = "없음" if self.bed_value is None else "이탈" if self.bed_value else "정상"
         print(f"\n/patient/bed_exit · {self.bed_samples/duration:.1f} Hz ({self.bed_samples}건, 마지막 값 {text})")
+        print(running_mode_line(self.config.traffic.mode, self.running_mode))
         if DockStatus is None:
             topics = "dock_status·hazard_detection" if self.config.safety.use_hazard_topic else "dock_status"
             print(f"참고 · irobot_create_msgs 미설치로 {topics} 원본 구독 생략")
@@ -168,6 +181,8 @@ def main(args=None):
     default = get_package_share_path("part3_fleet_manager") / "config/fleet.yaml"
     parser.add_argument("--config-file", default=str(default), help="관제가 사용할 fleet.yaml")
     parser.add_argument("--goals-file", help="PART 04 goal_manager.py (기본은 워크스페이스에서 탐색)")
+    parser.add_argument("--traffic-mode", choices=TRAFFIC_MODES,
+                        help="관제를 띄울 때의 traffic_mode:= 값 (없으면 fleet.yaml의 traffic.mode)")
     options = parser.parse_args(remove_ros_args(argv)[1:])
     problems = inspect_environment()
     try:
@@ -175,7 +190,11 @@ def main(args=None):
     except ConfigError as exc:
         print(f"설정 오류 · {exc}\n실제 실행 안 됨")
         return 1
-    print(traffic_mode_line(config))
+    source = "fleet.yaml"
+    if options.traffic_mode:
+        config = replace(config, traffic=replace(config.traffic, mode=options.traffic_mode))
+        source = "실행 인자 --traffic-mode"
+    print(traffic_mode_line(config, source))
     for warning in config.exit_warnings():
         print("경고 · " + warning)
     goals = Path(options.goals_file).expanduser() if options.goals_file else find_goal_file(options.config_file)

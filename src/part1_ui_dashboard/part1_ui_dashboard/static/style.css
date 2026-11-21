@@ -298,6 +298,54 @@ button.table-link {
   gap: var(--gutter);
 }
 
+/* D-51 bed monitor switch */
+.signals .switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s);
+  height: auto;
+  padding: var(--u) var(--s);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--white);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.signals .switch i {
+  position: relative;
+  width: 28px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--inactive);
+}
+
+.signals .switch i::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--white);
+}
+
+.signals .switch[aria-checked="true"] i {
+  background: var(--primary);
+}
+
+.signals .switch[aria-checked="true"] i::after {
+  left: 14px;
+}
+
+.signals .switch[aria-checked="false"] {
+  border-color: var(--wait-line);
+  background: var(--waiting);
+  color: var(--wait-text);
+}
+
 #situation {
   display: flex;
   min-height: 52px;

@@ -40,8 +40,13 @@ class FleetManagerNode(Node):
         self.get_logger().info(f"교통 판단 모드 · {config.traffic.mode}")
         monitor = config.safety.bed_monitor
         required = self.declare_parameter("bed_monitor_require_at_start", monitor.require_at_start).value
+        enabled = self.declare_parameter("bed_monitor_enabled", monitor.enabled).value
+        if type(enabled) is not bool:
+            raise ValueError("bed_monitor_enabled must be true or false")
         config = replace(config, assignment=replace(config.assignment, mode=mode),
-                         safety=replace(config.safety, bed_monitor=replace(monitor, require_at_start=required)))
+                         safety=replace(config.safety, bed_monitor=replace(monitor, require_at_start=required,
+                                                                           enabled=enabled)))
+        self.get_logger().info("침상 감시 · " + ("켜짐" if enabled else "꺼짐"))
         db_path = self.declare_parameter("db_path", "").value
         self.core = FleetCore(replace(config, db_path=db_path) if db_path else config)
         self.links = {r: RobotLink(self, r, unit.ns, config.robot_link, self.core.enqueue, self.now, config.obstacle,

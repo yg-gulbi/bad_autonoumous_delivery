@@ -173,8 +173,28 @@ def test_monitor_warn_toasts_are_limited_per_message_on_receipt(tmp_path):
         out.before = [...$("toast").children].map(n => n.textContent);
         clock = 30000; warn("불안정"); warn("불안정"); warn("지연");
         out.after = [...$("toast").children].map(n => n.textContent);
-        out.journal = E.length;
+        out.journal = E.map(e => [e.detail.reason, e.detail.repeat || 1, e.detail.first_ts ?? e.ts]);
     """)
     assert result["before"] == ["불안정", "지연"]
     assert result["after"] == ["불안정", "지연", "불안정", "지연"]
-    assert result["journal"] == 8
+    # D-51: the live record keeps one line per warning text with its count (the toast limit is unchanged).
+    assert [row[:2] for row in result["journal"]] == [["불안정", 5], ["지연", 3]]
+
+
+def test_monitor_switched_off_drops_bed_alarms_and_shows_only_monitor_off(tmp_path):
+    """D-51: BED_MONITOR_DISABLED closes the bed popups; with the monitor off the top line says only that."""
+    result = browser_case(tmp_path, """
+        event("BED_EXIT", 1000);
+        out.opened = [modal, alerts.map(e => e.type)];
+        deliver("state", {...state, bed_exit:{value:true, monitor:{state:"OFF", enabled:false}}});
+        event("BED_MONITOR_DISABLED", 1001);
+        out.closed = [modal, alerts.length];
+        renderTop();
+        out.badge = $("bed-monitor").textContent;
+        out.top = situation(true).map(i => i.title);
+        out.resume = resumeReason("robot_a");
+    """)
+    assert result["opened"] == ["alarm", ["BED_EXIT"]]
+    assert result["closed"] == [None, 0]
+    assert result["badge"] == "침상 감시 꺼짐"
+    assert result["top"] == ["침상 감시 꺼짐"] and result["resume"] == ""

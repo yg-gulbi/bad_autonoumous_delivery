@@ -47,6 +47,10 @@ class LegacyTraffic:
         del robot
         return False
 
+    def may_start(self, robot: str) -> bool:
+        del robot
+        return True
+
     def parked_zone(self, robot: str):
         del robot
         return None
@@ -115,6 +119,7 @@ class PlanTraffic:
         if mission_robots is not None:
             for robot, unit in mission_robots.items():
                 self.resources.robot_has_job[robot] = unit.job is not None
+                self.resources.confirming[robot] = unit.job is not None and unit.state == "WAIT_CONFIRM"
         self.resources.observe(now, reports)
 
     def reconcile(self, now: float):
@@ -136,6 +141,11 @@ class PlanTraffic:
 
     def plan_hold(self, robot: str) -> bool:
         return robot in self.resources.held
+
+    def may_start(self, robot: str) -> bool:
+        """Only the plan's executor lets a MOVE or RESUME out to PART 04 (D-55): an operator resume, a card
+        choice or a retry only lifts its own stop; the robot stays still while the plan says wait."""
+        return robot in self.resources.go
 
     def parked_zone(self, robot: str):
         """Zone of the slot the robot stands in after a completed MOVE ("" when stopped on the way)."""

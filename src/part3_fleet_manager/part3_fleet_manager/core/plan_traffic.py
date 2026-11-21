@@ -16,8 +16,8 @@ The plan is made again on a new leg request, a finished or cancelled leg, arriva
 link recovery or loss, a safety stop release, and when a robot is ``replan_delay_s`` behind the plan.
 """
 
-from dataclasses import dataclass, field
-from math import dist, hypot
+from dataclasses import dataclass, field, replace
+from math import dist, hypot, inf
 import time
 
 from . import geometry as g
@@ -136,6 +136,10 @@ class PlanManager:
         self.yield_events: list = []
         self.levels: dict = {}                            # leg -> Level after an operator change (SET_LEVEL)
         self.coast_route: dict[str, tuple] = {}          # robot that may still drive its MOVE -> remaining pieces
+        self._lost: dict[str, tuple] = {}                # offline robot -> (time of loss, pose before) (D-52)
+        self.confirming = dict.fromkeys(config.robots, False)   # WAIT_CONFIRM: kept still by the plan (D-56)
+        self.fenced: dict[str, tuple] = {}               # robot whose every way crosses an UNKNOWN segment (D-54)
+        self.go: set[str] = set()                        # robots the plan lets start (MOVE) or go on (RESUME) now
 
     # --- labels and events ----------------------------------------------------------------------
 
@@ -303,10 +307,15 @@ class PlanManager:
         self.reports = dict(reports)
         self.regions = {r: self.config.corridor.region_of(s.pose) for r, s in reports.items()
                         if s.link_ok and s.pose is not None}
+        back = []
         for robot, report in reports.items():
             ok = bool(report.link_ok and report.pose is not None)
             if self._link_ok.get(robot, ok) != ok:
                 self._mark("연결 복구" if ok else "연결 끊김")
+                if not ok:
+                    self._lost[robot] = (now, report.pose)
+                elif robot in self._lost:
+                    back.append(robot)
             self._link_ok[robot] = ok
             if self._safe.get(robot) and not report.safe_pause:
                 self._mark("안전 정지 해제")
@@ -316,6 +325,34 @@ class PlanManager:
         for robot, plan in self.plans.items():
             self._progress(robot, plan)
         self.board.observe(now, reports, self._slot_member)
+        for robot in back:
+            self._link_back(robot, now)
+
+    def _link_back(self, robot, now):
+        """Back online with a fresh pose (D-52). The segments it held while offline (UNKNOWN, including the
+        rest of its MOVE, D-46·D-49) are settled now: it keeps the ones it is inside and the rest are released,
+        unless it may have moved while offline - lost time x plan speed, or the distance between the pose before
+        and after the loss, over stop_margin_m. Then the operator checks them on the spot as before."""
+        lost_at, before = self._lost.pop(robot)
+        names = [n for n, seg in self.segments.items() if robot in seg.uncertain]
+        if not names:
+            return
+        pose = self.reports[robot].pose
+        lost_s = now - lost_at
+        reach_m = lost_s * self.graph.speed
+        moved_m = dist(pose, before) if before is not None else inf
+        margin = self.config.traffic.stop_margin_m
+        detail = {"lost_s": round(lost_s, 2), "reach_m": round(reach_m, 2),
+                  "moved_m": None if moved_m == inf else round(moved_m, 2)}
+        label = self.robot_label(robot)
+        if reach_m > margin or moved_m > margin:
+            why = (f"{lost_s:.1f}초 동안 최대 {reach_m:.1f} m" if reach_m > margin
+                   else f"끊기기 전 위치에서 {moved_m:.2f} m")
+            self.record("RESOURCE_UNKNOWN", now, f"{label} 연결 복구 · {why} 움직였을 수 있어 현장 확인이 필요합니다",
+                        robot=robot, code="E-423", resources=names, observed=[], uncertain=[robot], **detail)
+            return
+        self.board.recover(robot, now, f"{label} 연결 {lost_s:.1f}초 만에 복구 · 그 자리에 있어 자동 반납", **detail)
+        self._mark("연결 복구")
 
     def _parking(self, reports):
         """A robot stands in a slot when its MOVE to that slot completed (or it started there). A robot
@@ -421,10 +458,14 @@ class PlanManager:
     # --- planning -------------------------------------------------------------------------------
 
     def _still_held(self, robot):
-        """Capacity segments the board still gives to this robot (not yet released after it left)."""
+        """Capacity segments the board still gives to this robot (not yet released after it left). An UNKNOWN
+        segment is part of the robot only while it is offline; back online it is a fence for every robot
+        (D-54: the plan must not think that moving this robot frees it)."""
+        offline = not self._link_ok.get(robot, False)
         return tuple((name, seg.holders[robot].direction) for name, seg in self.segments.items()
                      if name in self.graph.capacity and robot in seg.holders
-                     and (seg.holders[robot].state == "OCCUPIED" or robot in seg.uncertain))
+                     and ((seg.holders[robot].state == "OCCUPIED" and robot not in seg.uncertain)
+                          or (robot in seg.uncertain and offline)))
 
     def _goal_endpoints(self, robot, leg):
         if leg.dock_path:
@@ -457,7 +498,11 @@ class PlanManager:
         leg = self.active.get(robot) or self.pending.get(robot)
         stop_m = self.config.traffic.stop_margin_m
         static = (report is None or not report.link_ok or report.pose is None or report.safe_pause
-                  or report.stalled or (link is not None and link.cancel_wait))
+                  or report.stalled or (link is not None and link.cancel_wait)
+                  or self.confirming.get(robot, False))     # WAIT_CONFIRM: a patient may be getting on (D-56)
+        # The proximity rule (collision.stop_distance) uses slot_stop_m only for a robot standing at a slot that
+        # is online and has no granted leg; an offline robot or one granted and not started keeps 0.6 m (D-56).
+        slot_rule = bool(report is not None and report.link_ok) and robot not in self.active
         here = self.parked_at.get(robot)
         if here is not None and not self.graph.points[here].region.contains(pose):
             here = None
@@ -520,10 +565,10 @@ class PlanManager:
         else:
             extra = self._still_held(robot)
             if here is not None:
-                stand_goal = self.graph.parked(here, extra)
+                stand_goal = self.graph.parked(here, extra, slot_rule=slot_rule)
                 rid = self.graph.stay_route(here, piece=stand_goal)
             else:
-                stand_goal = self.graph.stand(pose, extra)
+                stand_goal = self.graph.stand(pose, extra, slot_rule=slot_rule)
                 rid = self.graph.stay_route(None, piece=stand_goal)
             starts.append((rid, None))
         if leg is None and not goals:
@@ -569,10 +614,41 @@ class PlanManager:
                       blocks=blocks)
         return agent
 
+    def _fences(self):
+        """UNKNOWN segments as one fixed obstacle that no robot may use (D-54), or () when there are none."""
+        pieces = [self.graph.fence(name) for name, seg in self.segments.items()
+                  if seg.uncertain and not seg.spec.is_shared]
+        if not pieces:
+            return ()
+        stay = self.graph.stay_route(None, piece=pieces[0])
+        return (Agent("UNKNOWN", 0.0, [(stay, None)], {}, static=True, blocks=tuple(pieces[1:])),)
+
+    def _fenced_names(self, agent):
+        """UNKNOWN segments on the robot's way to its goal (all of them when its own way is not the problem)."""
+        unknown = [name for name, seg in self.segments.items() if seg.uncertain and not seg.spec.is_shared]
+        report, link = self.reports.get(agent.name), self.links.get(agent.name)
+        pose = report.pose if report and report.pose is not None else (link.pose if link else None)
+        ahead = []
+        if pose is not None and agent.goal_targets:
+            rid = self.graph.route_from(pose, agent.goal_targets[0])
+            for piece in self.graph.routes[rid].pieces:
+                ahead.extend(n for n in self.graph.segs(piece) if n in unknown and n not in ahead)
+        return tuple(ahead or unknown)
+
     def replan(self, now, reason):
         self.coast_route = {}
         agents = [a for a in (self._agent(r) for r in self.config.robots) if a is not None]
-        result = self.planner.plan(agents, limit_ms=self.gcfg.plan_limit_ms)
+        walls = self._fences()
+        self.fenced = {}
+        if walls:
+            # A robot that cannot reach its goal even alone, only because of UNKNOWN segments, waits where it is
+            # for the operator's check ("현장 확인 필요"); no other robot is moved aside for it (D-54).
+            budget = max(5.0, self.gcfg.plan_limit_ms / 4)
+            for i, agent in enumerate(agents):
+                if not agent.static and agent.goal_targets and self.planner.reachable(agent, walls, limit_ms=budget) is False:
+                    self.fenced[agent.name] = self._fenced_names(agent)
+                    agents[i] = replace(agent, static=True)
+        result = self.planner.plan([*agents, *walls], limit_ms=self.gcfg.plan_limit_ms)
         self._last_replan = now
         self.dirty = None
         old = self.plans
@@ -580,16 +656,21 @@ class PlanManager:
         goal_names = {a.name: set(a.goal_targets) for a in agents}
         for agent in agents:
             events = result.events.get(agent.name)
-            if not events or agent.static:
+            if agent.name in self.fenced:
+                events = [(0, self.planner.initial_state(agent))]
+            elif not events or agent.static:
                 continue
             self.plans[agent.name] = self._robot_plan(agent.name, events, goal_names[agent.name], old.get(agent.name))
-            if agent.name in result.failed:
+            if agent.name in result.failed or agent.name in self.fenced:
                 self.plans[agent.name].failed = True
                 self.plans[agent.name].legs = []
         self._dependencies()
         keep_routes = {leg.route for plan in self.plans.values() for leg in plan.legs}
         keep_pieces = {entry.piece for plan in self.plans.values() for entry in plan.entries}
         keep_pieces.update(piece for pieces in self.coast_route.values() for piece in pieces)
+        for wall in walls:
+            keep_routes.add(wall.starts[0][0])
+            keep_pieces.update(wall.blocks)
         if self.graph.prune(keep_routes, keep_pieces):
             self.planner.forget()
         for robot, plan in self.plans.items():
@@ -611,9 +692,13 @@ class PlanManager:
         text = f"다시 계획 · {reason} · {result.elapsed_ms:.0f} ms"
         if result.method != "JOINT":
             text += f" · Level 순 계획으로 대신 ({result.reason})"
+        if self.fenced:
+            text += " · 현장 확인 필요 칸 " + "·".join(dict.fromkeys(
+                self.resource_label(n) for names in self.fenced.values() for n in names))
         self.record("PLAN_UPDATE", now, text, reason_code=reason, plan_ms=round(result.elapsed_ms, 1),
                     cost=round(result.cost, 2), method=result.method, fallback=result.method != "JOINT",
-                    expansions=result.expansions, plans=summary)
+                    expansions=result.expansions, plans=summary,
+                    unknown={r: list(names) for r, names in self.fenced.items()})
 
     def _robot_plan(self, robot, events, goal_targets, old):
         graph, planner = self.graph, self.planner
@@ -768,7 +853,10 @@ class PlanManager:
         return out
 
     def _hold(self, robot, gate, now, mission_id):
-        if gate is None:
+        if gate is None and robot in self.fenced:
+            names = "·".join(self.resource_label(n) for n in self.fenced[robot])
+            j, other, reason = 0, None, f"{names}: 현장 확인 필요"
+        elif gate is None:
             j, other, reason = 0, None, "계획을 찾지 못해 제자리 대기 · 다시 계획을 기다립니다"
         else:
             j, other, _ = gate
@@ -787,8 +875,8 @@ class PlanManager:
         step_s = self.gcfg.plan_step_s
         start = self.plan_info.get("at", now)
         for robot, plan in self.plans.items():
-            if plan.failed and now - start > self.gcfg.replan_delay_s:
-                return robot
+            if plan.failed and robot not in self.fenced and now - start > self.gcfg.replan_delay_s:
+                return robot        # a fenced robot waits for the operator's check (that plans again)
             nxt = plan.entry + 1
             if nxt < len(plan.entries) and plan.entries[nxt].leg == 0:
                 due = start + plan.entries[nxt].t0 * step_s
@@ -809,6 +897,9 @@ class PlanManager:
             self.replan(now, self.dirty)
         result = PlanTick([], [])
         waits = {}
+        # Robots whose MOVE (new or resent) or RESUME the plan's executor lets out in this tick (D-55). Every
+        # MOVE and RESUME to PART 04 needs this, whoever asked for it (operator resume, card choice, retry).
+        self.go = set()
         for robot in self.config.robots:
             plan = self.plans.get(robot)
             leg = self.active.get(robot) or self.pending.get(robot)
@@ -843,6 +934,7 @@ class PlanManager:
                         result.arrived.append((robot, point.zone, point.slot))
                     else:
                         result.grants.append(self._grant(robot, now))
+                        self.go.add(robot)
                 continue
             first = plan.legs[0]
             moving = self._moving(robot)
@@ -867,6 +959,7 @@ class PlanManager:
                 if robot in self.pending:
                     waits[robot] = gate[1]
                 continue
+            self.go.add(robot)
             if was_held:
                 self.held.pop(robot, None)
                 self.wait_reasons.pop(robot, None)

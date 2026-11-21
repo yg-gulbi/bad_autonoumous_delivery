@@ -149,14 +149,24 @@ def compare_points(config, part4):
     return warnings
 
 
-def traffic_mode_line(config):
-    """One-line summary of the active traffic engine mode for preflight output."""
+def traffic_mode_line(config, source="fleet.yaml"):
+    """One-line summary of the active traffic engine mode for preflight output. ``source`` says where the mode
+    came from: fleet.yaml, the --traffic-mode argument (as launch traffic_mode:=), or the running control room."""
     if config.traffic.mode == "PLAN":
         graph = config.traffic.graph
         extra = (f"정지선 {config.traffic.stop_margin_m:g} m, 복도 칸 {graph.cell_m:g} m, "
                  f"계획 한도 {graph.plan_limit_ms:g} ms")
-        return f"교통 판단 모드 · PLAN ({extra})"
-    return f"교통 판단 모드 · LEGACY (복도 {config.corridor.mode})"
+        return f"교통 판단 모드 · PLAN ({extra}) · {source}"
+    return f"교통 판단 모드 · LEGACY (복도 {config.corridor.mode}) · {source}"
+
+
+def running_mode_line(expected, running):
+    """The mode the running control room publishes in /fleet/state (traffic.mode), against the one checked."""
+    if running is None:
+        return "실행 중인 관제 · /fleet/state 없음 (관제 실행 전이면 정상)"
+    if running != expected:
+        return f"경고 · 실행 중인 관제는 {running}입니다. 점검한 모드 {expected}와 다릅니다 (실행 인자 traffic_mode:= 확인)"
+    return f"실행 중인 관제 · {running} (같음)"
 
 
 def slot_line(seen):

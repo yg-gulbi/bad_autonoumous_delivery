@@ -34,7 +34,11 @@ class KinematicRobot:
 
     Like mock_hospital_nav it can start docked (a MOVE first undocks: UNDOCKING 1 s, LOCALIZING
     ``mock.localizing_s``), drive a DOCK (door route to the approach point, DOCKING 1 s, DOCKED), and stop in
-    front of an obstacle until Nav2 gives up after ``mock.abort_after_s`` (MISSION_FAILED, then OBSTACLE)."""
+    front of an obstacle until Nav2 gives up after ``mock.abort_after_s`` (MISSION_FAILED, then OBSTACLE).
+
+    ``nav_wait_s`` > 0 is PART 04's ``_go()``: after a MOVE (MISSION_ACCEPTED already sent) or a RESUME (RESUMED
+    sent) ``nav.send_pose()`` waits for the Nav2 server holding the mission lock, so for that long there is no STATE,
+    the robot does not move and commands wait (11/21 12:35:05). Then it is MOVING and sends NAVIGATING."""
 
     def __init__(self, cfg, robot_id: str, *, speed_mps: float = 0.2, start_pose=None, docked: bool = False):
         self.cfg = cfg
@@ -66,6 +70,9 @@ class KinematicRobot:
         self.gave_up_at: float | None = None      # last Nav2 abort in front of an obstacle (for a PART 06 verdict)
         self.undocks = self.docks = 0
         self.battery_pct = 80.0 if robot_id == "robot_a" else 75.0
+        self.nav_wait_s = 0.0
+        self.nav_until: float | None = None       # inside _go(): no STATE, no motion, commands queue up
+        self._queued: list[tuple[str, float]] = []
         self._outbox: list[tuple[str, object]] = []
 
     def _emit_status(self, event: str, **fields):
@@ -112,7 +119,18 @@ class KinematicRobot:
     def _navigating(self):
         self._emit_status("NAVIGATING", destination=self.dest, via="교차로" if self.via else None)
 
+    def _go(self, now):
+        """PART 04 _go(): MOVING now, or after nav_wait_s (the Nav2 server wait under the lock)."""
+        if self.nav_wait_s > 0:
+            self.nav_until = now + self.nav_wait_s
+            return
+        self.state = "MOVING"
+        self._navigating()
+
     def receive(self, text: str, now: float):
+        if self.nav_until is not None:
+            self._queued.append((text, now))      # the command callback waits for the mission lock
+            return
         action, dest, level, tag, slot = _parse_cmd(text)
         if action in ("MOVE", "DOCK") and self.state in DONE:
             if action == "DOCK" and (self.dock_point is None or self.docked):
@@ -138,17 +156,15 @@ class KinematicRobot:
                 self.state, self.phase_until = "UNDOCKING", now + 1.0
                 self._emit_status("UNDOCKING")
                 return
-            self.state = "MOVING"
-            self._navigating()
+            self._go(now)
         elif action == "PAUSE" and self.state == "MOVING":
             self.reason = "관제 요청"
             self.state = "STOPPING_PAUSE"
         elif action == "RESUME" and self.state == "PAUSED":
-            self.state = "MOVING"
             if self.blocked_since is not None:
                 self.blocked_since = now          # Nav2 tries again in front of the obstacle
             self._emit_status("RESUMED")
-            self._navigating()
+            self._go(now)
         elif action == "CANCEL" and self.state not in DONE:
             self.reason = "운영자 취소"
             self.state = "STOPPING_CANCELED"
@@ -182,10 +198,21 @@ class KinematicRobot:
             self._emit_status("LOCALIZING")
         else:
             self._emit_status("READY", pose={"x": round(self.pose[0], 3), "y": round(self.pose[1], 3)})
-            self.state = "MOVING"
-            self._navigating()
+            self._go(now)
 
     def step(self, now: float, dt: float) -> list[tuple[str, object]]:
+        if self.nav_until is not None:
+            if now < self.nav_until - 1e-9:
+                msgs = [] if now < self.drop_until else list(self._outbox)
+                self._outbox.clear()
+                return msgs                       # inside _go(): no STATE, no motion
+            self.nav_until = None
+            self.state = "MOVING"
+            self._navigating()
+            self.next_state_at = now              # the STATE timer fires as soon as the lock is free
+            queued, self._queued = self._queued, []
+            for text, _ in queued:
+                self.receive(text, now)
         if self.state == "STOPPING_PAUSE":
             self.state = "PAUSED"
             self._emit_status("PAUSED", reason=self.reason)
@@ -367,6 +394,10 @@ class KinematicSim:
 
     def drop_link(self, robot: str, seconds: float):
         self.robots[robot].drop_link(self.now, seconds)
+
+    def nav_wait(self, robot: str, seconds: float):
+        """PART 04 waits this long for the Nav2 server after each MOVE or RESUME (no STATE meanwhile)."""
+        self.robots[robot].nav_wait_s = seconds
 
     def obstacle(self, robot: str) -> bool:
         return self.robots[robot].obstacle(self.now)

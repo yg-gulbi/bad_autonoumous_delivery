@@ -345,9 +345,17 @@ class MissionManager:
                 r.job.started_at = now
                 self.dirty[r.job.id] = r.job
             slot = self.resources.slot_of(leg) if not leg.dock_path else None
-            self.record("LEG_START", now, f"{self.resources.zone_label(leg.destination, slot)} 이동 시작", robot=robot,
+            move = link.move
+            extra, text = {}, f"{self.resources.zone_label(leg.destination, slot)} 이동 시작"
+            if move is not None and move.zone not in ("DOCK", leg.destination):
+                # PLAN: the MOVE goes to the slot the plan stops the robot at first (D-45). Say where it goes; the
+                # leg's goal stays in "destination" (the same MOVE as the PLAN_YIELD_MOVE before it, D-55).
+                aside = self.resources.zone_label(move.zone, move.slot)
+                text = f"{aside} 이동 시작 (비켜서기, 목적지 {self.resources.zone_label(leg.destination, slot)})"
+                extra = {"target": move.zone, "target_slot": move.slot or 1, "aside": True}
+            self.record("LEG_START", now, text, robot=robot,
                         mission_id=r.job.journal_id, destination=leg.destination, return_home=r.returning,
-                        slot=slot, by=r.job.requested_by if r.job.kind == "GO_ZONE" else None)
+                        slot=slot, by=r.job.requested_by if r.job.kind == "GO_ZONE" else None, **extra)
         elif event in ("MISSION_FAILED", "MOVE_REJECTED", "MISSION_CANCELED"):
             kind = {"MISSION_FAILED": "NAV_FAILED", "MOVE_REJECTED": "MOVE_REJECTED",
                     "MISSION_CANCELED": "WARNING"}[event]
@@ -502,8 +510,11 @@ class MissionManager:
             stop.update(status="CONFIRMED", confirmed_at=now, confirmed_by=by)
             self.advance(robot, now)
 
-    def wire_step(self, robot, now, corridor_command=None, *, traffic_stop=False, stalled=False, hold_restart=None):
-        """Combine motion intents once, after safety, arbitration and operator decisions."""
+    def wire_step(self, robot, now, corridor_command=None, *, traffic_stop=False, stalled=False, hold_restart=None,
+                  hold_start=False):
+        """Combine motion intents once, after safety, arbitration and operator decisions. ``hold_start``
+        (PLAN, D-55): the plan's executor has not let this robot go in this tick, so no MOVE or RESUME goes out;
+        PAUSE and CANCEL still do."""
         r, link = self.robots[robot], self.links[robot]
         if r.returning and r.canceling and link.cancel_sent_at is not None:
             if now - link.cancel_sent_at >= link.policy.accept_timeout_s:
@@ -528,13 +539,14 @@ class MissionManager:
             self.decisions.resolve(robot, now, {"STOP_UNCONFIRMED"})
         if (local_stop and r.job) or corridor_command == "RESUME":
             r.resume_due = True
-        resume = r.resume_due and (r.state == "MOVING" or (not r.job and link.state == "PAUSED")) and not stop and not stalled
+        resume = (r.resume_due and (r.state == "MOVING" or (not r.job and link.state == "PAUSED")) and not stop
+                  and not stalled and not hold_start)
         if resume and link.state == "PAUSED" and hold_restart and hold_restart(robot, now):
             stop, resume = True, False
         if r.state == "FAULT" and not link.cancel_wait and not stop:
             return None
         unconfirmed = link.stop_unconfirmed
-        command, error = link.step(now, stop=stop, resume=resume)
+        command, error = link.step(now, stop=stop, resume=resume, hold=hold_start)
         if command == "PAUSE" and link.pause_sends > 1:
             self._stop_event(robot, "STOP_RESENT", now, attempt=link.pause_sends - 1)
         if link.stop_unconfirmed and not unconfirmed:

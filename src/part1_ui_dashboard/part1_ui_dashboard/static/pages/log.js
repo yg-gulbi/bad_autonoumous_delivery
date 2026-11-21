@@ -37,7 +37,7 @@ renderers.log = () => {
     }
     const result = readHistory("events","events",{...logQuery(),page:eventPage});
     const rows = result.data?.items.map(e => `<tr><td>${stampText(e.ts)}</td><td>${h(e.title)}</td>` +
-        cells([robotName(e.robot),e.mission_id,e.by]) + "<td>" + h(e.detail.reason) + " " +
+        cells([robotName(e.robot),e.mission_id,e.by]) + "<td>" + h(e.detail.reason + repeatText(e)) + " " +
         (decisions.has(e.type) ? btn("판단 근거","event-basis",e.id,"linkbtn") : "") + "</td></tr>");
     put("logs-table", rows ? historyTable(["시각","종류","로봇","임무","누가","문장"],rows) + pager(result.data,"eventpage") : recordNotice(result));
 };
