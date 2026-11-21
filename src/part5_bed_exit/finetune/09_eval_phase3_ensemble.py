@@ -167,7 +167,7 @@ def main():
 
     stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     out_dir = Path(args.output_dir).resolve() if args.output_dir else (
-        Path(__file__).resolve().parent / 'runs' / f'phase3_ensemble_{stamp}'
+        Path(__file__).resolve().parent / 'runs' / 'eval' / f'phase3_ensemble_{stamp}'
     )
     out_dir.mkdir(parents=True, exist_ok=True)
     csv_path = out_dir / 'phase3_ensemble_results.csv'

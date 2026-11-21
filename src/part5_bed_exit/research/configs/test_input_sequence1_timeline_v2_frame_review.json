@@ -1,0 +1,140 @@
+{
+  "video": "test_bed.mp4",
+  "fps": 30.0,
+  "total_frames": 1024,
+  "roi_config": "test_input_sequence1_roi_v1.json",
+  "label_version": "v2_frame_review_binary_20261121",
+  "verification_note": "71 boundary frames reviewed at original resolution; final binary decision under explicit boundary-touch rule; AI visual annotation, not independent consensus",
+  "annotation_policy": "고정 2D ROI 밖으로 신체·착의 일부가 보이면 EXIT. 경계 접촉만 하거나 밖으로 나온 신체가 확인되지 않으면 SAFE. 그림자·케이블은 제외. 모델 출력·마스크 면적 임계치·투표는 라벨 생성에 사용하지 않음.",
+  "source_timeline_sha256": "62ad56143cc814354faba68936da85a9e5bb82afe65dd38a06266d5d9b0e21d5",
+  "review_artifacts": "research/results/frame_review_20261121",
+  "deployment_approved": false,
+  "events": [
+    {
+      "start_frame": 0,
+      "end_frame": 28,
+      "start_sec": 0.0,
+      "end_sec": 0.9333333333333333,
+      "exit_hint": false,
+      "phase": "visual_review_00",
+      "description": "경계 내부 또는 접촉"
+    },
+    {
+      "start_frame": 28,
+      "end_frame": 95,
+      "start_sec": 0.9333333333333333,
+      "end_sec": 3.1666666666666665,
+      "exit_hint": true,
+      "phase": "visual_review_01",
+      "description": "신체 일부의 영상상 ROI 이탈"
+    },
+    {
+      "start_frame": 95,
+      "end_frame": 141,
+      "start_sec": 3.1666666666666665,
+      "end_sec": 4.7,
+      "exit_hint": false,
+      "phase": "visual_review_02",
+      "description": "경계 내부 또는 접촉"
+    },
+    {
+      "start_frame": 141,
+      "end_frame": 191,
+      "start_sec": 4.7,
+      "end_sec": 6.366666666666666,
+      "exit_hint": true,
+      "phase": "visual_review_03",
+      "description": "신체 일부의 영상상 ROI 이탈"
+    },
+    {
+      "start_frame": 191,
+      "end_frame": 220,
+      "start_sec": 6.366666666666666,
+      "end_sec": 7.333333333333333,
+      "exit_hint": false,
+      "phase": "visual_review_04",
+      "description": "경계 내부 또는 접촉"
+    },
+    {
+      "start_frame": 220,
+      "end_frame": 272,
+      "start_sec": 7.333333333333333,
+      "end_sec": 9.066666666666666,
+      "exit_hint": true,
+      "phase": "visual_review_05",
+      "description": "신체 일부의 영상상 ROI 이탈"
+    },
+    {
+      "start_frame": 272,
+      "end_frame": 288,
+      "start_sec": 9.066666666666666,
+      "end_sec": 9.6,
+      "exit_hint": false,
+      "phase": "visual_review_06",
+      "description": "경계 내부 또는 접촉"
+    },
+    {
+      "start_frame": 288,
+      "end_frame": 414,
+      "start_sec": 9.6,
+      "end_sec": 13.8,
+      "exit_hint": true,
+      "phase": "visual_review_07",
+      "description": "신체 일부의 영상상 ROI 이탈"
+    },
+    {
+      "start_frame": 414,
+      "end_frame": 439,
+      "start_sec": 13.8,
+      "end_sec": 14.633333333333333,
+      "exit_hint": false,
+      "phase": "visual_review_08",
+      "description": "경계 내부 또는 접촉"
+    },
+    {
+      "start_frame": 439,
+      "end_frame": 541,
+      "start_sec": 14.633333333333333,
+      "end_sec": 18.033333333333335,
+      "exit_hint": true,
+      "phase": "visual_review_09",
+      "description": "신체 일부의 영상상 ROI 이탈"
+    },
+    {
+      "start_frame": 541,
+      "end_frame": 555,
+      "start_sec": 18.033333333333335,
+      "end_sec": 18.5,
+      "exit_hint": false,
+      "phase": "visual_review_10",
+      "description": "경계 내부 또는 접촉"
+    },
+    {
+      "start_frame": 555,
+      "end_frame": 731,
+      "start_sec": 18.5,
+      "end_sec": 24.366666666666667,
+      "exit_hint": true,
+      "phase": "visual_review_11",
+      "description": "신체 일부의 영상상 ROI 이탈"
+    },
+    {
+      "start_frame": 731,
+      "end_frame": 747,
+      "start_sec": 24.366666666666667,
+      "end_sec": 24.9,
+      "exit_hint": false,
+      "phase": "visual_review_12",
+      "description": "경계 내부 또는 접촉"
+    },
+    {
+      "start_frame": 747,
+      "end_frame": 1024,
+      "start_sec": 24.9,
+      "end_sec": 34.13333333333333,
+      "exit_hint": true,
+      "phase": "visual_review_13",
+      "description": "신체 일부의 영상상 ROI 이탈"
+    }
+  ]
+}

@@ -102,6 +102,8 @@ def main():
     parser.add_argument('--config', default='src/part5_bed_exit/run_data/test_input_sequence1_methods_v1.json')
     parser.add_argument('--timeline', default='src/part5_bed_exit/run_data/test_input_sequence1_timeline_v1.json')
     parser.add_argument('--device', default='cuda:0')
+    parser.add_argument('--grid-unexplored', action='store_true',
+                        help='Sweep unexplored region: outside_fraction <= 0.05 x conf x vote')
     parser.add_argument('--output-dir', default='')
     args = parser.parse_args()
 
@@ -125,14 +127,27 @@ def main():
     yolo_model = YOLO(weights_path, task='segment')
 
     base = dict(confidence=0.5, mask_threshold=0.5, outside_fraction=0.05, history_size=5, min_votes=3)
-    experiments = [
-        ('Step0', 'baseline_default', base),
-        *[('1-A_outside', f'out={v}', {**base, 'outside_fraction': v}) for v in (0.01, 0.02, 0.03, 0.08, 0.10)],
-        *[('1-B_conf', f'conf={v}', {**base, 'confidence': v}) for v in (0.15, 0.25, 0.35)],
-        *[('1-C_mask_thr', f'mask={v}', {**base, 'mask_threshold': v}) for v in (0.35, 0.60, 0.70)],
-        *[('1-D_vote', f'vote={mv}/{hs}', {**base, 'min_votes': mv, 'history_size': hs})
-          for mv, hs in ((2, 3), (4, 5), (5, 7), (6, 9))],
-    ]
+    if args.grid_unexplored:
+        experiments = [
+            ('grid_unexp', f'c={c}_out={o}_v={mv}/{hs}', {
+                'confidence': c, 'mask_threshold': 0.5, 'outside_fraction': o,
+                'min_votes': mv, 'history_size': hs,
+            })
+            for c in (0.15, 0.25, 0.35, 0.50)
+            for o in (0.01, 0.02, 0.03, 0.04, 0.05)
+            for mv, hs in ((3, 5), (4, 5), (5, 7))
+        ]
+        exp_prefix = 'phase1_grid_unexplored'
+    else:
+        experiments = [
+            ('Step0', 'baseline_default', base),
+            *[('1-A_outside', f'out={v}', {**base, 'outside_fraction': v}) for v in (0.01, 0.02, 0.03, 0.04, 0.08, 0.10)],
+            *[('1-B_conf', f'conf={v}', {**base, 'confidence': v}) for v in (0.15, 0.25, 0.35)],
+            *[('1-C_mask_thr', f'mask={v}', {**base, 'mask_threshold': v}) for v in (0.35, 0.60, 0.70)],
+            *[('1-D_vote', f'vote={mv}/{hs}', {**base, 'min_votes': mv, 'history_size': hs})
+              for mv, hs in ((2, 3), (4, 5), (5, 7), (6, 9))],
+        ]
+        exp_prefix = 'phase1_ofat'
 
     rows = []
     for group, tag, kw in experiments:
@@ -141,12 +156,12 @@ def main():
             group=group, tag=tag, device=args.device, **kw,
         )
         rows.append(row)
-        print(f"[{group:12s}] {tag:16s} | cov={row['coverage']:.3f} (no_p={row['no_person']:3d}) | "
+        print(f"[{group:12s}] {tag:22s} | cov={row['coverage']:.3f} (no_p={row['no_person']:3d}) | "
               f"rec={row['recall']:.3f} fpr={row['safe_fpr']:.3f} f1={row['f1']:.3f} ev={row['events']}", flush=True)
 
     stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     out_dir = Path(args.output_dir).resolve() if args.output_dir else (
-        Path(__file__).resolve().parent / 'runs' / f'phase1_ofat_{stamp}'
+        Path(__file__).resolve().parent / 'runs' / 'eval' / f'{exp_prefix}_{stamp}'
     )
     out_dir.mkdir(parents=True, exist_ok=True)
     csv_path = out_dir / 'phase1_ofat_results.csv'

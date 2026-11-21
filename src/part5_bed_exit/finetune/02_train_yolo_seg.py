@@ -15,7 +15,7 @@ def parse_args(argv=None):
     parser.add_argument('--base-model', default='src/part5_bed_exit/models/yolo11n-seg.pt',
                         help='Base .pt model (e.g. yolo11n-seg.pt, yolo11s-seg.pt)')
     parser.add_argument('--data', required=True, help='Path to dataset.yaml')
-    parser.add_argument('--project', default='src/part5_bed_exit/finetune/runs',
+    parser.add_argument('--project', default='src/part5_bed_exit/finetune/runs/train',
                         help='Output project directory')
     parser.add_argument('--name', required=True, help='Experiment run name')
     parser.add_argument('--epochs', type=int, default=60)
