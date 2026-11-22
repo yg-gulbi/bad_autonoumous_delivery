@@ -22,6 +22,11 @@ from math import dist
 from . import geometry as g
 from .robot_protocol import DONE
 
+# At start-up (before any MOVE has finished), only a robot standing near a slot point counts as parked in that
+# slot. A slot's occupancy circle is 0.6 m (zone_occupied_m), which covers most of the bottom hall between C2 and
+# F2; robots standing face to face there (0.36~0.58 m from a slot point) are not parked in slots (4O 후속 6).
+START_PARK_M = 0.25
+
 
 def uses_crossroad(origin_region, destination):
     """PART 04 drives through the crossroad into, or out of, room B or E (goal_manager VIA_ROOMS)."""
@@ -156,7 +161,10 @@ class RobotStates:
                 continue
             self.departed_from.pop(robot, None)
             if robot not in self.parked_at:
-                self.parked_at[robot] = self.map.nearest_slot(report.pose)
+                slot = self.map.nearest_slot(report.pose)
+                if slot is not None and dist(report.pose, self.graph.points[slot].anchor) > START_PARK_M:
+                    slot = None
+                self.parked_at[robot] = slot
             if robot in self.last_target and view.still and not view.cancelling and not view.unsent:
                 target = self.last_target.pop(robot)
                 point = self.graph.points.get(target) if target else None
@@ -178,8 +186,8 @@ class RobotStates:
         return origin
 
     def parked_here(self, robot) -> bool:
-        """The robot stands in the slot its last MOVE took it to (``parked_at``; at start-up the slot circle it stands
-        in), still inside that slot's circle: parked in its own slot (4L, clearance.close_distance)."""
+        """The robot stands in the slot its last MOVE took it to (``parked_at``; at start-up within START_PARK_M
+        of a slot point), still inside that slot's circle: parked in its own slot (4L, clearance.close_distance)."""
         here = self.parked_at.get(robot)
         link = self.links.get(robot)
         return (here is not None and link is not None and link.pose is not None

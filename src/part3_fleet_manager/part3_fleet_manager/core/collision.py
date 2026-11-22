@@ -131,8 +131,25 @@ class CollisionControl:
         """(zone, slot) whose point is this robot's nearest slot within zone_occupied_m."""
         return self.rm.robots.slot_of(self.links[robot].pose)
 
+    def _standing_not_close(self, a, b, distance):
+        """Both stand still outside clearance.close_distance (e.g. parked in their own slots C1·C2, 4L) with no
+        active proximity contact: not a close-start pair."""
+        left, right = self.links[a], self.links[b]
+        if left.state in IN_MOTION or right.state in IN_MOTION:
+            return False
+        parked = (self.rm.robots.parked_here(a), self.rm.robots.parked_here(b))
+        return (distance >= close_distance(self.rm.config.safety, *parked)
+                and b not in self.contacts.get(a, ()) and a not in self.contacts.get(b, ()))
+
     def reconcile(self, now):
         self.access.reconcile(now)
+        # settle_parking() runs after observe_distance() in the tick, so a pair that just arrived (or started)
+        # parked in their own slots (C1·C2 0.55 m >= slot_stop_m, 4L) is cleared here in the same tick.
+        for pair in list(self.close_start):
+            a, b = pair
+            left, right = self.links[a], self.links[b]
+            if left.pose is not None and right.pose is not None and self._standing_not_close(a, b, dist(left.pose, right.pose)):
+                del self.close_start[pair]
 
     def _clear_near(self, robot, peer, now, reason, *, close=True):
         peers = self.contacts.get(robot, {})
@@ -216,13 +233,15 @@ class CollisionControl:
             pair = frozenset((a, b))
             separating = self._separating(pair, max(left.pose_at, right.pose_at), distance, now)
             stop = self.stop_distance(a, b)
-            parked = [self.rm.robots.parked_here(r) for r in (a, b)]
-            if (left.state not in IN_MOTION and right.state not in IN_MOTION
-                    and distance < close_distance(self.rm.config.safety, *parked)):
-                # Both stand inside the distance at which a driving robot stops: from here a move that does not close
-                # in is allowed (clearance.leaving), until they are apart. A robot stopped for closing in does not
-                # lower the mark (each stop would let it creep a little closer, 4O 후속 6 hall face-off).
-                self.close_start[pair] = max(self.close_start.get(pair, 0.0), distance)
+            parked = (self.rm.robots.parked_here(a), self.rm.robots.parked_here(b))
+            if left.state not in IN_MOTION and right.state not in IN_MOTION:
+                if distance < close_distance(self.rm.config.safety, *parked):
+                    # Both stand inside the distance at which a driving robot stops: from here a move that does not close
+                    # in is allowed (clearance.leaving), until they are apart. A robot stopped for closing in does not
+                    # lower the mark (each stop would let it creep a little closer, 4O 후속 6 hall face-off).
+                    self.close_start[pair] = max(self.close_start.get(pair, 0.0), distance)
+                elif self._standing_not_close(a, b, distance):
+                    self.close_start.pop(pair, None)
             elif distance >= self.resume_distance(a, b):
                 self.close_start.pop(pair, None)
             elif pair in self.close_start:

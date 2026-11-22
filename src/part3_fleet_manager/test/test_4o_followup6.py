@@ -158,20 +158,38 @@ def test_clearance_keeps_the_4l_slot_rule(cfg):
 @pytest.mark.parametrize("off", [0.0, 0.10, 0.16, 0.20])
 def test_robots_parked_off_the_points_of_c1_and_c2_are_not_close(cfg, off):
     """A real robot stops some way off the slot point. Parked in C1 and C2 (inside the circles) and 0.50~0.55 m apart,
-    the plan and the executor take the pair as not close, and robot_b leaves C2. (collision.close_start still marks
-    such a pair in the tick of the arrival, before the slot is known: open, report 17.7.)"""
+    the plan, the executor and collision.close_start all take the pair as not close (4L), and robot_b leaves C2."""
     c1, c2 = cfg.slot_point("C", 1), cfg.slot_point("C", 2)
     sim = KinematicSim(cfg, poses={A: (c1[0], c1[1] + off / 2), B: (c2[0] + off, c2[1])})
     try:
         pm = sim.core.resources
-        sim.run_until(0.6)                                       # the slot is known one tick after the first pose
+        assert not sim.core.collision.close_start                # settled at start-up: C1·C2 are not close
+        sim.run_until(0.6)
         gap = dist(sim.robots[A].pose, sim.robots[B].pose)
         assert cfg.safety.slot_stop_m < gap < cfg.safety.proximity_stop_m
         start = [pm.planner.piece_of(pm.planner.initial_state(a)) for a in pm.make_job(sim.now, "test").agents]
         assert not pm.graph.close(*start)
         assert not pm._too_close(A) and not pm._too_close(B)
+        assert not sim.core.collision.close_start
         sim.cmd("GO_ZONE", robot=B, zone="F", level=1)
         _until(sim, lambda: sim.core.mission.robots[B].zone == "F" and sim.core.mission.robots[B].job is None, 60)
+        assert not _events(sim, "PROXIMITY_STOP")
+    finally:
+        sim.close()
+
+
+def test_arrival_into_c2_beside_c1_does_not_mark_close_start(cfg):
+    """robot_a stands parked in C1 while robot_b drives into C2 (0.55 m apart): on the arrival tick and after,
+    collision.close_start does not mark the pair as close (4L)."""
+    sim = KinematicSim(cfg, poses={A: cfg.slot_point("C", 1), B: cfg.slot_point("F", 1)})
+    try:
+        sim.cmd("GO_ZONE", robot=B, zone="C", level=1)
+        _until(sim, lambda: sim.core.mission.robots[B].zone == "C" and sim.core.mission.robots[B].job is None, 60)
+        assert sim.core.resources.parked_at[A] == "C1" and sim.core.resources.parked_at[B] == "C2"
+        assert dist(sim.robots[A].pose, sim.robots[B].pose) == pytest.approx(0.55, abs=0.01)
+        assert not sim.core.collision.close_start
+        sim.run_until(sim.now + 1.0)
+        assert not sim.core.collision.close_start
         assert not _events(sim, "PROXIMITY_STOP")
     finally:
         sim.close()
@@ -201,7 +219,8 @@ def test_seeds_50_62_161_213_neighbour_slots_do_not_wait_for_each_other(cfg, see
     """While 4O 후속 6 was half done, two robots at neighbouring slots (A1·A2, C1·C2, F1·F2) waited for each other for
     over 30 s (Inv3): the executor held one for the other to "move apart first" although the plan's order had that
     one wait. Without the order check in plan_exec._leaves_next 62, 161 and 213 fail again (a fixed 0.6 m
-    close_distance does not bring them back); 50 only when the planner's and the dependencies' changes go too."""
+    close_distance does not bring them back); 50 fails with the same A1·A2 cycle once plan_graph.close is reverted
+    so the run still reaches that A1·A2 scene (t=578~620 s) — keeping the order check alone passes it."""
     stats = run_random_seed(cfg, seed)
     assert stats["prox_stops_planned"] == 0
 
