@@ -46,8 +46,10 @@ def test_receding_then_closing_stops_once_and_never_clears_on_trend_alone(sim):
     assert count(sim, "PROXIMITY_CLEAR") == 0
 
 
-@pytest.mark.parametrize("choice", ["self_first", "peer_first"])
-def test_failed_priority_leaves_one_card_and_later_mover_reverses(sim, choice):
+def test_robots_stopped_inside_the_stop_distance_move_apart_by_themselves(sim):
+    """4O 후속 6: robot_a (to A, up) and robot_b (to C, down-left) come 0.52 m close in the lower hall and both
+    get a proximity stop. Both ways lead apart, so both go on by themselves (before: two cards, the operator's
+    choice, and a head-on card when they came closer again). A move that closes in would be stopped again."""
     sim.cmd("GO_ZONE", robot=A, zone="A")
     assert wire(sim.tick(0))[A].startswith("MOVE A ")
     sim.event(A, "MISSION_ACCEPTED")
@@ -59,29 +61,28 @@ def test_failed_priority_leaves_one_card_and_later_mover_reverses(sim, choice):
     assert wire(sim.tick(2)) == {A:"PAUSE", B:"PAUSE"}
     sim.event(A, "PAUSED")
     sim.event(B, "PAUSED")
-    sim.tick(3)
-    cards = sim.tick(12).cards
-    card = next(c for c in cards if c["robots"] == [B if choice == "self_first" else A])
-    sim.choose(card, choice)
-    assert wire(sim.tick(12.1)) == {B:"RESUME"}
+    assert wire(sim.tick(3)) == {A: "RESUME", B: "RESUME"}
+    sim.event(A, "RESUMED")
     sim.event(B, "RESUMED")
-    at(sim, B, (-2.21, -4.6))
-    assert wire(sim.tick(12.2)) == {B:"PAUSE"}
+    events = []
+    for i in range(1, 6):
+        at(sim, A, (-1.7, -4.6 + .1 * i))
+        at(sim, B, (-2.22 - .06 * i, -4.6 - .06 * i))
+        out = sim.tick(3 + i / 10)
+        events += [e["type"] for e in out.events]
+        assert "PAUSE" not in wire(out).values()
+    assert "PROXIMITY_STOP" not in events and not sim.core.collision.contacts
+    assert not [c for c in sim.core.decisions.cards.values() if c.get("context") == "PROXIMITY"]
+    # Closing in again from inside the stop distance is stopped at once.
+    at(sim, A, (-1.7, -4.6))
+    at(sim, B, (-2.22, -4.6))
+    sim.tick(4.0)
+    sim.event(A, "PAUSED")
     sim.event(B, "PAUSED")
-    sim.tick(12.3)
-    sim.tick(22.3)
-    card, = sim.core.decisions.cards.values()
-    assert card["head_on"] and card["robots"] == [B] and card["recommended"] == "return"
-    assert card["reason"] == "두 로봇이 마주 보고 있어 한쪽이 물러나야 합니다"
-    assert [o["id"] for o in card["options"]] == ["return","hold"] and card["default"] is None
-    sim.choose(card, "return")
-    assert wire(sim.tick(22.4)) == {B:"CANCEL"}
-    sim.event(B, "MISSION_CANCELED")
-    # PLAN (b98f6ca as well): from two positions already closer than proximity_stop_m the plan finds no route
-    # (LEGACY sent robot_b back to F here). Both stay still and robot_b says so; nothing drives into the other.
-    out = sim.tick(22.5)
-    assert not [c for c in out.commands if c.command.startswith(("MOVE", "RESUME"))]
-    assert sim.core.resources.held[B]["reason"] == "계획을 찾지 못해 제자리 대기 · 다시 계획을 기다립니다"
+    sim.tick(4.1)
+    at(sim, B, (-2.15, -4.6))
+    sim.frames[B]["state"] = "MOVING"
+    assert wire(sim.tick(4.2)).get(B) == "PAUSE"
 
 
 def test_exit_warning_is_advisory_and_uses_finite_segments(cfg):
@@ -106,13 +107,34 @@ def test_unacknowledged_move_retry_rechecks_nearby_moving_peer(sim):
 
 @pytest.mark.parametrize("last_time,last_distance", [(1.5, .53), (.7, .50)])
 def test_gap_in_observations_or_flat_latest_reading_does_not_waive_stop(sim, last_time, last_distance):
+    """robot_b drives (MOVING all along) away from robot_a, from 0.38 m: no half-second trend from a gap in the
+    readings or a flat last reading, so it is stopped (D-42). Robots that both stood still that close are the
+    4O 후속 6 case below."""
+    sim.frames[B]["state"] = "MOVING"
+    for i in range(7):
+        at(sim, A, (-1.4, -2.0))
+        at(sim, B, (-1.4, -2.38 - .02*i))
+        out = sim.tick(i/10)
+        if i == 0:
+            assert wire(out) == {B: "PAUSE"}
+    at(sim, B, (-1.4, -2.0 - last_distance))
+    assert sim.core.collision.contacts.get(B) and not sim.core.collision.close_start
+    sim.tick(last_time)
+    assert sim.core.collision.contacts.get(B)          # the stop holds: no trend, no release
+
+
+@pytest.mark.parametrize("last_distance,stops", [(.53, False), (.50, False), (.48, True)])
+def test_from_standing_too_close_only_closing_in_is_stopped(sim, last_distance, stops):
+    """4O 후속 6: both stood still 0.50 m apart; robot_b starts. Farther or as far (0.53, 0.50 m) goes on, closer
+    (0.48 m) is stopped."""
     for i in range(7):
         at(sim, A, (-1.4, -2.0))
         at(sim, B, (-1.4, -2.38 - .02*i))
         sim.tick(i/10)
+    assert sim.core.collision.close_start
     sim.frames[B]["state"] = "MOVING"
     at(sim, B, (-1.4, -2.0 - last_distance))
-    assert wire(sim.tick(last_time)) == {B: "PAUSE"}
+    assert (wire(sim.tick(.7)) == {B: "PAUSE"}) is stops
 
 
 @pytest.mark.parametrize("peer_state", ["STOPPING_PAUSE", "STOPPING_CANCELED", "UNDOCKING"])

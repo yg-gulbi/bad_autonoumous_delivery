@@ -9,8 +9,8 @@ from part3_fleet_manager.core.fleet_core import FleetCore
 class Simulation:
     """Scripted PART 04 frames around the real FleetCore tick.
 
-    ``settle_plan`` (default): when a tick hands the plan's search to plan_runner, the next tick comes right away at
-    the same time and the two outputs are returned as one. The plan's result is used one tick later (plan_runner);
+    ``settle_plan`` (default): while the plan is due or being made (plan_runner), the next ticks come right away at
+    the same time (at most three) and the outputs are returned as one. The plan's result is used one tick later (plan_runner);
     these tests are about missions, safety, cards and the protocol, not about when a plan comes in (the kinematic
     mock tests keep every tick)."""
 
@@ -45,7 +45,10 @@ class Simulation:
             self.core.enqueue(topic, payload, now, robot=robot)
         self.pending.clear()
         out = self.core.tick(now)
-        if self.settle_plan and self.core.resources.runner.busy:
+        pm = self.core.resources
+        for _ in range(3):
+            if not self.settle_plan or not (pm.runner.busy or pm.dirty is not None):
+                break
             more = self.core.tick(now)
             for name in ("inspections", "commands", "events", "cards", "acks"):
                 getattr(out, name).extend(getattr(more, name))

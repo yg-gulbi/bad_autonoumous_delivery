@@ -94,8 +94,6 @@ def test_57_medical_box_blocks_corridor_with_box_card_until_retry(sim):
     assert sent[A].startswith("MOVE C2 2")
 
 
-@pytest.mark.xfail(strict=True, reason="PLAN (b98f6ca부터): 막힘(BLOCKED) 로봇은 계획에서 정지 로봇(stalled)이라 '되돌아가기'를 "
-                   "골라도 MOVE가 나가지 않는다. 4O 정리에서 발견, 동작 변경 금지라 고치지 않음 (보고서 16절)")
 def test_57_box_card_return_unblocks_when_the_robot_moves_again(sim):
     drive_into_corridor(sim)
     abort(sim, 3)

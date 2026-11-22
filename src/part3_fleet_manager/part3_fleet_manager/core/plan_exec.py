@@ -17,6 +17,7 @@ A robot whose next position (within the stop line) is not cleared is held before
 from dataclasses import dataclass, field
 from math import dist, hypot
 
+from .clearance import close_distance, leaving
 from .legs import MotionRequest
 from .plan_graph import project
 
@@ -255,18 +256,86 @@ class PlanExec:
         """
         reach = self.config.traffic.stop_margin_m + self.graph.step_m
         s = plan.s if plan.started else 0.0
+        close = self._too_close(robot)
         for j, entry in enumerate(plan.entries):
             if entry.leg != 0 or (plan.started and j <= plan.entry):
                 continue
             if entry.s0 > s + reach:
                 break
+            for other in close:
+                if not self._moving_apart(robot, other, entry.piece) and self._leaves_next(other, robot, now):
+                    return j, other, None       # too close: the other one moves apart first, this one closes in
             for dep in plan.deps.get(j, ()):
                 if not self._order_kept(robot, j, dep, now):
                     return j, dep.robot, dep.entry
             other = self._held_by_other(robot, entry.piece)
-            if other is not None:
+            if other is not None and not (self._moving_apart(robot, other, entry.piece)
+                                          or self._leaving_standing(robot, other, entry.piece)):
                 return j, other, None
         return None
+
+    def _too_close(self, robot):
+        """Other robots already closer to this one than the stop distance (they stood there, or were put there)."""
+        mine = self.reports.get(robot)
+        if mine is None or mine.pose is None:
+            return ()
+        return tuple(other for other, report in self.reports.items() if other != robot and report.pose is not None
+                     and dist(mine.pose, report.pose) < self._close_limit(robot, other))
+
+    def _close_limit(self, robot, other):
+        """clearance.close_distance: parked in its own slot (4L), as collision.py."""
+        return close_distance(self.config.safety, self.robots.parked_here(robot), self.robots.parked_here(other))
+
+    def _leaves_next(self, robot, other, now):
+        """The robot can go on now to a next position (on its current MOVE, or its first MOVE) that does not come
+        closer to ``other``. When both robots can only close in, or the plan's order has this one wait for ``other``
+        first (hall face-off, 4O 후속 6), neither waits for the other here: the plan's order decides."""
+        plan = self.plans.get(robot)
+        if plan is None or plan.failed or not plan.legs:
+            return False
+        for j, e in enumerate(plan.entries):
+            if e.leg != 0 or (plan.started and j <= plan.entry):
+                continue
+            if any(dep.robot == other and not self._order_kept(robot, j, dep, now) for dep in plan.deps.get(j, ())):
+                return False
+            if not e.standing:
+                return self._moving_apart(robot, other, e.piece)
+        return False
+
+    def _leaving_standing(self, robot, other, piece):
+        """The other robot only stands in a one_way segment of this position (no direction, link up), and this
+        position does not come closer to it: the planner's ``grace`` for robots that start in one segment
+        (plan_graph.close). Two robots standing 0.61 m apart in CORRIDOR_BOTTOM held each other up for ever
+        (random seed 198 of 4O 후속 6)."""
+        mine, theirs = self.reports.get(robot), self.reports.get(other)
+        if mine is None or theirs is None or mine.pose is None or theirs.pose is None:
+            return False
+        if self.robots.view(other).driving:
+            return False
+        for name in self.graph.segs(piece):
+            seg = self.segments.get(name)
+            holding = seg.holders.get(other) if seg is not None else None
+            if holding is None:
+                continue
+            if seg.kind != "one_way" or holding.direction or other in seg.uncertain:
+                return False
+        return leaving(dist(mine.pose, theirs.pose), self._near(piece, theirs.pose))
+
+    def _near(self, piece, xy):
+        line = self.graph.pieces[piece].line
+        return dist(line[0], xy) if len(line) == 1 else min(_seg_dist(xy, a, b) for a, b in zip(line, line[1:]))
+
+    def _moving_apart(self, robot, other, piece):
+        """The two robots are already closer than the stop distance (the planner's ``grace``): a position of this
+        robot that does not come closer to the other one than they are now is not held up by the other's segment
+        (two robots standing in one corridor segment would hold each other up for ever, 4O 후속 6)."""
+        mine, theirs = self.reports.get(robot), self.reports.get(other)
+        if mine is None or theirs is None or mine.pose is None or theirs.pose is None:
+            return False
+        now_m = dist(mine.pose, theirs.pose)
+        if now_m >= self._close_limit(robot, other):
+            return False
+        return leaving(now_m, self._near(piece, theirs.pose))
 
     # --- holding, letting go -------------------------------------------------------------------------------
 

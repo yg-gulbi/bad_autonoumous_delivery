@@ -15,6 +15,12 @@ Follow-up 3 (D-51~): an operator stop and resume of a robot the plan holds at a 
 (3.3~4.0 s without STATE, any robot) that the plan settles by itself, and the bed monitor switched off for 5~20 s. The
 operator checks an UNKNOWN segment only 3 s after its robots are back (so the automatic settling is measured), and
 one more check: every MOVE, DOCK and RESUME that goes out had the plan executor's permission in that tick (D-55).
+
+Follow-up 6 (D-67, D-68): a robot whose Nav2 goal failed in front of an obstacle waits for the PART 06 verdict and
+its card (before, the operator's RETRY came first and no obstacle card was ever answered); the BLOCKED card is
+answered with [다시 출발] or [되돌아가기] at random (own random stream), and check 7: the robot gets a MOVE or RESUME
+within 60 s of the answer. Every fourth seed (2, 6, 10, ...) starts with the two robots standing face to face
+0.40~0.58 m apart in the corridor or the hall, each sent past the other; they must be apart within 60 s.
 """
 import os
 import random
@@ -52,10 +58,34 @@ def seed_config(cfg, seed: int):
     return cfg, set()
 
 
+# Follow-up 6: on every fourth seed the run starts with the two robots standing face to face inside the 0.6 m
+# proximity stop distance (in the corridor or in the hall), each sent past the other. They must get apart by
+# themselves (no card, no operator) before the random events start mattering.
+FACE_OFFS = {
+    "corridor": ({A: (-1.55, -2.9), B: (-1.6, -2.9)}, ("C", "A"), (0, -1)),
+    "hall": ({A: (-1.7, -4.6), B: (-1.7, -4.6)}, ("A", "F"), (-1, 0)),
+}
+
+
+def face_off(seed: int):
+    """(name, poses, zones) for seeds 2, 6, 10, ...: robot_b 0.40~0.58 m from robot_a, facing it."""
+    if seed % 4 != 2:
+        return None
+    side = random.Random(seed * 7919 + 2)
+    name = side.choice(sorted(FACE_OFFS))
+    poses, zones, (dx, dy) = FACE_OFFS[name]
+    gap = side.uniform(0.40, 0.58)
+    ax, ay = poses[A]
+    return name, {A: (ax, ay), B: (round(ax + dx * gap, 3), round(ay + dy * gap, 3))}, zones
+
+
 def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> dict:
     rng = random.Random(seed)
+    # Operator answers to obstacle cards come from their own stream, so the events of a seed stay what they were.
+    answer_rng = random.Random(seed * 7919 + 1)
     cfg, docked = seed_config(cfg, seed)
-    sim = KinematicSim(cfg, speed_mps=0.2, docked=docked, bed_feed=True)
+    start = face_off(seed)
+    sim = KinematicSim(cfg, speed_mps=0.2, docked=docked, bed_feed=True, poses=start[1] if start else None)
     log: list[str] = []
     submitted_refs: list[str] = []
     stats = {"missions": 0, "cancels": 0, "requeues": 0, "pauses": 0, "drops": 0, "safety_cards": 0,
@@ -63,7 +93,9 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
              "quick_sends": 0, "level_changes": 0, "bursts": 0, "double_cancels": 0, "bed_exits": 0,
              "obstacles": 0, "double_drops": 0, "long_drops": 0, "undocks": 0, "docks": 0,
              "rejected": 0, "held_pauses": 0, "short_losses": 0, "link_losses": 0, "auto_settled": 0,
-             "auto_released": 0, "operator_checks": 0, "bed_switches": 0, "moves_checked": 0}
+             "auto_released": 0, "operator_checks": 0, "bed_switches": 0, "moves_checked": 0,
+             "blocked_retry": 0, "blocked_return": 0, "face_off": start[0] if start else None,
+             "face_off_prox_stops": 0, "face_off_apart_s": None, "card_to_go_s": 0.0}
     injected_until = {"t": -1.0}   # proximity stops right after a manual pause or link drop are not plan failures
     scheduled: list[tuple[float, object]] = []   # (time, action) for events made of several steps
     last_resume: dict[str, float] = {}
@@ -89,6 +121,7 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
     max_start_wait_s = 0.0
     confirm_at: dict[str, float] = {}
     card_answered: set[str] = set()
+    chosen_at: dict[str, float] = {}   # robot -> time of a [다시 출발]/[되돌아가기] answer not yet followed by a command
 
     def fail(msg: str):
         tail = "\n  ".join(log[-40:])
@@ -234,8 +267,12 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
                     stats["operator_checks"] += 1
                 checked[name] = now
                 log.append(f"t={now:.1f} CLEAR_UNKNOWN {name}")
-        # Operator retries any robot waiting in FAULT after a head-on retreat back to previous zone.
+        # Operator retries any robot waiting in FAULT after a head-on retreat back to previous zone. A Nav2 failure
+        # in front of an obstacle waits for the PART 06 verdict and its card (follow-up 6: before, this RETRY came
+        # first and no obstacle card was ever answered).
         for r, unit in sim.core.mission.robots.items():
+            if r in sim.core.reports.failures or any(r in c["robots"] for c in sim.core.decisions.cards.values()):
+                continue
             if unit.state == "FAULT" and unit.job and not unit.canceling and not unit.replacing and not sim.core.safety.causes[r]:
                 sim.cmd("RETRY", robot=r)
                 log.append(f"t={now:.1f} RETRY {r} {unit.job.id}")
@@ -247,7 +284,14 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
                 continue
             opts = [o["id"] for o in card["options"]]
             choice = None
-            if card.get("recommended") in opts:
+            if card["kind"] == "BLOCKED" and not card.get("context") and {"retry", "return"} <= set(opts):
+                # Follow-up 6: the operator takes either way out of a block (the plan gets the block lifted or a
+                # new goal); 'return' needs a zone to go back to.
+                back = sim.core.mission.robots[card["robots"][0]].job
+                choice = answer_rng.choice(("retry", "return") if back else ("retry",))
+                stats["blocked_" + choice] += 1
+                chosen_at[card["robots"][0]] = now
+            elif card.get("recommended") in opts:
                 choice = card["recommended"]
             elif card.get("context") == "PROXIMITY":
                 r = card["robots"][0]
@@ -486,6 +530,8 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
             # D-55: every MOVE, DOCK and RESUME to PART 04 went through the plan's executor in this tick.
             if c.command.startswith(("MOVE", "DOCK", "RESUME")):
                 stats["moves_checked"] += 1
+                if c.robot in chosen_at:
+                    stats["card_to_go_s"] = max(stats["card_to_go_s"], round(sim.now - chosen_at.pop(c.robot), 1))
                 if c.robot not in sm.go:
                     fail(f"Check 6: {c.command} to {c.robot} without the plan's permission (held={sm.held.get(c.robot)})")
         monitor_off = not sim.core.safety.monitor.enabled
@@ -510,7 +556,31 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
                 stats["plan_ms_max"] = max(stats["plan_ms_max"], e["detail"]["plan_ms"])
                 stats["fallbacks"] += int(e["detail"]["fallback"])
 
+    def watch_answers():
+        """Follow-up 6: after [다시 출발]/[되돌아가기] the robot is planned again and gets going (or its mission ends)."""
+        for r, at in list(chosen_at.items()):
+            unit = sim.core.mission.robots[r]
+            if unit.job is None or unit.canceling or sim.core.safety.causes[r]:
+                chosen_at.pop(r)
+            elif sim.now - at > 60.0:
+                fail(f"Check 7: {r} got no MOVE/RESUME 60 s after the BLOCKED card answer "
+                     f"(held={sim.core.resources.held.get(r)}, plan={r in sim.core.resources.plans})")
+
+    def watch_face_off(out):
+        if not start or stats["face_off_apart_s"] is not None:
+            return
+        stats["face_off_prox_stops"] += sum(1 for e in out.events if e["type"] == "PROXIMITY_STOP")
+        gap = ((sim.robots[A].pose[0] - sim.robots[B].pose[0]) ** 2 + (sim.robots[A].pose[1] - sim.robots[B].pose[1]) ** 2) ** 0.5
+        if gap >= cfg.safety.proximity_stop_m:
+            stats["face_off_apart_s"] = round(sim.now, 1)
+        elif sim.now > 60.0:
+            fail(f"Face-off ({start[0]}): still {gap:.2f} m apart after 60 s")
+
     try:
+        if start:
+            for r, zone in zip((A, B), start[2]):
+                sim.cmd("GO_ZONE", robot=r, zone=zone, level=1)
+            log.append(f"t=0.0 FACE_OFF {start[0]} {start[1]}")
         # Phase 1: 10 simulated minutes of mixed random events.
         while sim.now < duration_s - 1e-9:
             if sim.now >= next_event_t:
@@ -521,6 +591,8 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
             handle_operator_routine()
             out = sim.step(DT)
             count_events(out)
+            watch_face_off(out)
+            watch_answers()
             check_invariants("active")
 
         # Phase 2: Resume any active manual pause and drain all missions back to home.
@@ -537,6 +609,7 @@ def run_random_seed(cfg, seed: int, *, duration_s: float = SIM_DURATION_S) -> di
             handle_operator_routine()
             out = sim.step(DT)
             count_events(out)
+            watch_answers()
             check_invariants("drain")
             # Stop draining early once everything is completely settled at home.
             all_idle_home = all(

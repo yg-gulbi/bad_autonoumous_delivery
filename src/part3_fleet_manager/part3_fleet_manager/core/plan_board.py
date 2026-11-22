@@ -167,4 +167,6 @@ class PlanBoard:
         return self.board.block(robot, pose, now)
 
     def unblock_robot(self, robot):
+        """The block is lifted (operator choice, or the robot moved): the robot is in the plan again."""
         self.board.unblock(robot)
+        self._mark("막힘 해제")

@@ -168,6 +168,7 @@ class ObstacleReports:
         pose = core.links[robot].pose
         region = core.traffic.block_robot(robot, pose, now)
         core.blocks[robot] = region
+        core.block_legs[robot] = core._leg(robot)   # the block holds this leg only (fleet_core._stalled)
         stall = core.stalls[robot]
         stall.short = stall.long = True  # moving again reports UNBLOCKED, as for a long stall
         stall.obstacle = view

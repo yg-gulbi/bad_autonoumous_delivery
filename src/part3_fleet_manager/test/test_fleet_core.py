@@ -261,9 +261,11 @@ def test_13_failed_navigation_retry_and_duplicate_card(sim):
     card = sim.tick(.2).cards[0]
     assert card["kind"] == "NAV_FAILED" and card["default"] is None and sim.state(A) == "FAULT"
     sim.choose(card, "retry")
-    assert sim.tick(.3).acks[0]["ok"]
-    out = sim.tick(.4)
-    assert commands(out)[A].startswith("MOVE A 2 id=")
+    out = sim.tick(.3)
+    assert out.acks[0]["ok"]
+    sent = commands(out)
+    sent.update(commands(sim.tick(.4)))
+    assert sent[A].startswith("MOVE A 2 id=")
     sim.choose(card, "retry")
     assert sim.tick(.5).acks[0]["code"] == "E-409"
 
@@ -306,9 +308,9 @@ def test_9_stall_blocks_new_grant_then_resolves_on_motion(sim):
     sent = commands(out)
     for t in (35.1, 35.2):
         sent.update(commands(sim.tick(t)))
-    # Unblocked, but A still stands in the corridor (it does not drive in this script): the plan finds no way past
-    # it and B stays where it is, saying so.
-    assert B not in sent and sim.core.resources.held[B]["reason"].startswith("계획을 찾지 못해")
+    # Unblocked, A is in the plan again (4O 후속 6) and still stands in the corridor (it does not drive in this
+    # script): B waits for it, saying so.
+    assert B not in sent and sim.core.resources.held[B]["peer"] == A
 
 
 def test_invalid_request_ack_and_state_rate(sim):
@@ -410,13 +412,7 @@ def test_two_robot_firmware_versions_have_independent_protocol_sessions(sim):
     assert next_moves[A].startswith("MOVE C 2 id=") and next_moves[B] == "MOVE F 3"
 
 
-BLOCKED_PLAN_GAP = pytest.mark.xfail(strict=True, reason=(
-    "PLAN (b98f6ca부터): 막힘(BLOCKED) 로봇은 계획에서 정지 로봇(stalled)이고, 운영자가 '다시 출발'·'되돌아가기'를 골라도 "
-    "다시 계획되지 않아 RESUME·MOVE가 나가지 않는다. 4O 정리에서 발견, 동작 변경 금지라 고치지 않음 (보고서 16절)"))
-
-
-@pytest.mark.parametrize("choice", ["hold", pytest.param("retry", marks=BLOCKED_PLAN_GAP),
-                                    pytest.param("return", marks=BLOCKED_PLAN_GAP)])
+@pytest.mark.parametrize("choice", ["hold", "retry", "return"])
 def test_blocked_choices_respect_protocol_state(sim, choice):
     sim.patient(pickup="C")
     sim.tick(0)

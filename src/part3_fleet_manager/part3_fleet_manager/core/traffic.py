@@ -44,8 +44,12 @@ class Traffic:
             self.collision.access.before_departure(self.resources.active[robot], now)
 
     def traffic_stop(self, robot: str) -> bool:
-        return (robot in self.collision.access.waits or robot in self.collision.contacts
-                or self.collision.yielding_priority(robot) or robot in self.resources.held)
+        # Proximity stops and an operator's "that one first" hold a robot, except for a move apart from robots it
+        # already stands too close to (clearance.leaving, 4O 후속 6); the plan lets out only such a position.
+        apart = self.collision.may_move_apart(robot)
+        held_near = robot in self.collision.contacts and not apart
+        yielding = self.collision.yielding_priority(robot) and not apart
+        return (robot in self.collision.access.waits or held_near or yielding or robot in self.resources.held)
 
     def plan_hold(self, robot: str) -> bool:
         return robot in self.resources.held

@@ -24,6 +24,7 @@ import heapq
 import time
 from dataclasses import dataclass, field
 from itertools import product
+from .clearance import leaving
 
 SLOT2_PENALTY = 1e-3      # tie-break: same cost -> slot 1 (the current rule's preference)
 ROUTE_PENALTY = 1e-4      # tie-break: same cost -> fewer route changes (fewer MOVE commands)
@@ -268,10 +269,17 @@ class Planner:
 
     def _search(self, agents, scripted, deadline):
         graph = self.graph
-        conflict, distance, piece_of = graph.conflict, graph.distance, self.piece_of
+        conflict, distance, piece_of, close = graph.conflict, graph.distance, self.piece_of, graph.close
         free = [a for a in agents if not a.static and a.name not in scripted]
         statics = [piece_of(self.initial_state(a)) for a in agents if a.static]
         statics += [p for a in agents if a.static for p in a.blocks]
+        # A robot that may still drive on (link lost while driving, CANCEL not confirmed) is not standing: being
+        # close to it is no start the grace applies to (random seed 205 of 4O 후속 6).
+        coasting = {piece_of(self.initial_state(a)) for a in agents if a.static and a.blocks} | {
+            p for a in agents if a.static for p in a.blocks}
+
+        def close_to(p, o):
+            return conflict(p, o) if o in coasting else close(p, o)
         script_lines = list(scripted.values())
         changes = sorted({t for line in script_lines for t, _ in line[1:]})
         script_end = changes[-1] if changes else 0
@@ -304,27 +312,31 @@ class Planner:
                 for j in range(i + 1, k):
                     pj, oj = new_pieces[j], old_pieces[j]
                     if pi == oi and pj == oj:
-                        if grace and conflict(pi, pj):
+                        if grace and close(pi, pj):
                             still = True
                         continue
                     pairs = ((pi, pj), (oi, pj), (pi, oj)) if pi != oi and pj != oj else ((pi, pj),)
                     for a, b in pairs:
                         if conflict(a, b):
-                            if grace and distance(a, b) >= distance(oi, oj) - 1e-9:
+                            if grace and leaving(distance(oi, oj), distance(a, b)):
                                 still = True
                                 continue
                             return True, False
+                    if grace and close(pi, pj):
+                        still = True        # not in conflict now (both standing), but not apart yet
                 for o_new, o_old in zip(obs_to, obs_from):
                     if pi == oi and o_new == o_old:
-                        if grace and conflict(pi, o_new):
+                        if grace and close_to(pi, o_new):
                             still = True
                         continue
                     for a, b in ((pi, o_new), (oi, o_new), (pi, o_old)):
                         if conflict(a, b):
-                            if grace and distance(a, b) >= distance(oi, o_old) - 1e-9:
+                            if grace and leaving(distance(oi, o_old), distance(a, b)):
                                 still = True
                                 continue
                             return True, False
+                    if grace and close_to(pi, o_new):
+                        still = True
             return False, still
 
         heap, visited, nodes = [], {}, []
@@ -338,14 +350,14 @@ class Planner:
         # Grace (the robots already overlap) comes from where they are now (each one's current route), not from
         # the first piece of a new route: that piece may run through the other robot and is a real conflict.
         now_pieces = [piece_of(opts[0][0]) for opts in options]
-        overlap = (any(conflict(now_pieces[i], now_pieces[j]) for i in range(k) for j in range(i + 1, k))
-                   or any(conflict(p, o) for p in now_pieces for o in obstacles(0)))
+        overlap = (any(close(now_pieces[i], now_pieces[j]) for i in range(k) for j in range(i + 1, k))
+                   or any(close_to(p, o) for p in now_pieces for o in obstacles(0)))
         for combo in product(*options):
             states = tuple(c[0] for c in combo)
             force = tuple(c[1] for c in combo)
             pieces = [piece_of(s) for s in states]
-            grace = overlap and (any(conflict(pieces[i], pieces[j]) for i in range(k) for j in range(i + 1, k))
-                                 or any(conflict(p, o) for p in pieces for o in obstacles(0)))
+            grace = overlap and (any(close(pieces[i], pieces[j]) for i in range(k) for j in range(i + 1, k))
+                                 or any(close_to(p, o) for p in pieces for o in obstacles(0)))
             arrivals = tuple(0.0 if done(i, states[i]) else None for i in range(k))
             extra = sum(free[i].goals.get(pieces[i], 0.0) for i in range(k) if arrivals[i] is not None)
             extra += ROUTE_PENALTY * sum(1 for c in combo if c[2])

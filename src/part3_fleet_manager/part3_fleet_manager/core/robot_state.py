@@ -17,6 +17,7 @@ The plan (plan_*.py) reads robots only through ``RobotStates``: it never looks a
 """
 
 from dataclasses import dataclass
+from math import dist
 
 from . import geometry as g
 from .robot_protocol import DONE
@@ -175,6 +176,29 @@ class RobotStates:
         if origin is not None and not self.graph.points[origin].region.contains(pose):
             return None
         return origin
+
+    def parked_here(self, robot) -> bool:
+        """The robot stands in the slot its last MOVE took it to (``parked_at``; at start-up the slot circle it stands
+        in), still inside that slot's circle: parked in its own slot (4L, clearance.close_distance)."""
+        here = self.parked_at.get(robot)
+        link = self.links.get(robot)
+        return (here is not None and link is not None and link.pose is not None
+                and self.graph.points[here].region.contains(link.pose))
+
+    def slot_of(self, pose):
+        """(zone, slot) whose point is the nearest slot within zone_occupied_m of this pose, else None."""
+        if pose is None:
+            return None
+        config = self.config
+        best = min(((dist(pose, point), zone, index) for zone in config.zones
+                    for index, point in enumerate(config.slots[zone], 1)), default=None)
+        return best[1:] if best and best[0] <= config.resources.zone_occupied_m else None
+
+    def still_at_slot(self, robot, leg_granted) -> bool:
+        """Standing still at a slot without a granted leg, online or not: the proximity rule's "still" (4L,
+        clearance.stop_distance and close_distance), for collision.py and the plan executor alike."""
+        link = self.links.get(robot)
+        return self.standing_still(robot, leg_granted) and link is not None and self.slot_of(link.pose) is not None
 
     def standing_still(self, robot, leg_granted) -> bool:
         """Still for the proximity rule (clearance.stop_distance): no granted leg and STATE done or PAUSED. Online

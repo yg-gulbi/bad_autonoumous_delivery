@@ -8,11 +8,15 @@ recovery or loss, a safety stop release, a Level change, an operator's UNKNOWN c
 """
 
 from dataclasses import dataclass, field, replace
-from math import hypot
+from math import dist, hypot
 
+from .clearance import close_distance, leaving
 from .plan_exec import PlanLeg, RobotPlan, Entry, Dep, conflict_kind
 from .planner import SLOT2_PENALTY, Agent
 
+# A robot standing in a slot circle farther than this from the slot point, and closer to another robot than the stop
+# distance, is planned from where it stands, not from the slot point (_off_slot_near).
+OFF_SLOT_M = 0.15
 PAUSED_CUT_M = 0.05      # a PAUSED robot's route is cut this far ahead: it may wait right where it stopped
 
 
@@ -100,7 +104,7 @@ class PlanReplan:
         # no granted leg, online or not (4O 정리).
         slot_rule = robot not in self.active
         here = self.robots.parked_at.get(robot)
-        if here is not None and not self.graph.points[here].region.contains(pose):
+        if here is not None and (not self.graph.points[here].region.contains(pose) or self._off_slot_near(robot, pose, here)):
             here = None
         if here is None and any(p.kind == "dock" and p.region.contains(pose) for p in self.graph.endpoints.values()):
             here = next(n for n, p in self.graph.endpoints.items() if p.kind == "dock" and p.region.contains(pose))
@@ -204,6 +208,22 @@ class PlanReplan:
             coast[robot] = blocks
         return Agent(robot, weight, starts, goals_pieces, targets, tuple(goals), free_routes, static=static,
                      blocks=blocks)
+
+    def _off_slot_near(self, robot, pose, here):
+        """The robot stands in the slot circle of ``here`` but away from the slot point, closer to another robot
+        than the stop distance. Planned at the slot point, it would seem farther from the other one than it is, and
+        the plan would let the other one close in (4O 후속 6 hall face-off: robot_a 0.36 m from F2 and 0.42 m from
+        robot_b was planned at F2, 0.78 m from robot_b). From where it stands, the planner's ``grace`` sees the real
+        distance and lets only moves that do not close in."""
+        if dist(pose, self.graph.points[here].anchor) <= OFF_SLOT_M:
+            return False
+        mine = self.robots.parked_here(robot)
+        for other in self.config.robots:
+            xy = self.robots.view(other).pose
+            if other != robot and xy is not None and dist(pose, xy) < close_distance(
+                    self.config.safety, mine, self.robots.parked_here(other)):
+                return True        # not two robots parked in their own slots, also off the slot points (4L, D-69)
+        return False
 
     def make_job(self, now, reason):
         """Everything the search needs, taken from the robots now. The graph's routes for the robots' positions
@@ -333,7 +353,7 @@ class PlanReplan:
     def _dependencies(self):
         """For every conflicting pair of positions, the one planned second waits for the one planned first; the
         dependency carries the kind of the conflict (plan_exec.ORDER_KEPT)."""
-        conflict = self.graph.conflict
+        conflict, distance = self.graph.conflict, self.graph.distance
         robots = list(self.plans)
         for robot in robots:
             self.plans[robot].deps = {}
@@ -342,10 +362,20 @@ class PlanReplan:
                 if a == b:
                     continue
                 pa, pb = self.plans[a], self.plans[b]
+                # Robots that start in conflict (closer than the stop distance): the planner's ``grace`` let b
+                # take positions no closer to a's start than they are while a still stands there, so b does not
+                # wait for a to leave it. (Waiting there, with a waiting for b's first move, held both for ever,
+                # 4O 후속 6 hall face-off.)
+                start_a = pa.entries[0] if pa.entries and pa.entries[0].standing and pa.entries[0].t0 == 0 else None
+                start_d = None
+                if start_a is not None and pb.entries and conflict(start_a.piece, pb.entries[0].piece):
+                    start_d = distance(start_a.piece, pb.entries[0].piece)
                 for j, eb in enumerate(pb.entries):
                     best = None
                     for i, ea in enumerate(pa.entries):
                         if ea.t1 <= eb.t0 and conflict(ea.piece, eb.piece):
+                            if ea is start_a and start_d is not None and leaving(start_d, distance(ea.piece, eb.piece)):
+                                continue
                             best = i
                     if best is not None:
                         pb.deps.setdefault(j, []).append(

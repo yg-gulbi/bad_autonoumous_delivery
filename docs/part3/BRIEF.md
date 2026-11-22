@@ -606,20 +606,21 @@ PART 04의 ROS 패키지 이름은 `hospital_nav`, 소스 폴더는 `src/part4_a
    - **`UNKNOWN` 칸** (D-54): 계획에서는 어느 로봇의 위치도 아니고 아무도 지나갈 수 없는 칸이다. 길이 그 칸을 지나야만 하는 로봇은 비켜서기 없이 제자리에서 기다리고("교차로·101호 병실(E) 문: 현장 확인 필요"), 다른 로봇을 그 로봇 때문에 비켜 세우지 않는다. 현장 확인이 끝나면 다시 계획한다.
    - **움직이지 않는 로봇** (D-56): 정류장 확인을 기다리는 로봇(`WAIT_CONFIRM`)은 계획에서 움직일 수 없는 로봇이다(환자를 태우는 중일 수 있다).
 6. **로봇 상태 층** (`robot_state.py`): 계획 쪽은 STATE 이름이나 Move를 직접 보지 않고 `RobotView`(연결됨·위치·주행 중·바퀴 도는 중·멈춤·정지 요청 중·취소 중·끊긴 채 주행·MOVE 목적지)만 본다. PART 04 특이 동작은 `robot_protocol.py`(MOVE·RESUME 뒤 STATE 지연 유예, 답 없는 RESUME·CANCEL 재전송, 받지 않은 MOVE의 CANCEL, STATE `COMPLETE`·`FAILED`로 대신 받기)와 이 층(끊김·복구, 선 자리, 방 안 이동도 교차로 경유 `uses_crossroad`)에만 있다.
-7. **근접 정지 거리** (`clearance.py`, D-63): 중심 거리 `proximity_stop_m`(0.6 m) 미만이면 달리는 로봇을 세우고, 정지 거리 + 0.3 m(`proximity_resume_m − proximity_stop_m`)부터 푼다. 한쪽이 자리에 가만히 서 있으면(허가된 구간 없음, STATE 완료·PAUSED, 자리 위) 정지 거리는 `slot_stop_m`(0.45 m), 재개는 0.75 m다. 연결이 끊겨도 가만히 서 있던 로봇은 그대로 서 있는 것으로 본다. 계획의 충돌 거리(2번)와 근접 정지가 같은 함수를 쓴다. 출발 전 확인은 움직이는 상대와 0.9 m(두 대 다 움직일 때의 재개 거리)다.
+7. **근접 정지 거리** (`clearance.py`, D-63): 중심 거리 `proximity_stop_m`(0.6 m) 미만이면 달리는 로봇을 세우고, 정지 거리 + 0.3 m(`proximity_resume_m − proximity_stop_m`)부터 푼다. 한쪽이 자리에 가만히 서 있으면(허가된 구간 없음, STATE 완료·PAUSED, 자리 위) 정지 거리는 `slot_stop_m`(0.45 m), 재개는 0.75 m다. 연결이 끊겨도 가만히 서 있던 로봇은 그대로 서 있는 것으로 본다. 계획의 충돌 거리(2번)와 근접 정지가 같은 함수를 쓴다. 두 위치의 충돌 거리는 `clearance.conflict_distance` 하나다: 둘 다 서 있으면 충돌 아님(각자 자리에 정차한 C1·C2는 0.55 m여도 충돌 아님), 지나가는 로봇과 자리에 가만히 선 로봇 사이 0.45 m, 그 밖 0.6 m(4L, D-69). **이미 정지 거리 안에서 시작한 두 로봇**(그 자리에 멈췄거나 놓인 경우, `clearance.close_distance`: 둘 다 각자 자기 자리에 정차했으면 0.45 m, 아니면 0.6 m)은 거리를 줄이지 않는 이동이 허용되고, 정지 거리 밖으로 벗어날 때까지 그렇다(`clearance.leaving`, 5 mm 여유, D-68). 계획 유예·ADG 의존·실행기·근접 정지가 같은 판단을 쓴다. 멀어질 수 있는 쪽이 먼저 가고, 다가가야 하는 쪽은 상대가 실제로 떠날 수 있을 때만 기다린다. 자리 원 안이라도 자리 점에서 0.15 m 넘게 떨어져 있고 다른 로봇과 `close_distance` 안이면 선 자리에서 계획한다. 출발 전 확인은 움직이는 상대와 0.9 m(두 대 다 움직일 때의 재개 거리)다.
 8. 근접 정지 카드(먼저 보내기·마주 봄), 출발 전 0.9 m 확인, 침상 이탈·감시(켜기·끄기), 장애물·PART 06, 정지 확인·재전송, 막힘, 도크, 결정 카드, 점유 불명 해제는 공통 안전장치다(5.5~5.7절).
 
 ### 5.4 교착
 
-LEGACY의 교착 카드(`deadlock.py`: 대기 그래프 순환, 비킬 로봇 선택)는 4O 정리에서 없앴다. 두 로봇을 함께 계획하므로 서로를 기다리는 순환을 계획이 만들지 않고, PLAN 시험 전체와 무작위 50개에서 교착 카드가 한 번도 열리지 않았다(coverage, D-62). 서로 근접 거리 안에서 마주 본 경우는 근접 정지의 마주 봄 카드가 맡는다.
+LEGACY의 교착 카드(`deadlock.py`: 대기 그래프 순환, 비킬 로봇 선택)는 4O 정리에서 없앴다. 두 로봇을 함께 계획하므로 서로를 기다리는 순환을 계획이 만들지 않고, PLAN 시험 전체와 무작위 50개에서 교착 카드가 한 번도 열리지 않았다(coverage, D-62). 서로 근접 거리 안에서 마주 본 경우는 거리를 줄이지 않는 이동으로 스스로 벌어진다(7번, D-68). 그래도 둘 다 다가가기만 할 수 있으면 근접 정지의 마주 봄 카드가 맡는다.
 
 ### 5.5 `stall` — 멈춤 판단 (시간 + PART 06 장애물 분류)
 
 - **진행 없음**: 로봇이 `MOVING`인데 `stall.window_s`(5초) 동안 위치 변화가 `stall.move_m`(0.05 m)보다 작고 PART 04 `percent`도 늘지 않으면 멈춘 것으로 본다. 멈춘 시간 `stall_s`를 센다.
 - `stall_s ≥ short_s`(10초): `STALL_SHORT` 기록, 화면에 대기 시간 표시. 동작은 안 바꾼다 (지나가는 사람은 보통 비켜 준다. Nav2가 스스로 돌아가는 길도 찾는다).
 - `stall_s ≥ long_s`(30초): `STALL_LONG` + 로봇이 있는 영역(복도면 `CORRIDOR`)에 `blocked=true` 표시 → **다른 로봇의 새 허가에서 그 자원을 뺀다** (막힘 정보 공유). 카드 `BLOCKED`, `default: null` (무엇이 막고 있는지 모르므로 저절로 움직이지 않는다).
-  - [다시 출발] (`retry`): 로봇 쪽 상태에 맞게 `RESUME` 또는 `MOVE` 재전송, `blocked` 해제. 버튼 글은 장애물 분류에 맞춘다: `PERSON` → [비켜 줌, 다시 출발], `OBJECT` → [치웠음, 다시 출발], `NONE`·`UNKNOWN`·분류 없음 → [확인함, 다시 출발].
-  - [되돌아가기] (`return`): `CANCEL` → 이전 구역으로 `MOVE`
+  - 운영자 선택은 계획의 입력 두 가지로만 이어진다(D-67): 막힘 해제, 또는 새 목표. 막힘은 그 막힘이 생긴 구간만 묶으므로 새 구간은 바로 계획된다.
+  - [다시 출발] (`retry`): 막힘 해제(`blocked` 해제, 다시 계획 "막힘 해제") → 같은 구간을 계획에 다시 넣고, 계획이 허가하면 로봇 쪽 상태에 맞게 `RESUME` 또는 `MOVE`. 버튼 글은 장애물 분류에 맞춘다: `PERSON` → [비켜 줌, 다시 출발], `OBJECT` → [치웠음, 다시 출발], `NONE`·`UNKNOWN`·분류 없음 → [확인함, 다시 출발].
+  - [되돌아가기] (`return`): 새 목표 — `CANCEL` → 이전 구역으로 가는 새 구간(계획이 허가하면 `MOVE`). 복도 `blocked` 표시는 로봇이 실제로 움직일 때까지 남는다
   - [임무 보류] (`hold`): `PAUSE`, 임무는 `FAULT`로
 - 다시 움직이면 `stall_s = 0`, 카드가 열려 있으면 "상황 해소"로 닫고 `blocked`를 해제한다 (`UNBLOCKED`).
 - 진행 없음 중에 Nav2가 포기하면 `MISSION_FAILED`가 오고, 5.1절 실패 규칙이 우선한다.
@@ -665,7 +666,7 @@ PART 04 사진 + PART 06 1번 프로그램으로 판별한다. 관제는 촬영 
 |---|---|---|---|
 | 침상 이탈 | `/patient/bed_exit`에서 첫 true 수신 또는 확정 정상 뒤의 true 수신 | `bed_exit_pause_targets` 로봇 중 임무 중인 로봇을 `SAFE_PAUSE`. 주행 중이면 `PAUSE` 전송. 경고 `BED_EXIT` | 재개 (bed_exit가 false일 때만) |
 | 수동 정지 | `PAUSE_ALL`, `/robot/pause`, `PAUSE_ROBOT` | 대상 로봇 `SAFE_PAUSE`, 주행 중이면 `PAUSE` | `RESUME_ALL`, `/robot/resume`, `RESUME_ROBOT` |
-| 근접 정지 | 중심 간 거리가 `safety.proximity_stop_m`(0.6 m) 미만이고 하나라도 주행 중. 상대가 진행 구간 없이 구역 자리에 정차해 있으면 경유하는 구역에서도 `safety.slot_stop_m`(0.45 m) | 주행 중인 쪽만 PAUSE. 둘 다 주행 중이면 둘 다 멈춘다. 범퍼와 별도로 기록한다 | 두 로봇의 연결이 살아 있고 거리가 `safety.proximity_resume_m`(0.9 m) 이상이면 이 규칙의 정지만 해제 |
+| 근접 정지 | 중심 간 거리가 `safety.proximity_stop_m`(0.6 m) 미만이고 하나라도 주행 중. 상대가 진행 구간 없이 구역 자리에 정차해 있으면 경유하는 구역에서도 `safety.slot_stop_m`(0.45 m) | 주행 중인 쪽만 PAUSE. 둘 다 주행 중이면 둘 다 멈춘다. 범퍼와 별도로 기록한다 | 두 로봇의 연결이 살아 있고 거리가 `safety.proximity_resume_m`(0.9 m) 이상이면 이 규칙의 정지만 해제. 둘 다 서 있던 채 정지 거리 안이면 서로 멀어지는 이동은 세우지 않는다(D-68) |
 | 선택 범퍼 충돌 (D-23) | `safety.use_hazard_topic: true`이고 `hazard_detection`에 `BUMP`가 새로 나타남 | 그 로봇과, 그 로봇에서 `safety.bump_neighbor_m`(1.0 m) 안에 있는 다른 로봇을 함께 `SAFE_PAUSE`. 주행 중이면 `PAUSE`. 경고 `BUMP` (`detail.targets`에 충돌 로봇과 함께 세운 이웃 로봇 ID 목록) | 사람이 확인 후 `RESUME_ROBOT` (로봇마다) |
 | 침상 감시 끊김 | `/patient/bed_exit`가 `bed_monitor.warn_s`(1초) 넘게 안 옴 → 경고만. `lost_s`(3초) 넘게 안 옴 → 끊김 | 경고: `BED_MONITOR_WARN`. 끊김: `bed_exit_pause_targets` 로봇 중 임무 중인 로봇을 `SAFE_PAUSE`, 주행 중이면 `PAUSE`. `BED_MONITOR_LOST` + 카드 `BED_MONITOR_LOST` | 신호가 `recover_s`(2초) 이어서 들어오면 `BED_MONITOR_BACK`. 그 뒤 사람이 재개. 또는 카드에서 [감시 없이 운행] |
 

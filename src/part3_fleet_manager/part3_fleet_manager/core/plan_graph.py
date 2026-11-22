@@ -20,7 +20,7 @@ from itertools import pairwise
 from math import ceil, dist, hypot
 
 from . import geometry as g
-from .clearance import stop_distance
+from .clearance import close_distance, conflict_distance
 
 SAMPLE_M = 0.02          # walk step along a route when assigning points
 PRUNE_OVER = 2000        # routes made for robot positions kept before old ones are forgotten (long runs)
@@ -565,12 +565,13 @@ class PlanGraph:
         return found
 
     def threshold(self, a, b):
-        """Proximity threshold between two positions (clearance.stop_distance, the proximity stop's own rule);
-        None when both stand still (no stop can occur)."""
+        """Proximity threshold between two positions (clearance.conflict_distance, the proximity stop's own rule);
+        None when both stand (no stop can occur)."""
         pa, pb = self.pieces[a], self.pieces[b]
-        if (pa.standing and pb.standing) or pa.fence or pb.fence:
+        if pa.fence or pb.fence:
             return None
-        return stop_distance(self.safety, pa.standing and pa.at_slot, pb.standing and pb.at_slot)
+        return conflict_distance(self.safety, pa.standing, pb.standing, pa.standing and pa.at_slot,
+                                 pb.standing and pb.at_slot)
 
     def segs(self, piece_id):
         """{segment: direction} the position uses (single, one_way, or its own slot)."""
@@ -608,6 +609,24 @@ class PlanGraph:
             if kind == "single" or not sa[name] or not sb[name] or sa[name] != sb[name]:
                 out.append(name)
         return out
+
+    def close(self, a, b):
+        """In conflict, or two standing positions closer than ``clearance.close_distance`` (they cannot conflict
+        while both stand, but neither may move closer): the start the planner's ``grace`` applies to."""
+        if self.conflict(a, b):
+            return True
+        # Only two standing positions: a robot driving past one standing at a slot (0.45~0.6 m) is not a start
+        # the grace applies to (random seeds 101·272 of 4O 후속 6: the standing one got its leg too early).
+        pa, pb = self.pieces[a], self.pieces[b]
+        return (pa.standing and pb.standing and not pa.fence and not pb.fence   # a fence is no robot (seed 205)
+                and self.distance(a, b) < close_distance(self.safety, self._in_slot(pa), self._in_slot(pb)))
+
+    def _in_slot(self, piece):
+        """A standing position at a slot point (parked in that slot, or arriving there), whether or not that robot
+        has a granted leg (4L: two robots parked in their own slots, C1·C2 0.55 m, are not close; random seed 205
+        of 4O 후속 6). A free standing position inside a slot circle is not one (the circles are 0.6 m)."""
+        point = self.endpoints.get(piece.point)
+        return point is not None and point.kind == "slot" and piece.line[0] == point.anchor
 
     def conflict(self, a, b):
         key = (a, b) if a < b else (b, a)

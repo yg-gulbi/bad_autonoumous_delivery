@@ -18,6 +18,7 @@
 | [Part 5 시작 시 웹캠 미연결 종료 및 USB 재연결 보강](2026-11-20-part5-webcam-startup-reconnect.md) | 단위 테스트·통합 테스트 통과 / 실웹캠 분리 검증 대기 | 웹캠 미연결 생존·즉시 `release()`·1초 쿨다운 재연결 추가, 단위 51/51·통합 7/7 통과 |
 | [part3_part5 통합 테스트 robot2/robot3 네임스페이스 불일치](2026-11-20-part3-part5-robot-namespace-mismatch.md) | 해결 | `fleet.yaml`(D-29) `robot_a=robot3`에 맞춰 명령 토픽 상수화 후 통합 테스트 7/7 PASS (15.0s, MCAP 104건) |
 | [4O 정리 뒤 지나온 복도 칸을 다시 GRANTED로 쥠 (시드 34·173)](2026-11-22-part3-4o-passed-segment-regrant.md) | 해결 | 계획은 만든 때의 주행 상태로, 지금 위치에서는 남은 칸만 쥠. 무작위 300개 위반 0 |
-| [막힘 카드의 다시 출발·되돌아가기가 PLAN에서 로봇을 움직이지 않음](2026-11-22-part3-4o-blocked-robot-not-replanned.md) | 보류 | b98f6ca부터의 동작. 정리는 동작 변경 금지라 시험 3개를 xfail로 남김 |
+| [막힘 카드의 다시 출발·되돌아가기가 PLAN에서 로봇을 움직이지 않음](2026-11-22-part3-4o-blocked-robot-not-replanned.md) | 해결 | 운영자 선택을 계획 입력 두 가지(막힘 해제·새 목표)로, 막힘은 그 구간만 묶음. xfail 3개 통과 (D-67) |
+| [0.6 m 안에서 마주 본 두 로봇이 계획을 못 찾고 서 있음](2026-11-22-part3-4o-faceoff-inside-stop-distance.md) | 해결 / 실기 확인 대기 | 거리를 줄이지 않는 이동 규칙 하나(`clearance.leaving`)와 4L 자리 기준(`conflict_distance`·`close_distance`)을 계획·실행·근접 정지가 같이 씀 (D-68·D-69) |
 
 새 기록 양식: [_template.md](_template.md)

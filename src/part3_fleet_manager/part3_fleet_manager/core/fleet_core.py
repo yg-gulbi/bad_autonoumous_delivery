@@ -50,6 +50,7 @@ class FleetCore:
         self.stalls = {r: Stall(config.stall) for r in config.robots}
         self.inspect_inflight = {}
         self.blocks = {}
+        self.block_legs = {}        # blocked robot -> the leg it was blocked on (a block holds that leg only)
         self.reports = ObstacleReports(self)
         self.mission.defer_failure = self.reports.defer
         self.link_ok = dict.fromkeys(config.robots, False)
@@ -154,6 +155,9 @@ class FleetCore:
                 self.mission.advance(robot, now)
             return
         elif kind == "BLOCKED":
+            # The operator's choice reaches the plan as one of two inputs: the block is lifted (retry: the way is
+            # clear) or a new goal (return: a new leg to the previous zone, mission.retry). A block holds only the
+            # leg it was found on (_stalled), so the robot is planned again either way.
             if choice == "retry":
                 self._unblock(robot, now, close_card=False)
             if choice == "hold":
@@ -203,12 +207,23 @@ class FleetCore:
         if robot not in self.blocks:
             return
         name = self.blocks.pop(robot)
+        self.block_legs.pop(robot, None)
         self.traffic.unblock_robot(robot)
         self.resources.record("UNBLOCKED", now, "막힘이 해제됐습니다.", robot=robot, region=name)
         if close_card:
             for card in list(self.decisions.cards.values()):
                 if card["kind"] == "BLOCKED" and not card.get("context") and robot in card["robots"]:
                     self.decisions.close(card["card_id"], now, "resolved")
+
+    def _leg(self, robot):
+        return self.resources.active.get(robot) or self.resources.pending.get(robot)
+
+    def _stalled(self, robot):
+        """Not moving for the plan: a block holds the leg it was found on; a new leg (a new goal) is planned again
+        while the screen keeps the block until the robot moves. Without a block: stall.window_s without progress."""
+        if robot in self.blocks:
+            return self._leg(robot) is self.block_legs.get(robot)
+        return self.stalls[robot].seconds >= self.config.stall.window_s
 
     def _inspect(self, robot, now, results, out, *, moving):
         stall, policy = self.stalls[robot], self.config.obstacle
@@ -279,6 +294,7 @@ class FleetCore:
             if signal == "STALL_LONG":
                 region = self.traffic.block_robot(robot, link.pose, now)
                 self.blocks[robot] = region
+                self.block_legs[robot] = self._leg(robot)
                 self.resources.record("BLOCKED", now, reason, robot=robot, mission_id=r.job.journal_id, region=region)
                 self.decisions.open("BLOCKED", robot, r.job.journal_id, reason, now,
                                     obstacle_kind=stall.obstacle["kind"] if stall.obstacle else None)
@@ -399,7 +415,7 @@ class FleetCore:
             r = self.mission.robots[robot]
             reports[robot] = RobotReport(link.pose, self.link_ok[robot], bool(self.safety.causes[robot]),
                                          can_yield=r.state != "FAULT" and not r.canceling and not r.replacing,
-                                         stalled=self.stalls[robot].seconds >= self.config.stall.window_s or robot in self.blocks,
+                                         stalled=self._stalled(robot),
                                          nav_paused=link.state in {"PAUSED", "STOPPING_PAUSE", "FAILED"},
                                          departed=bool(link.move and link.move.attempts),
                                          via=link.move.via if link.move else None,

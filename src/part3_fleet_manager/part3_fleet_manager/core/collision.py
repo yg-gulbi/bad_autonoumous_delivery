@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from itertools import combinations, pairwise
 from math import dist
 
-from .clearance import resume_distance, stop_distance
+from .clearance import close_distance, leaving, resume_distance, stop_distance
 from .legs import Leg
 from .robot_protocol import DONE, Move
 
@@ -115,6 +115,7 @@ class CollisionControl:
         self.head_on = {}  # pair -> robot recommended to retreat
         self.retreats = {}  # awaiting cancellation and the new return leg
         self.priority = {}  # pair -> one operator-authorized departure
+        self.close_start = {}  # pair -> distance at which both stood still inside the stop distance
 
     @property
     def near(self):
@@ -128,12 +129,7 @@ class CollisionControl:
 
     def parked_slot(self, robot):
         """(zone, slot) whose point is this robot's nearest slot within zone_occupied_m."""
-        pose, config = self.links[robot].pose, self.rm.config
-        if pose is None:
-            return None
-        best = min(((dist(pose, point), zone, index) for zone in config.zones
-                    for index, point in enumerate(config.slots[zone], 1)), default=None)
-        return best[1:] if best and best[0] <= config.resources.zone_occupied_m else None
+        return self.rm.robots.slot_of(self.links[robot].pose)
 
     def reconcile(self, now):
         self.access.reconcile(now)
@@ -169,7 +165,7 @@ class CollisionControl:
 
     def _still_at_slot(self, robot):
         """Standing still at a slot without a granted leg, online or not (clearance.py)."""
-        return self.rm.robots.standing_still(robot, robot in self.rm.active) and self.parked_slot(robot) is not None
+        return self.rm.robots.still_at_slot(robot, robot in self.rm.active)
 
     def stop_distance(self, a, b):
         return stop_distance(self.rm.config.safety, self._still_at_slot(a), self._still_at_slot(b))
@@ -219,6 +215,19 @@ class CollisionControl:
             distance = dist(left.pose, right.pose)
             pair = frozenset((a, b))
             separating = self._separating(pair, max(left.pose_at, right.pose_at), distance, now)
+            stop = self.stop_distance(a, b)
+            parked = [self.rm.robots.parked_here(r) for r in (a, b)]
+            if (left.state not in IN_MOTION and right.state not in IN_MOTION
+                    and distance < close_distance(self.rm.config.safety, *parked)):
+                # Both stand inside the distance at which a driving robot stops: from here a move that does not close
+                # in is allowed (clearance.leaving), until they are apart. A robot stopped for closing in does not
+                # lower the mark (each stop would let it creep a little closer, 4O 후속 6 hall face-off).
+                self.close_start[pair] = max(self.close_start.get(pair, 0.0), distance)
+            elif distance >= self.resume_distance(a, b):
+                self.close_start.pop(pair, None)
+            elif pair in self.close_start:
+                # While they move apart, "closer" means closer than the farthest they have been since.
+                self.close_start[pair] = max(self.close_start[pair], distance)
             if distance >= self.resume_distance(a, b) and left.online(now) and right.online(now):
                 self.priority.pop(pair, None)
                 self.head_on.pop(pair, None)
@@ -246,21 +255,39 @@ class CollisionControl:
                 else:
                     first.distance = distance
             fresh = left.online(now) and right.online(now) and now - min(left.pose_at, right.pose_at) <= 0.5
-            if not (separating and fresh) and distance < self.stop_distance(a, b):
+            moving_apart = pair in self.close_start and leaving(self.close_start[pair], distance)
+            if not (separating and fresh) and not moving_apart and distance < stop:
                 for robot, peer in ((a, b), (b, a)):
                     if self.links[robot].state in {"MOVING", "DOCKING"} or robot in self.contacts:
                         self._hold_near(robot, peer, distance, now)
 
     def hold_restart(self, robot, now):
-        """A different rule may release a PAUSED robot while the pair is still too close."""
+        """A different rule may release a PAUSED robot while the pair is still too close. Not a pair that stands
+        still inside the stop distance: from there a move apart is allowed (may_move_apart)."""
         pose = self.links[robot].pose
         for peer, link in self.links.items():
             if peer == robot or pose is None or link.pose is None:
                 continue
             distance = dist(pose, link.pose)
-            if distance < self.stop_distance(robot, peer):
+            if distance < self.stop_distance(robot, peer) and not self._apart_allowed(robot, peer, distance):
                 self._hold_near(robot, peer, distance, now)
-        return robot in self.contacts
+        return robot in self.contacts and not self.may_move_apart(robot)
+
+    def _apart_allowed(self, robot, peer, distance):
+        start = self.close_start.get(frozenset((robot, peer)))
+        return start is not None and leaving(start, distance)
+
+    def may_move_apart(self, robot):
+        """The robot's proximity stops are all with robots it stands inside the stop distance with, and they have not
+        come closer since (clearance.leaving): it may start or go on with a move apart (the plan's executor lets out
+        only a position that does not close in). A move that closes in is stopped again in observe_distance."""
+        peers = self.contacts.get(robot)
+        if not peers:
+            return False
+        pose = self.links[robot].pose
+        return pose is not None and all(
+            self.links[p].pose is not None and self._apart_allowed(robot, p, dist(pose, self.links[p].pose))
+            for p in peers)
 
     def can_go_first(self, robot, peer, mission, now):
         unit, link, other = mission.robots[robot], self.links[robot], self.links[peer]
