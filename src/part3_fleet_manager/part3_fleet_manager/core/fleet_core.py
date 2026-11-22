@@ -8,17 +8,16 @@ from threading import Lock
 
 from . import geometry as g
 from . import obstacle, schemas
-from .collision import CollisionControl
-from .deadlock import DeadlockManager
-from .decisions import Decisions
 from .mission import MissionManager
 from .obstacle_report import ObstacleReports
-from .route_planner import uses_crossroad, waypoints
-from .resource_manager import MotionRequest, ResourceManager, RobotReport
-from .robot_protocol import DONE, PREPARING, RobotProtocol
+from .legs import MotionRequest, RobotReport
+from .plan_graph import door_route
+from .robot_state import uses_crossroad
+from .robot_protocol import PREPARING, RobotProtocol
 from .safety import Safety
 from .stall import Stall
 from .store import Store
+from .traffic import Traffic
 
 
 @dataclass
@@ -35,20 +34,23 @@ class FleetOutput:
 class FleetCore:
     """Inputs: UI topic names, status/pose/battery/docked/hazards with logical robot, or bed exit."""
 
-    def __init__(self, config, store=None):
+    def __init__(self, config, store=None, *, plan_thread=False):
+        """``plan_thread``: the plan's search runs in its own thread (the node); tests run it in the tick and still
+        use its result in the next tick (plan_runner)."""
         self.config = config
         self.store = store if store is not None else Store(config.db_path)
-        self.resources = ResourceManager(config)
-        self.deadlock = DeadlockManager(self.resources)
-        self.decisions = Decisions(self.resources.record)
-        self.safety = Safety(config, self._safety_event, self.decisions)
         self.links = {r: RobotProtocol(c.ns, config.robot_link) for r, c in config.robots.items()}
-        self.mission = MissionManager(config, self.resources, self.deadlock, self.decisions,
-                                      self.safety, self.links, self.store.next_id)
-        self.collision = CollisionControl(self.resources, self.links, self.decisions)
+        self.traffic = Traffic(config, self.links, plan_thread=plan_thread)
+        self.resources = self.traffic.resources
+        self.decisions = self.traffic.decisions
+        self.collision = self.traffic.collision
+        self.safety = Safety(config, self._safety_event, self.decisions)
+        self.mission = MissionManager(config, self.resources, self.decisions,
+                                      self.safety, self.links, self.store.next_id, traffic=self.traffic)
         self.stalls = {r: Stall(config.stall) for r in config.robots}
         self.inspect_inflight = {}
         self.blocks = {}
+        self.block_legs = {}        # blocked robot -> the leg it was blocked on (a block holds that leg only)
         self.reports = ObstacleReports(self)
         self.mission.defer_failure = self.reports.defer
         self.link_ok = dict.fromkeys(config.robots, False)
@@ -112,14 +114,17 @@ class FleetCore:
             r = self.mission.robots[robot]
             if r.job or r.queue or r.canceling:
                 raise ValueError("E-409: 임무 없는 로봇만 직접 이동할 수 있습니다.")
-            return self.mission.submit({"type": "GO_ZONE", "level": self.config.mission.manual_level,
+            level = cmd.get("level", self.config.mission.manual_level)   # quick send: Level 1~3, else manual_level
+            return self.mission.submit({"type": "GO_ZONE", "level": level,
                                         "requested_by": cmd["by"], "stops": [{"zone": cmd["zone"]}]}, now, manual_robot=robot)
+        elif action == "SET_LEVEL":
+            self.mission.set_level(cmd["mission_id"], cmd["level"], now, by=cmd["by"])
+            return cmd["mission_id"]
+        elif action == "BED_MONITOR_SET":
+            self.safety.set_monitor(cmd["enabled"], now, by=cmd["by"])
 
     def _choose(self, data, now):
         key, choice, by = data["card_id"], data["choice"], data["by"]
-        if self.deadlock.card and key == self.deadlock.card["card_id"]:
-            self.deadlock.choose(key, choice, by, now)
-            return
         card = self.decisions.validate(key, choice)
         if card["kind"] == "BED_MONITOR_LOST":
             self.safety.monitor.choose(choice, by, now)
@@ -150,6 +155,9 @@ class FleetCore:
                 self.mission.advance(robot, now)
             return
         elif kind == "BLOCKED":
+            # The operator's choice reaches the plan as one of two inputs: the block is lifted (retry: the way is
+            # clear) or a new goal (return: a new leg to the previous zone, mission.retry). A block holds only the
+            # leg it was found on (_stalled), so the robot is planned again either way.
             if choice == "retry":
                 self._unblock(robot, now, close_card=False)
             if choice == "hold":
@@ -199,16 +207,23 @@ class FleetCore:
         if robot not in self.blocks:
             return
         name = self.blocks.pop(robot)
-        if name in self.resources.resources:
-            res = self.resources.resources[name]
-            res.stall_blockers.discard(robot)
-            if not res.stall_blockers:
-                res.blocked_since = None
+        self.block_legs.pop(robot, None)
+        self.traffic.unblock_robot(robot)
         self.resources.record("UNBLOCKED", now, "막힘이 해제됐습니다.", robot=robot, region=name)
         if close_card:
             for card in list(self.decisions.cards.values()):
                 if card["kind"] == "BLOCKED" and not card.get("context") and robot in card["robots"]:
                     self.decisions.close(card["card_id"], now, "resolved")
+
+    def _leg(self, robot):
+        return self.resources.active.get(robot) or self.resources.pending.get(robot)
+
+    def _stalled(self, robot):
+        """Not moving for the plan: a block holds the leg it was found on; a new leg (a new goal) is planned again
+        while the screen keeps the block until the robot moves. Without a block: stall.window_s without progress."""
+        if robot in self.blocks:
+            return self._leg(robot) is self.block_legs.get(robot)
+        return self.stalls[robot].seconds >= self.config.stall.window_s
 
     def _inspect(self, robot, now, results, out, *, moving):
         stall, policy = self.stalls[robot], self.config.obstacle
@@ -244,14 +259,15 @@ class FleetCore:
 
     def _stall_tick(self, robot, now, terminal, accepted, results, out):
         r, link = self.mission.robots[robot], self.links[robot]
+        plan_hold = self.traffic.plan_hold(robot)
         if (not r.job or link.state in PREPARING or (r.state != "MOVING" and not accepted)
                 or not self.link_ok[robot] or self.safety.causes[robot]
                 or robot in self.collision.contacts or robot in self.collision.access.waits
-                or self.resources.following(robot) or self.resources.robot_state(robot, r.state) == "GIVE_WAY" or terminal):
+                or plan_hold or terminal):
             self._inspect(robot, now, results, out, moving=False)
             if terminal or not r.job:
                 self._unblock(robot, now)
-            elif robot not in self.blocks and not (self.resources.following(robot) and self.stalls[robot].short):
+            elif robot not in self.blocks:
                 self.stalls[robot].reset()
             return
         if link.state not in {"MOVING", "DOCKING"} and robot not in self.blocks:
@@ -276,13 +292,9 @@ class FleetCore:
                 reason += " · " + obstacle.description(stall.obstacle, link.pose, self.config.obstacle)
             self.resources.record(signal, now, reason, robot=robot, mission_id=r.job.journal_id, stall_s=stall.seconds)
             if signal == "STALL_LONG":
-                region = self.config.corridor.region_of(link.pose)
+                region = self.traffic.block_robot(robot, link.pose, now)
                 self.blocks[robot] = region
-                if region in self.resources.resources:
-                    res = self.resources.resources[region]
-                    if not res.stall_blockers:
-                        res.blocked_since = now
-                    res.stall_blockers.add(robot)
+                self.block_legs[robot] = self._leg(robot)
                 self.resources.record("BLOCKED", now, reason, robot=robot, mission_id=r.job.journal_id, region=region)
                 self.decisions.open("BLOCKED", robot, r.job.journal_id, reason, now,
                                     obstacle_kind=stall.obstacle["kind"] if stall.obstacle else None)
@@ -291,8 +303,9 @@ class FleetCore:
         batch, self.inputs = self.inputs, deque()
         ui, safety, messages = [], [], []
         results = {robot: [] for robot in self.links}
+        allowed_resources = tuple(dict.fromkeys((*g.RESOURCES, *self.resources.segments)))
         parsers = {"/ui/mission_req": schemas.parse_mission_req, "/ui/decision": schemas.parse_decision,
-                   "/ui/operator_cmd": lambda s: schemas.parse_operator_cmd(s, robots=self.links)}
+                   "/ui/operator_cmd": lambda s: schemas.parse_operator_cmd(s, robots=self.links, resources=allowed_resources)}
         for topic, payload, stamp, robot in batch:
             if topic in parsers:
                 try:
@@ -377,7 +390,6 @@ class FleetCore:
         for robot in self.links:
             self._stall_tick(robot, now, robot in terminal, robot in accepted, results[robot] if inspect else [], out)
 
-        self.resources.begin_tick()
         for robot, message in messages:
             self.mission.received(robot, message, now)
             if message["event"] == "OBSTACLE":
@@ -403,41 +415,43 @@ class FleetCore:
             r = self.mission.robots[robot]
             reports[robot] = RobotReport(link.pose, self.link_ok[robot], bool(self.safety.causes[robot]),
                                          can_yield=r.state != "FAULT" and not r.canceling and not r.replacing,
-                                         stalled=self.stalls[robot].seconds >= self.config.stall.window_s or robot in self.blocks,
+                                         stalled=self._stalled(robot),
                                          nav_paused=link.state in {"PAUSED", "STOPPING_PAUSE", "FAILED"},
                                          departed=bool(link.move and link.move.attempts),
                                          via=link.move.via if link.move else None,
-                                         via_passed=bool(link.move and link.move.via_passed))
-        self.resources.observe(now, reports)
+                                         via_passed=bool(link.move and link.move.via_passed),
+                                         proximity_stopped=self.collision.yielding_priority(robot))
+        self.traffic.observe(now, reports, self.mission.robots)
         for data in clears:
             self._ui("/ui/operator_cmd", data, now, out)
-        self.collision.reconcile_zones(now)
-        arbitration = self.resources.arbitrate(now, self.collision.zone_held)
+        if self.mission.ready:
+            # A leg finished by an arrival or cancel in this batch is requested again before planning.
+            self.mission.plan(now)
+        self.traffic.reconcile(now)
+        arbitration = self.traffic.arbitrate(now)
         for leg in arbitration.grants:
             self.mission.granted(leg)
-        self.deadlock.observe(now)
+        for robot in arbitration.retarget:
+            self.mission.retarget(robot, now)
+        for robot, zone, slot in arbitration.arrived:
+            # The robot already stands in its goal slot; the leg ends here without a MOVE.
+            self.mission.received(robot, {"event": "ARRIVED", "destination": zone, "slot": slot}, now)
         self.collision.cards(now, self.mission.robots)
         for data in choices:
             self._ui("/ui/decision", data, now, out)
 
-        self.deadlock.expire(now)
-        self.collision.reconcile_zones(now)
+        self.traffic.reconcile(now)
         self.collision.arm_retreat(self.mission, now)
         motions = {request.robot: request.command for request in arbitration.commands}
         for robot in self.links:
-            link = self.links[robot]
-            move = link.move
-            access = self.collision.access.waits.get(robot)
             # Check the physical start again for every outgoing MOVE, including retries whose
             # first command may have been lost and grants issued to both robots in this tick.
-            if (robot in self.resources.active and move and not move.finished and not move.remote_id
-                    and link.state in DONE and not (access and access.rule == "OUTBOUND")):
-                self.collision.access.before_departure(self.resources.active[robot], now)
-            traffic_stop = (robot in self.collision.access.waits or robot in self.collision.contacts or robot in self.collision.zone
-                            or self.collision.yielding_priority(robot))
+            self.traffic.before_wire_move(robot, now)
+            traffic_stop = self.traffic.traffic_stop(robot)
             command = self.mission.wire_step(robot, now, motions.get(robot), traffic_stop=traffic_stop,
                                              stalled=robot in self.blocks or self.stalls[robot].short,
-                                             hold_restart=self.collision.hold_restart)
+                                             hold_restart=self.collision.hold_restart,
+                                             hold_start=not self.traffic.may_start(robot))
             if command:
                 if command.startswith("MOVE ") or command == "DOCK":
                     self.collision.access.sent(robot, now)
@@ -479,17 +493,17 @@ class FleetCore:
 
     def visible_state(self, robot, r):
         base = r.state
-        if base != "FAULT" and robot in self.deadlock.yielding:
-            base = "YIELDING"
-        elif base != "FAULT" and r.returning:
+        if base != "FAULT" and r.returning:
             base = "RETURNING"
-        if base != "FAULT" and (robot in self.collision.zone or robot in self.collision.contacts or robot in self.collision.access.waits):
+        if base != "FAULT" and (robot in self.collision.contacts or robot in self.collision.access.waits):
             base = "HOLD"
         return self.resources.robot_state(robot, base) if self.link_ok[robot] else "OFFLINE"
 
     def wait_reason(self, robot):
-        wait = self.collision.near.get(robot) or self.collision.zone.get(robot) or self.collision.access.waits.get(robot)
-        return wait.reason if wait else self.resources.wait_reasons.get(robot)
+        wait = self.collision.near.get(robot) or self.collision.access.waits.get(robot)
+        if wait:
+            return wait.reason
+        return self.resources.wait_reasons.get(robot)
 
     def mission_row(self, job):
         reason = self.wait_reason(job.robot) if job.status == "ACTIVE" else None
@@ -515,12 +529,9 @@ class FleetCore:
                 leg_info["slot"] = slot
             if leg and leg.dock_path:
                 leg_info["purpose"] = "도크 복귀"
-            if leg and robot in self.deadlock.yielding and self.deadlock.yielding[robot].detour is leg:
-                leg_info["purpose"] = "교착 대피"
-            elif leg and r.target_override:
+            if leg and r.target_override:
                 leg_info["purpose"] = "이전 구역 복귀"
             causes = self.safety.causes[robot]
-            zone = self.collision.zone.get(robot)
             access = self.collision.access.waits.get(robot)
             near = self.collision.near.get(robot)
             head_on = bool(near and frozenset((robot, near.peer)) in self.collision.head_on)
@@ -529,13 +540,14 @@ class FleetCore:
             # NAVIGATING without "via" (PART 04 before 4J) drives straight through the door.
             via_done = bool(move and (move.via_passed or move.via is False))
             if leg and link.pose is not None:
-                route = [link.pose, *waypoints(self.config, link.pose, leg.destination, slot, via_done=via_done)]
+                # The way the plan's graph walks: through the middle of a B·E door (4O).
+                route = [link.pose, *door_route(self.config, link.pose, leg.destination, slot, via_done=via_done)]
                 if leg.dock_path:
                     route[-1:] = leg.dock_path
             origin = self.resources._origins.get(robot) or region
             crossing = bool(leg and not leg.dock_path and (
                 move.via if move and move.via is not None
-                else origin and uses_crossroad(self.config, origin, leg.destination)))
+                else origin and uses_crossroad(origin, leg.destination)))
             sighting = self.reports.yolo.get(robot)
             observation = self.stalls[robot].obstacle or self.reports.view(robot)
             robots[robot] = {
@@ -552,9 +564,8 @@ class FleetCore:
                 "slot": r.slot if region == g.ZONE_REGIONS[r.zone] else None,
                 "via": {"point": "교차로", "passed": via_done} if crossing else None,
                 "yolo": sighting if sighting and now < sighting["at"] + 30 else None,
-                "zone_wait": {"peer": zone.peer, "zone": zone.exit_zone or zone.leg.destination, "exit": bool(zone.exit_zone), "reason": zone.reason, "since": zone.since} if zone else (
-                    {"peer": access.peer, "zone": access.zone, "rule": access.rule, "exit": False,
-                     "reason": access.reason, "since": access.since} if access else None),
+                "zone_wait": {"peer": access.peer, "zone": access.zone, "rule": access.rule, "exit": False,
+                              "reason": access.reason, "since": access.since} if access else None,
                 "proximity": {"peer": near.peer, "head_on": head_on, "peer_first": not head_on and self.collision.can_go_first(near.peer, robot, self.mission, now),
                               "self_first": not head_on and self.collision.can_go_first(robot, near.peer, self.mission, now), "reason": near.reason, "since": near.since} if near else None,
                 "wait_reason": self.wait_reason(robot), "progress_pct": link.percent,
@@ -563,15 +574,14 @@ class FleetCore:
                                     or self.reports.pending(robot),
                 "remaining_m": link.remaining_m, "stall_s": self.stalls[robot].seconds,
                 "pause_causes": sorted(causes),
-                "paused_by": sorted(causes)[0] if causes else ("CORRIDOR_YIELD" if state == "GIVE_WAY" else None),
+                "paused_by": sorted(causes)[0] if causes else None,
             }
             jobs = ([r.job] if r.job else []) + list(r.queue)
             missions.extend(self.mission_row(j) for j in jobs if j.kind in schemas.MISSION_TYPES)
         cards = list(self.decisions.cards)
-        if self.deadlock.card:
-            cards.append(self.deadlock.card["card_id"])
         return {"v": 1, "stamp": now, "robots": robots, "resources": self.resources.snapshot(),
-                "missions": missions + list(reversed(self.history.values())), "last_decision": self.resources.last_decision, "open_cards": cards,
+                "traffic": self.traffic.traffic_snapshot(),
+                "missions": missions + list(reversed(self.history.values())), "open_cards": cards,
                 "bed_exit": {"value": self.safety.bed_exit, "since": self.safety.since,
                              "monitor": self.safety.monitor.snapshot(now)},
                 "kpi": self.store.stats.kpi()}

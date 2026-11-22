@@ -7,52 +7,51 @@ from pathlib import Path
 from part1_ui_dashboard.ui_api import EVENTS, present_event
 from part1_ui_dashboard.web import Feed, create_app
 from part3_fleet_manager.core.config import load_config
-from part3_fleet_manager.core.deadlock import DeadlockManager
-from part3_fleet_manager.core.resource_manager import ResourceManager, RobotReport
 from part3_fleet_manager.core.store import Store
 
 A, B = "robot_a", "robot_b"
 
 
 def traffic(cfg):
-    convoy = ResourceManager(replace(cfg, corridor=replace(cfg.corridor, mode="DIRECTIONAL")))
-    reports = {A:RobotReport(cfg.zones["D"],True), B:RobotReport(cfg.zones["A"],True)}
-    for r in reports:
-        convoy.request(r,"F",1,0)
-    convoy.tick(1,reports)
-    reports[A] = RobotReport((-1.55,-2.8),True,safe_pause=True)
-    reports[B] = RobotReport((-1.55,-1.5),True)
-    convoy.tick(2,reports)
-    reports[A] = RobotReport((-1.55,-3.0),True)
-    convoy.tick(3,reports)
-    yield from convoy.events
-
-    for timeout in (False, True):
-        rm = ResourceManager(cfg)
-        rm.request(A,"F",1,0)
-        rm.request(B,"A",3,0)
-        rm.tick(1,{A:RobotReport(cfg.zones["A"],True), B:RobotReport(cfg.zones["F"],True)})
-        reports = {A:RobotReport((-1.55,-2),True), B:RobotReport((-1.55,-3),True)}
-        rm.tick(2,reports)
-        if not timeout:
-            reports[B] = RobotReport((-1.55,-1.5),True)
-        rm.tick(12,reports)
-        reports[A] = RobotReport(cfg.zones["A"],False)
-        rm.tick(13,reports)
-        rm.clear_unknown("CORRIDOR","현장 담당자",14)
-        yield from rm.events
-
-    # Deadlocks need the 4I room rule (a robot standing in a room keeps it).
-    rm = ResourceManager(replace(cfg, corridor=replace(cfg.corridor, room_mode="ROOM")))
-    dl = DeadlockManager(rm)
-    reports = {A:RobotReport(cfg.zones["B"],True), B:RobotReport(cfg.zones["E"],True)}
-    for robot, dest in [(A,"E"),(B,"B")]:
-        rm.request(robot,dest,2,0)
-    for ts in (0,2,22,22.1):
-        rm.tick(ts,reports)
-        dl.tick(ts)
-    dl.arrived(dl.yielding[B].detour,23)
-    yield from rm.events
+    from kinematic_mock import KinematicSim
+    # PLAN: plan updates, order waits and a move aside from a short two-robot run.
+    # Level 1 robot goes D -> C while a Level 3 call takes the other robot C -> D: the Level 1 robot
+    # moves aside in the top hall and waits for its turn (PLAN_YIELD_MOVE, PLAN_WAIT).
+    sim = KinematicSim(replace(cfg, assignment=replace(cfg.assignment, mode="ROLE")), poses={B: "C"})
+    try:
+        sim.cmd("GO_ZONE", robot=A, zone="C")
+        sim.submit_call("D", level=3)
+        sim.run_until(80.0)
+        yield from (e for e in sim.all_events if e["type"].startswith(("PLAN_", "RESOURCE_")))
+    finally:
+        sim.close()
+    # 4O follow-up: a Level change of a waiting mission.
+    sim = KinematicSim(replace(cfg, assignment=replace(cfg.assignment, mode="ROLE")))
+    try:
+        sim.submit_med(("E", "B"), level=1)
+        ref = sim.submit_call("D", level=1)
+        sim.run_until(1.0)
+        sim.cmd("SET_LEVEL", mission_id=sim.ids[ref], level=3)
+        sim.run_until(2.0)
+        yield from (e for e in sim.all_events if e["type"] == "LEVEL_CHANGE")
+    finally:
+        sim.close()
+    # A link loss in the corridor leaves segments UNKNOWN; the operator checks them on the spot.
+    sim = KinematicSim(replace(cfg, assignment=replace(cfg.assignment, mode="ROLE")))
+    try:
+        sim.cmd("GO_ZONE", robot=A, zone="C")
+        top = sim.core.resources.segments["CORRIDOR_TOP"].spec
+        while sim.now < 30 and not top.contains(sim.robots[A].pose):
+            sim.step(0.2)
+        sim.drop_link(A, 60.0)
+        sim.run_until(sim.now + 12.0)
+        for name, seg in sim.core.resources.segments.items():
+            if seg.uncertain:
+                sim.cmd("RESOURCE_CLEAR_CONFIRM", resource=name)
+        sim.run_until(sim.now + 1.0)
+        yield from (e for e in sim.all_events if e["type"].startswith("RESOURCE_"))
+    finally:
+        sim.close()
 
 
 def test_41_actual_fleet_event_titles_reasons_and_journal(tmp_path,monkeypatch):
@@ -61,7 +60,7 @@ def test_41_actual_fleet_event_titles_reasons_and_journal(tmp_path,monkeypatch):
     from fleet_simulation import Simulation
 
     cfg = load_config(package / "config/fleet.yaml")
-    cfg = replace(cfg, safety=replace(cfg.safety, use_hazard_topic=True), assignment=replace(cfg.assignment, mode="IDLE_BEST_BATTERY"), corridor=replace(cfg.corridor, mode="SHARED_YIELD"))
+    cfg = replace(cfg, safety=replace(cfg.safety, use_hazard_topic=True), assignment=replace(cfg.assignment, mode="IDLE_BEST_BATTERY"))
     events = list(traffic(cfg))
     with ExitStack() as cleanup:
         def simulator(mode="inspect"):
@@ -172,19 +171,32 @@ def test_41_actual_fleet_event_titles_reasons_and_journal(tmp_path,monkeypatch):
         sim.frames[A].update(state="COMPLETE",percent=100,pose=sim.pose("C"))
         collect(sim,11)
 
+        # D-51: the bed monitor switched off and on again from the screen.
         sim = simulator()
-        sim.cmd("GO_ZONE", robot=A, zone="F")
+        sim.cmd("BED_MONITOR_SET", enabled=False)
         collect(sim,0)
-        sim.frames[B]["pose"] = sim.pose("A")
+        sim.cmd("BED_MONITOR_SET", enabled=True)
         collect(sim,1)
+
+        # The 0.9 m departure check (ZONE_OCCUPIED_*), then a proximity stop while robot_a drives (PROXIMITY_*).
+        sim = simulator()
+        sim.frames[B].update(pose=sim.pose((-.3, .8)), state="MOVING")       # 0.7 m beside robot_a at D1
+        sim.cmd("GO_ZONE", robot=A, zone="C")
+        collect(sim,0)
+        sim.frames[B].update(pose=sim.pose("F"), state="IDLE")
+        for ts in (1, 1.1, 1.2):
+            collect(sim,ts)
         sim.event(A,"MISSION_ACCEPTED")
-        sim.frames[B]["pose"] = sim.pose((-.6,.9))
+        collect(sim,1.5)
+        sim.frames[A]["pose"] = sim.pose((-1.4,-1.0))
+        sim.frames[B].update(pose=sim.pose((-1.4,-1.4)), state="MOVING")
         collect(sim,2)
         sim.event(A,"PAUSED")
-        sim.frames[B]["pose"] = sim.pose("C")
+        sim.frames[B].update(pose=sim.pose("C"), state="IDLE")
         collect(sim,3)
 
-    assert {e["type"] for e in events} == set(EVENTS)
+    missing, extra = set(EVENTS) - {e["type"] for e in events}, {e["type"] for e in events} - set(EVENTS)
+    assert not missing and not extra, (missing, extra)
     path = tmp_path / "bad.db"
     store = Store(path)
     try:

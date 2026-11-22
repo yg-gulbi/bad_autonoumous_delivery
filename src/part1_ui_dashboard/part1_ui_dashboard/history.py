@@ -151,7 +151,7 @@ def history_api(path, names, robots=None):
     def event_query():
         clauses, args = filters("ts", [("type", "type"), ("robot", "robot"), ("mission_id", "mission")])
         if request.args.get("group") == "decision":
-            clauses.append("type IN ('RESOURCE_GRANT','RESOURCE_HOLD','CORRIDOR_YIELD_START','CORRIDOR_FOLLOW_STOP','ZONE_OCCUPIED_HOLD','PROXIMITY_STOP')")
+            clauses.append("type IN ('ZONE_OCCUPIED_HOLD','PROXIMITY_STOP','PLAN_UPDATE','PLAN_WAIT','PLAN_YIELD_MOVE')")
         q = request.args.get("q", "").strip()
         if q:
             clauses.append("""instr(lower(type || ' ' || coalesce(robot,'') || ' ' || coalesce(mission_id,'')
@@ -162,7 +162,26 @@ def history_api(path, names, robots=None):
     @api.get("/events")
     def events():
         sql, args = event_query()
-        return jsonify(paged(g.history_db, sql, args, event))
+        # Consecutive BED_MONITOR_WARN rows with the same text are one line with their count (D-51). The CSV
+        # below keeps every row.
+        grouped = f"""WITH f AS ({sql.removesuffix(" ORDER BY id DESC")}),
+            k AS (SELECT f.*, CASE WHEN type='BED_MONITOR_WARN' THEN json_extract(detail_json,'$.reason') END AS wkey FROM f),
+            p AS (SELECT k.*, LAG(wkey) OVER (ORDER BY id) AS pkey FROM k),
+            q AS (SELECT p.*, SUM(CASE WHEN wkey IS NOT NULL AND wkey = pkey THEN 0 ELSE 1 END) OVER (ORDER BY id) AS grp FROM p),
+            r AS (SELECT q.*, COUNT(*) OVER (PARTITION BY grp) AS repeat, MIN(ts) OVER (PARTITION BY grp) AS first_ts,
+                  ROW_NUMBER() OVER (PARTITION BY grp ORDER BY id DESC) AS rn FROM q)
+            SELECT * FROM r WHERE rn=1 ORDER BY id DESC"""
+
+        def row(r):
+            data = dict(r)
+            repeat, first = data.pop("repeat"), data.pop("first_ts")
+            for key in ("wkey", "pkey", "grp", "rn"):
+                data.pop(key, None)
+            item = event(data)
+            if repeat > 1:
+                item["detail"] = {**item["detail"], "repeat": repeat, "first_ts": first}
+            return item
+        return jsonify(paged(g.history_db, grouped, args, row))
 
     @api.get("/events.csv")
     def export():
@@ -197,20 +216,13 @@ def history_api(path, names, robots=None):
         bounds = period()
         where = "".join(" AND ts" + op + "?" for op, _ in bounds)
         args = [stamp for _, stamp in bounds]
-        counts = dict(g.history_db.execute("SELECT type,count(*) FROM events WHERE type IN "
-                                   "('PAUSE','RESOURCE_HOLD','DEADLOCK_DETECTED')" + where + " GROUP BY type", args))
-        # Use the same resolution criterion as the fleet: release of the source room
-        # after yielding, or a card resolved before an operator had to choose.
+        # The fleet's own counting (core.store.Metrics): a wait at a stop line or before a start counts once per
+        # leg, every PAUSE counts.
         history = Metrics()
-        rows = g.history_db.execute("""SELECT * FROM events WHERE type IN
-            ('DEADLOCK_DETECTED','CARD_CLOSED','YIELD_START','RESOURCE_RELEASE')""" + where + " ORDER BY id", args)
+        rows = g.history_db.execute("""SELECT * FROM events WHERE type IN ('RESOURCE_REQUEST','LEG_START',
+            'MISSION_CANCELED','MISSION_DONE','PLAN_WAIT','ZONE_OCCUPIED_HOLD','PAUSE')""" + where + " ORDER BY id", args)
         for row in rows:
-            d = json.loads(row["detail_json"])
-            if row["type"] == "YIELD_START" and any(op == ">=" and d["detected_at"] < ts for op, ts in bounds):
-                continue
-            history.observe(row["type"], row["ts"], row["robot"], None, d)
-        return jsonify(hold_count=counts.get("RESOURCE_HOLD", 0), pause_count=counts.get("PAUSE", 0),
-                       deadlock_count=counts.get("DEADLOCK_DETECTED", 0),
-                       deadlock_resolve_s_avg=history.kpi()["deadlock_resolve_s_avg"])
+            history.observe(row["type"], row["ts"], row["robot"], row["mission_id"], json.loads(row["detail_json"]))
+        return jsonify(**history.kpi())
 
     return api

@@ -14,6 +14,7 @@ async function start() {
         const healthyAt = ["OK", "WARN"].includes(S?.bed_exit?.monitor?.state) ? S.stamp : -Infinity;
         const back = s.events.findLast(e => e.type === "BED_MONITOR_BACK");
         clearLostAlarms(Math.max(healthyAt, back?.ts ?? -Infinity));
+        if (S?.bed_exit?.monitor?.enabled === false) clearBedAlarms();
         received = performance.now() - (s.age ?? 0) * 1000;
         E = s.events;
         cards = new Map(s.cards.map(c => [c.card_id, c]));
@@ -31,7 +32,8 @@ async function start() {
     on("ack", remember);
     on("event", e => {
         historyChanged(e);
-        E.push(e);
+        if (!mergeRepeat(E, e))
+            E.push(e);
         if (E.length > cfg.event_limit)
             E.shift();
         if (e.type === "CARD_CLOSED") {

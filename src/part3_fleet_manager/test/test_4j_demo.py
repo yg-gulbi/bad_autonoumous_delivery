@@ -1,214 +1,103 @@
-"""4J demo in five acts (BRIEF 9 #61), one fake-clock run with the default fleet.yaml.
+"""4J demo in five acts (BRIEF 9 #61) with the PLAN traffic judgement, on the kinematic mock and the default
+fleet.yaml. Up to the 4O 정리 this was a scripted LEGACY run (act 2 was LEGACY's opposite-direction corridor wait).
 
-1 three requests at once   2 opposite corridor wait   3 bed exit pauses only A
-4 B meets a medical box in the corridor   5 queued call starts, both robots go home
+1 three requests at once   2 A waits at its stop line for B   3 bed exit pauses only A
+4 B meets a medical box    5 the queued call starts, both robots go home
 """
-from dataclasses import replace
-import json
-
 import pytest
 
-from fleet_simulation import Simulation
+from kinematic_mock import KinematicSim
 
 A, B = "robot_a", "robot_b"
-CROSSROAD = (-1.5, -2.18)
 
 
-class Demo:
-    def __init__(self, sim):
-        self.sim, self.t, self.bed = sim, 0.0, None  # None: webcam not started yet
-        self.events, self.cards, self.sent = [], [], []
+def _until(sim, check, limit, *, auto_confirm=False):
+    end = sim.now + limit
+    while not check():
+        assert sim.now < end, f"{sim.now:.1f}초: 조건 시간 초과"
+        if auto_confirm:
+            sim.confirm_waiting()
+        sim.step(0.2)
 
-    def tick(self, dt=0.5):
-        self.t = round(self.t + dt, 3)
-        if self.bed is not None:
-            for _ in range(6):  # PART 05 at about 12 Hz once the webcam is on (act 3)
-                self.sim.pending.append(("/patient/bed_exit", bool(self.bed), None))
-        out = self.sim.tick(self.t)
-        self.events += out.events
-        self.cards += out.cards
-        self.sent += [(self.t, c.robot, c.command) for c in out.commands]
-        return out
 
-    def until(self, check, limit=15, dt=0.5):
-        end = self.t + limit
-        while not check():
-            assert self.t < end, f"{self.t}초: 조건 시간 초과"
-            self.tick(dt)
-
-    def moved(self, robot):
-        return [c for _, r, c in self.sent if r == robot and c.startswith("MOVE")]
-
-    def wait_move(self, robot):
-        count = len(self.moved(robot))
-        self.until(lambda: len(self.moved(robot)) > count)
-        return self.moved(robot)[-1]
-
-    def status(self, robot, name, **fields):
-        frame = self.sim.frames[robot]
-        self.sim.pending.append(("status", json.dumps({"type": "STATUS", "event": name, "robot_id": frame["robot_id"],
-                                                       "mission_id": frame["mission_id"], **fields}), robot))
-
-    def at(self, robot, xy):
-        self.sim.frames[robot]["pose"] = self.sim.pose(xy)
-
-    def drive(self, robot, *points, via=False):
-        """Accept the last MOVE, pass the given points (crossroad -> VIA_PASSED) and arrive."""
-        self.sim.event(robot, "MISSION_ACCEPTED")
-        frame = self.sim.frames[robot]
-        self.status(robot, "NAVIGATING", destination=frame["destination"], via="교차로" if via else None)
-        self.tick()
-        for point in points:
-            self.at(robot, point)
-            if point == CROSSROAD:
-                self.status(robot, "VIA_PASSED", destination=frame["destination"])
-            self.tick()
-        self.sim.event(robot, "ARRIVED")
-        self.tick()
-
-    def of(self, kind, robot=None, since=0.0):
-        return [e for e in self.events if e["type"] == kind and e["ts"] >= since and (robot is None or e["robot"] == robot)]
-
-    def state(self, robot):
-        return self.sim.state(robot)
-
-    def snapshot(self):
-        return self.sim.core.snapshot(self.t)
+def _of(sim, kind, robot=None, since=0.0):
+    return [e for e in sim.all_events if e["type"] == kind and e["ts"] >= since and (robot is None or e["robot"] == robot)]
 
 
 @pytest.fixture
-def demo(cfg, tmp_path):
-    sim = Simulation(replace(cfg, db_path=str(tmp_path / "demo.db")), slots=True)
-    yield Demo(sim)
-    sim.core.store.close()
+def sim(cfg):
+    s = KinematicSim(cfg, bed_feed=True)
+    yield s
+    s.close()
 
 
-def test_61_demo_five_acts(demo):
-    sim = demo.sim
+def test_61_demo_five_acts(sim):
+    core = sim.core
     # --- 1막: C→A 환자 이송, F→E→B 약품, A 구역 호출 동시 접수 ------------------------------------
-    sim.patient(pickup="C", dest="A", level=2)
-    sim.med(stops=("F", "E", "B"), level=3)
-    sim.call("call", "A", level=1)
-    demo.tick(0)
-    demo.bed = False  # PART 05 webcam on: normal
-    assert len(demo.of("MISSION_CREATED")) == 3
-    rows = {m["mission_id"]: m for m in demo.snapshot()["missions"]}
+    sim.submit_patient("C", "A", level=2, ref="p")
+    sim.submit_med(("F", "E", "B"), level=3, ref="m")
+    sim.submit_call("A", level=1, ref="call")
+    sim.step(0.2)
+    assert len(_of(sim, "MISSION_CREATED")) == 3
+    rows = {m["mission_id"]: m for m in core.snapshot(sim.now)["missions"]}
     assert rows[sim.ids["p"]]["robot"] == A and rows[sim.ids["m"]]["robot"] == B
     assert rows[sim.ids["call"]]["status"] == "QUEUED" and rows[sim.ids["call"]]["wait_reason"] == "담당 로봇 대기"
-    assert demo.moved(B)[-1].startswith("MOVE F 3")  # B is already in F
-    demo.drive(B)
-    sim.confirm(B, "m")  # B: F → E next
-    act2 = demo.t
+    # B already stands in F: it arrives there without a MOVE.
+    _until(sim, lambda: core.mission.robots[B].state == "WAIT_CONFIRM", 3)
+    assert not [c for _, r, c in sim.all_commands if r == B and c.startswith("MOVE")]
+    sim.confirm(B)
 
-    # --- 2막: 복도 반대 방향 대기 (A는 C로 내려가고 B는 E로 올라가려 함) ---------------------------
-    assert demo.moved(A)[-1].startswith("MOVE C 2")
-    demo.tick()
-    hold = demo.of("RESOURCE_HOLD", B, act2)[-1]
-    assert hold["detail"]["rule"] == "DIRECTION"
-    assert hold["detail"]["reason"] == "침상형 이송 로봇 복도 반대 방향 통행 중 → 약품 운송 로봇 복도 밖 대기"
-    assert demo.state(B) == "HOLD" and len(demo.moved(B)) == 1
-    sim.event(A, "MISSION_ACCEPTED")
-    demo.at(A, (-1.55, -1.7))
-    demo.tick()
+    # --- 2막: 두 로봇을 함께 계획: A(Level 2)는 교차로 정지선에서 B(Level 3)가 지나가길 기다림 ----------
+    act2 = sim.now
+    _until(sim, lambda: A in core.resources.held, 15)
+    wait, = _of(sim, "PLAN_WAIT", A, act2)
+    assert wait["detail"]["reason"] == "교차로: 약품 운송 로봇이 지나간 뒤" and wait["detail"]["peer"] == B
+    assert sim.robots[A].state in ("STOPPING_PAUSE", "PAUSED")
+    _until(sim, lambda: sim.robots[A].state == "MOVING" and sim.robots[A].pose[1] < -0.9, 30)
+    assert _of(sim, "PLAN_UPDATE", since=act2)
 
     # --- 3막: 침상 이탈로 A만 정지 → 운영자 재개 --------------------------------------------------
-    act3 = demo.t + 0.5
-    demo.bed = True
-    out = demo.tick()
-    assert demo.of("BED_EXIT", since=act3) and {c.robot: c.command for c in out.commands} == {A: "PAUSE"}
-    assert demo.state(A) == "SAFE_PAUSE" and demo.state(B) == "HOLD"
-    sim.event(A, "PAUSED")
-    demo.tick()
-    demo.bed = False
-    demo.tick()
-    demo.tick()
-    assert demo.state(A) == "SAFE_PAUSE"  # never resumes by itself
-    sim.cmd("RESUME_ROBOT", robot=A)
-    out = demo.tick()
-    assert {c.robot: c.command for c in out.commands} == {A: "RESUME"}
-    sim.event(A, "RESUMED")
-    demo.tick()
-    demo.at(A, (-1.7, -3.9))
-    demo.tick()
-    sim.event(A, "ARRIVED")
-    demo.tick()
-    assert demo.state(A) == "WAIT_CONFIRM"
-    assert demo.wait_move(B).startswith("MOVE E 3")  # A left the corridor: B goes up into E
-    demo.drive(B, (-1.6, -3.3), CROSSROAD, (-1.0, -2.2), via=True)
-    assert demo.state(B) == "WAIT_CONFIRM" and demo.snapshot()["robots"][B]["zone"] == "E"
+    act3 = sim.now
+    sim.bed_value = True
+    _until(sim, lambda: "BED_EXIT" in core.safety.causes[A], 3)
+    assert not core.safety.causes[B]
+    assert _of(sim, "BED_EXIT", since=act3)
+    assert [c for t, r, c in sim.all_commands if t >= act3 and c == "PAUSE"] and \
+        all(r == A for t, r, c in sim.all_commands if t >= act3 and c == "PAUSE")
+    sim.bed_value = False
+    sim.run_until(sim.now + 3.0, auto_confirm=False)
+    assert core.visible_state(A, core.mission.robots[A]) == "SAFE_PAUSE"      # never resumes by itself
+    resumed = sim.now
+    sim.resume(A)
+    _until(sim, lambda: any(t >= resumed and r == A and c == "RESUME" for t, r, c in sim.all_commands), 2)
 
-    # --- 4막: B가 복도에서 상자 → 5초 뒤 포기 → OBSTACLE → medical_box → 복도 막힘 ------------------
-    sim.confirm(B, "m")  # B: E → B (crossing the corridor, single file)
-    sim.confirm(A, "p")  # A: C → A (up the corridor)
-    act4 = demo.t
-    assert demo.wait_move(B).startswith("MOVE B 3")
-    a_moves = len(demo.moved(A))
-    sim.event(B, "MISSION_ACCEPTED")
-    demo.status(B, "NAVIGATING", destination="B", via="교차로")
-    demo.at(B, (-1.2, -2.25))  # out of the E door, the box ahead
-    for _ in range(10):        # Nav2 recovers, then gives up after about 5 s
-        demo.tick()
-    sim.event(B, "MISSION_FAILED", reason="Nav2: ABORTED")
-    demo.status(B, "OBSTACLE", destination="B", lidar_m=0.42, depth_m=0.45, captured=["depth", "rgb", "scan"],
-                image_topic="/robot2/hospital_nav/obstacle_image", robot_pose={"x": -1.2, "y": -2.25, "yaw_deg": 178.0})
-    failed_at = demo.t + 0.5
-    demo.tick()
-    assert demo.state(B) == "FAULT" and demo.of("OBSTACLE_REPORT", B)
-    assert not [c for c in demo.cards if c["created_at"] >= failed_at]  # NAV_FAILED waits for the verdict
-    sim.core.enqueue("obstacle_result", json.dumps({"status": "ok", "obstacle_present": True, "detections": [
-        {"label": "medical_box", "confidence": 0.93, "bbox": [100, 80, 300, 280]}]}), demo.t, robot=B)
-    demo.tick()
-    box, = [c for c in demo.cards if c["created_at"] >= failed_at]
-    assert box["kind"] == "BLOCKED" and box["reason"] == "의료용 상자가 길을 막고 있음 (로봇 앞 약 0.4 m)"
+    # --- 4막: B가 복도에서 상자 → Nav2 포기 → OBSTACLE → medical_box → 막힘 카드 → 치움 ----------------
+    _until(sim, lambda: core.mission.robots[A].zone == "C" and core.mission.robots[A].state == "WAIT_CONFIRM", 60)
+    sim.confirm(A)
+    _until(sim, lambda: core.mission.robots[B].zone == "E" and core.mission.robots[B].state == "WAIT_CONFIRM", 60)
+    sim.confirm(B)                                         # B: E -> B, through the crossroad
+    _until(sim, lambda: sim.robots[B].state == "MOVING" and core.config.corridor.region_of(sim.robots[B].pose)
+           == "CORRIDOR", 30, auto_confirm=True)
+    act4 = sim.now
+    assert sim.obstacle(B)
+    _until(sim, lambda: _of(sim, "OBSTACLE_REPORT", B, act4), 10, auto_confirm=True)
+    sim.obstacle_verdict(B, "medical_box")
+    _until(sim, lambda: [c for c in core.decisions.cards.values() if c["kind"] == "BLOCKED" and B in c["robots"]], 3,
+           auto_confirm=True)
+    box, = [c for c in core.decisions.cards.values() if c["kind"] == "BLOCKED" and B in c["robots"]]
+    assert box["reason"].startswith("의료용 상자가 길을 막고 있음")
     assert [o["label"] for o in box["options"]] == ["치웠음, 다시 출발", "되돌아가기", "보류"]
-    corridor = demo.snapshot()["resources"]["CORRIDOR"]
-    assert corridor["blocked"] and corridor["blocked_robots"] == [B]
-    assert {e["detail"]["kind"] for e in demo.of("OBSTACLE_RESULT", B)} == {"OBJECT"}
-    for _ in range(4):
-        demo.tick()
-        assert demo.state(A) == "HOLD" and len(demo.moved(A)) == a_moves  # A stays out of the corridor
-    sim.choose(box, "retry")
-    demo.tick()
-    assert demo.of("UNBLOCKED", B, act4) and not demo.snapshot()["resources"]["CORRIDOR"]["blocked"]
-    assert demo.wait_move(B).startswith("MOVE B 3")
-    demo.drive(B, CROSSROAD, (-2.2, -2.0), via=True)
-    assert demo.state(B) == "WAIT_CONFIRM" and demo.snapshot()["robots"][B]["zone"] == "B"
-    assert demo.wait_move(A).startswith("MOVE A 2")  # A goes up once B has left the corridor
-    demo.drive(A, (-1.7, -3.8), (-1.5, -1.0))
-    act5 = demo.t
+    assert core.resources.snapshot()["CORRIDOR"]["blocked"]
+    sim.robots[B].blocked_since = None                    # the box is taken away
+    sim.choose(box["card_id"], "retry")
+    _until(sim, lambda: core.mission.robots[B].zone == "B", 60, auto_confirm=True)
+    assert _of(sim, "UNBLOCKED", B, act4)
 
     # --- 5막: 대기 호출 자동 시작 → 두 로봇 홈 복귀 --------------------------------------------------
-    sim.confirm(B, "m")
-    demo.tick()
-    assert demo.of("MISSION_DONE", B, act5)
-    def call_row():
-        return next(m for m in demo.snapshot()["missions"] if m["mission_id"] == sim.ids["call"])
-    demo.until(lambda: call_row()["status"] == "ACTIVE", limit=2)  # the queued call replaces the home leg
-    assert call_row()["robot"] == B
-    assert demo.wait_move(B).startswith("MOVE A2 1")  # A waits for confirmation in A1
-    sim.confirm(A, "p")
-    demo.tick()
-    assert not demo.moved(A)[-1].startswith("MOVE D")  # B is arriving within the A2 approach radius
-    demo.drive(B, CROSSROAD, (-1.5, -0.8), via=True)
-    arrived = demo.of("ARRIVE", B)[-1]
-    assert arrived["detail"]["slot"] == 2 and arrived["detail"]["reason"] == "응급실(A) 2번 자리 도착"
-    sim.confirm(B, "call")
-    assert demo.wait_move(B).startswith("MOVE F 1")
-    # B leaves the blocking second slot first. Drive the two home legs as their MOVEs are issued.
-    sim.event(B, "MISSION_ACCEPTED")
-    demo.tick()
-    demo.at(B, (-1.5, -1.0))
-    demo.until(lambda: demo.moved(A)[-1].startswith("MOVE D 1"))
-    demo.drive(A, (-1.0, 0.5))
-    demo.at(B, (-1.7, -4.3))
-    demo.tick()
-    sim.event(B, "ARRIVED")
-    demo.tick()
-    for robot, zone in ((A, "D"), (B, "F")):
-        assert demo.state(robot) == "IDLE" and demo.snapshot()["robots"][robot]["zone"] == zone
-    done = {m["mission_id"] for m in demo.snapshot()["missions"] if m["status"] == "DONE"}
-    assert done == {sim.ids["p"], sim.ids["m"], sim.ids["call"]}
-    kinds = {e["type"] for e in demo.events}
-    assert {"BED_EXIT", "OBSTACLE_REPORT", "OBSTACLE_RESULT", "BLOCKED", "UNBLOCKED", "CARD_OPEN", "CARD_CLOSED",
-            "RESOURCE_HOLD", "MISSION_DONE"} <= kinds
-    assert not {"DEADLOCK_DETECTED", "CORRIDOR_YIELD_START", "STALL_LONG", "PROXIMITY_STOP"} & kinds
+    _until(sim, lambda: next(m for m in core.snapshot(sim.now)["missions"] if m["mission_id"] == sim.ids["call"])
+           ["status"] == "ACTIVE", 60, auto_confirm=True)
+    _until(sim, lambda: all(u.job is None and not u.queue for u in core.mission.robots.values()), 240, auto_confirm=True)
+    assert core.mission.robots[A].zone == "D" and core.mission.robots[B].zone == "F"
+    assert {e["detail"]["mission_type"] for e in _of(sim, "MISSION_CREATED")} == {"PATIENT_TRANSPORT", "MED_ROUND", "CALL"}
+    assert len(_of(sim, "MISSION_DONE")) >= 3
+    assert not _of(sim, "PROXIMITY_STOP")

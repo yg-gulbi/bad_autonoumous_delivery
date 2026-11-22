@@ -37,6 +37,7 @@ class Move:
     via_passed: bool = False      # VIA_PASSED received for this move
     wire_slot: int | None = None  # slot the last MOVE asked for (1 when it carried no number); None for DOCK
     arrival: dict | None = None   # 4K: a COMPLETE STATE for this move, used if no ARRIVED comes in the same batch
+    ending: dict | None = None    # a FAILED STATE for this move, used if no MISSION_FAILED comes in the same batch
 
 
 def number(value):
@@ -73,12 +74,20 @@ class RobotProtocol:
         # whether more than control_retries resends went unanswered (operator card).
         self.pause_sends = 0
         self.pause_sent_at = None
+        self.resume_sent_at = None
         self.stop_unconfirmed = False
+        self.command_at = None  # last MOVE/DOCK/RESUME sent (PART 04 may hold its STATE while starting Nav2)
         self.retired = set()
         self.slots = False  # STATE has carried a "slot" key at least once (4J PART 04)
 
     def online(self, now):
-        return now - self.state_at <= self.policy.link_timeout_s
+        """A STATE within link_timeout_s. After a MOVE, DOCK or RESUME and until the next STATE, PART 04 may be
+        inside _go() -> nav.send_pose() -> wait_for_server (up to 5 s, holding its lock, no STATE): the robot
+        has not started yet, so the link counts as lost only after link_timeout_s + command_grace_s."""
+        limit = self.policy.link_timeout_s
+        if self.command_at is not None and self.command_at >= self.state_at:
+            limit += self.policy.command_grace_s
+        return now - self.state_at <= limit
 
     def update_pose(self, xy, stamp):
         if (isinstance(xy, dict) and number(xy.get("x")) is not None
@@ -91,6 +100,7 @@ class RobotProtocol:
             self.retired.add(self.move.remote_id)
         self.move = None
         self.control_sent = None
+        self.resume_sent_at = None
 
     def cancel(self, *, home=False):
         self.home_cancel = home
@@ -103,6 +113,7 @@ class RobotProtocol:
         else:
             self.cancel_id = self.remote_id
         self.control_sent = None
+        self.resume_sent_at = None
 
     def go(self, leg_id, zone, level, slot=None):
         if self.state in {"PAUSED", "STOPPING_PAUSE", "STOPPING_CANCELED"} and not self.cancel_wait:
@@ -162,12 +173,18 @@ class RobotProtocol:
             if key in data:
                 setattr(self, attr, number(data[key]))
 
-    def _canceled(self, remote):
+    def _canceled(self, remote, stamp=None):
         if self.cancel_wait and (self.cancel_id is None or remote == self.cancel_id):
             if remote:
                 self.retired.add(remote)
                 if self.move and self.move.remote_id == remote:
                     self.move.finished = True
+            if (self.cancel_unaccepted and self.move and not self.move.remote_id and stamp is not None
+                    and self.cancel_sent_at is not None and stamp > self.cancel_sent_at):
+                # The MOVE was never accepted (e.g. lost in a link drop) and PART 04 reports idle after the
+                # CANCEL: that MOVE is over too. Before, it was sent again after accept_timeout_s, and a PLAN robot
+                # without a mission waited for it forever (4O follow-up 3).
+                self.move.finished = True
             self.cancel_wait = False
             self.cancel_unaccepted = False
             self.cancel_sent_at = self.cancel_id = self.control_sent = None
@@ -204,11 +221,19 @@ class RobotProtocol:
                 at_home = state == "COMPLETE" and (not docking or (remote and remote == self.move.remote_id
                                                                    and data.get("docked") is True))
                 return {"event": "CANCEL_CONFIRMED", "at_home": bool(at_home)}
-            if state == "CANCELED" and self._canceled(remote):
+            if state == "CANCELED" and self._canceled(remote, stamp):
                 return {"event": "CANCEL_CONFIRMED"}
             if (self.cancel_unaccepted and self.cancel_sent_at is not None and stamp > self.cancel_sent_at
-                    and state in DONE and self._canceled(remote)):
+                    and state in DONE and self._canceled(remote, stamp)):
                 # Legacy firmware silently ignores both an invalid MOVE and CANCEL while idle.
+                self.state, self.remote_id = state, remote
+                return {"event": "CANCEL_CONFIRMED"}
+            if (self.cancel_wait and self.cancel_sent_at is not None and stamp > self.cancel_sent_at
+                    and state in ("COMPLETE", "FAILED") and remote is not None and remote == self.cancel_id
+                    and self._canceled(remote)):
+                # The mission the CANCEL was for has ended on its own and its end report was lost (link drop):
+                # PART 04 ignores a CANCEL with nothing running, so nothing is left to cancel.
+                self._telemetry(data, stamp)
                 self.state, self.remote_id = state, remote
                 return {"event": "CANCEL_CONFIRMED"}
             if self.move and self.move.remote_id and remote != self.move.remote_id:
@@ -238,6 +263,12 @@ class RobotProtocol:
                 # The STATUS ARRIVED may have been lost. settle() uses this only if it did not come.
                 move.arrival = {"event": "ARRIVED", "destination": move.zone, "slot": slot,
                                 "mission_id": remote, "from_state": True}
+            if (move and not move.finished and remote and remote == move.remote_id and state == "FAILED"
+                    and not self.cancel_wait):
+                # The STATUS MISSION_FAILED may have been lost (it came during a link drop): without it the mission
+                # stayed "moving" for ever while PART 04 had given up (4O random seed 235). As 4K for ARRIVED.
+                move.ending = {"event": "MISSION_FAILED", "mission_id": remote, "from_state": True,
+                               "reason": str(data.get("reason") or "STATE FAILED") + " (상태 보고로 확인)"}
             if inferred_accept:
                 return {"event": "MISSION_ACCEPTED", "destination": move.zone, "mission_id": remote}
             if state not in STATES and state not in self.warned_states:
@@ -321,6 +352,9 @@ class RobotProtocol:
         if move and move.arrival and not move.finished:
             move.finished = True
             return dict(move.arrival)
+        if move and move.ending and not move.finished:
+            move.finished = True
+            return dict(move.ending)
         return None
 
     def resend_pause(self):
@@ -350,27 +384,47 @@ class RobotProtocol:
         if ((state == "PAUSED" and self.control_sent == "PAUSE")
                 or (state == "MOVING" and self.control_sent == "RESUME")):
             self.control_sent = None
+            self.resume_sent_at = None
 
-    def step(self, now, *, stop=False, resume=False):
-        """Produce at most one wire command and an optional acceptance failure."""
+    def step(self, now, *, stop=False, resume=False, hold=False):
+        """Produce at most one wire command and an optional acceptance failure. ``hold``: no MOVE or DOCK
+        (first or resent) goes out now; the robot waits for its traffic permission."""
         if not self.online(now):
             return None, None
         if self.cancel_wait:
-            if self.control_sent != "CANCEL" and self.state != "STOPPING_CANCELED":
+            # An unanswered RESUME or CANCEL is sent again after accept_timeout_s (4O).
+            cancel_retry = (
+                self.control_sent == "CANCEL"
+                and self.cancel_sent_at is not None
+                and self.state_at > self.cancel_sent_at
+                and now - self.cancel_sent_at >= self.policy.accept_timeout_s
+            )
+            if (self.control_sent != "CANCEL" or cancel_retry) and self.state != "STOPPING_CANCELED":
                 self.control_sent = "CANCEL"
                 self.cancel_sent_at = now
                 return "CANCEL", None
             return None, None
         move = self.move
         if stop:
+            if self.control_sent == "RESUME":
+                self.control_sent = None
+                self.resume_sent_at = None
             return self._pause(now), None
         self.pause_sends, self.stop_unconfirmed = 0, False
-        if resume and self.state == "PAUSED" and self.control_sent != "RESUME":
+        resume_retry = (
+            self.control_sent == "RESUME"
+            and self.resume_sent_at is not None
+            and self.state_at > self.resume_sent_at
+            and now - self.resume_sent_at >= self.policy.accept_timeout_s
+        )
+        if resume and self.state == "PAUSED" and (self.control_sent != "RESUME" or resume_retry):
             self.control_sent = "RESUME"
+            self.resume_sent_at = self.command_at = now
             return "RESUME", None
         if self.state == "MOVING" and self.control_sent == "RESUME":
             self.control_sent = None
-        if not move or move.remote_id or move.finished:
+            self.resume_sent_at = None
+        if not move or move.remote_id or move.finished or hold:
             return None, None
         if move.sent_at is not None and now - move.sent_at < self.policy.accept_timeout_s:
             return None, None
@@ -382,12 +436,12 @@ class RobotProtocol:
             return None, f"현재 PART 04 상태 {self.state}에서는 새 이동 명령을 보낼 수 없습니다."
         if move.zone == "DOCK":
             move.attempts += 1
-            move.sent_at = now
+            move.sent_at = self.command_at = now
             move.wire_slot = None
             return "DOCK", None
         move.tagged = self.tagged if self.tagged is not None else move.attempts == 0
         move.attempts += 1
-        move.sent_at = now
+        move.sent_at = self.command_at = now
         suffix = f" id={move.leg_id}" if move.tagged else ""
         # A missing slot number means slot 1. Earlier PART 04 rejects "F2" as a syntax error.
         room = f"{move.zone}2" if move.slot == 2 and self.slots else move.zone

@@ -53,8 +53,8 @@ def approach_d(sim, distance):
     sim.frames[MED]["pose"] = sim.pose("A")
     sim.frames[BED]["pose"] = sim.pose((-1.01, .68))
     sim.cmd("GO_ZONE", robot=MED, zone="F")
-    sim.tick(0)
-    assert sent(sim.tick(1))[MED].startswith("MOVE F")
+    assert sent(sim.tick(0))[MED].startswith("MOVE F")   # the plan's MOVE, in the first tick
+    sim.tick(1)
     sim.event(MED, "MISSION_ACCEPTED")
     sim.frames[MED]["pose"] = sim.pose((-1.01, .68 - distance))
     return sim.tick(2)
@@ -77,85 +77,6 @@ def test_idle_peer_is_not_a_candidate_for_first_departure(sim):
     assert not out.acks[-1]["ok"] and not out.commands
 
 
-@pytest.mark.parametrize("approaches_again", [True, False])
-def test_self_first_breaks_follow_proximity_wait(sim, approaches_again):
-    assert sent(approach_d(sim, .40)) == {MED: "PAUSE"}
-    sim.event(MED, "PAUSED")
-    sim.cmd("GO_ZONE", robot=BED, zone="C")
-    assert not sim.tick(3).commands
-    assert not sim.tick(4).commands and sim.core.resources.following(BED)
-    card, = sim.tick(12).cards
-    assert card["context"] == "PROXIMITY"
-    near = sim.core.snapshot(12)["robots"][MED]["proximity"]
-    assert near["self_first"] and not near["peer_first"]
-    sim.choose(card, "peer_first")
-    out = sim.tick(12.5)
-    assert not out.acks[-1]["ok"] and not out.commands
-    sim.choose(card, "self_first")
-    assert sent(sim.tick(13)) == {MED: "RESUME"}
-    sim.event(MED, "RESUMED")
-    sim.frames[MED]["pose"] = sim.pose((-1.01, -.03))
-    assert not sim.tick(14).commands
-    if approaches_again:
-        sim.frames[MED]["pose"] = sim.pose((-1.01, .02))  # 0.71 -> 0.66, still above stop distance
-        assert sent(sim.tick(15)) == {MED: "PAUSE"}
-    else:
-        sim.frames[MED]["pose"] = sim.pose((-1.5, -2.4))  # clears proximity and normal following gap
-        assert sent(sim.tick(15))[BED].startswith("MOVE C")
-        assert not sim.core.collision.near
-
-
-@pytest.mark.parametrize("level,when", [(1, 30), (3, 0)])
-def test_f1_exit_wait_and_f2_can_leave(sim, level, when):
-    sim.frames[BED]["pose"] = sim.pose(sim.cfg.slot_point("F", 2))
-    sim.call("f1", "D", level=level)
-    out = sim.tick(0)
-    assert not out.commands and sim.core.collision.zone[MED].exit_zone == "F"
-    if when:
-        assert not out.cards and not sim.tick(when - .01).cards
-        out = sim.tick(when)
-    card, = out.cards
-    assert card["context"] == "EXIT" and [o["id"] for o in card["options"]] == ["retry", "depart", "hold"]
-    sim.cmd("GO_ZONE", robot=BED, zone="C")
-    assert sent(sim.tick(when+1))[BED].startswith("MOVE C")
-    sim.event(BED, "MISSION_ACCEPTED")
-    assert MED not in sent(sim.tick(when+2))  # still physically at F2
-    sim.frames[BED]["pose"] = sim.pose("C")
-    sim.event(BED, "ARRIVED")
-    assert sent(sim.tick(when+3))[MED].startswith("MOVE D")
-    assert not sim.core.collision.zone and not sim.core.decisions.cards
-
-
-def test_exit_override_keeps_proximity_before_the_first_move(sim):
-    sim.frames[MED]["pose"] = sim.pose((-1.40, -5.20))
-    sim.frames[BED]["pose"] = sim.pose((-1.35, -4.80))
-    sim.call("f1", "D", level=3)
-    card, = sim.tick(0).cards
-    sim.choose(card, "depart")
-    assert not sim.tick(1).commands
-    assert not sim.tick(2).commands
-    assert MED not in sim.core.collision.zone and MED in sim.core.collision.near
-    sim.frames[BED]["pose"] = sim.pose("C")
-    assert sent(sim.tick(3))[MED].startswith("MOVE D")
-
-
-def test_exit_retry_then_hold_at_a(sim):
-    assert sim.cfg.exit_blocked_zones == {"A", "C", "F"}
-    sim.frames[MED]["pose"] = sim.pose("A")
-    sim.frames[BED]["pose"] = sim.pose(sim.cfg.slot_point("A", 2))
-    sim.call("a1", "F", level=3)
-    card, = sim.tick(0).cards
-    assert card["context"] == "EXIT"
-    sim.choose(card, "retry")
-    assert not sim.tick(1).commands
-    assert not sim.tick(30).cards
-    again, = sim.tick(31).cards
-    sim.choose(again, "hold")
-    assert not sim.tick(32).commands
-    sim.frames[BED]["pose"] = sim.pose("D")
-    assert not sim.tick(33).commands and sim.state(MED) == "FAULT"
-
-
 def test_slot_stop_only_for_parked_peer_without_active_leg(sim):
     sim.frames[MED]["pose"] = sim.pose("A")
     sim.cmd("GO_ZONE", robot=BED, zone="C")
@@ -166,7 +87,22 @@ def test_slot_stop_only_for_parked_peer_without_active_leg(sim):
     sim.event(BED, "MISSION_ACCEPTED")
     sim.event(BED, "PAUSED")
     sim.tick(2)
-    assert sim.core.collision.stop_distance(MED, BED, 2) == sim.cfg.safety.slot_stop_m  # MED is parked at A
+    assert sim.core.collision.stop_distance(MED, BED) == sim.cfg.safety.slot_stop_m  # MED is parked at A
     sim.frames[MED]["pose"] = sim.pose((-1.5, -2.4))
     sim.tick(3)
-    assert sim.core.collision.stop_distance(MED, BED, 3) == sim.cfg.safety.proximity_stop_m
+    assert sim.core.collision.stop_distance(MED, BED) == sim.cfg.safety.proximity_stop_m
+
+
+def test_passing_a_parked_robot_whose_link_drops_keeps_the_slot_distance(sim):
+    """4O 정리 (clearance.py): robot_b passes robot_a, parked at D1, at 0.5 m (between slot_stop_m 0.45 and
+    proximity_stop_m 0.6, what the plan allows) and robot_a's link drops. It stands still all the same: robot_b is
+    not stopped (before: 0.6 m once robot_a was offline, and no release until 0.9 m; random seeds 54 and 248)."""
+    out = approach_d(sim, .50)
+    assert not out.commands and not sim.core.collision.near
+    del sim.frames[BED]                                   # robot_a's STATE stops
+    for t in (3, 4, 5.5, 6):
+        out = sim.tick(t)
+        assert MED not in sent(out), t
+    assert not sim.core.link_ok[BED] and not sim.core.collision.near
+    assert sim.core.collision.stop_distance(MED, BED) == sim.cfg.safety.slot_stop_m
+    assert sim.state(MED) == "MOVING"

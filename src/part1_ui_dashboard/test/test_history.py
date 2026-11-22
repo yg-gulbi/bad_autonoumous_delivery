@@ -32,13 +32,14 @@ def journal(tmp_path):
     jobs.append(call)
     events = [event("CONFIRM_STEP",i,"robot_a",jobs[0].id,reason="OK",by="간호사",destination="A") for i in range(55)]
     events.extend([
-        event("DEADLOCK_DETECTED",56,card_id="K-1",reason="교착"),
-        event("CARD_OPEN",56,card={"card_id":"K-1","kind":"DEADLOCK","robots":["robot_a","robot_b"],
-            "title":"교착 해소","reason":"방을 비워야 합니다","created_at":56,"options":[{"id":"yield_a","label":"Robot A 양보"}]}),
-        event("CARD_CLOSED",57,card_id="K-1",reason="selected",choice="yield_a",by="책임자"),
-        event("YIELD_START",57,"robot_a",source_room="ROOM_B",detected_at=56),
-        event("RESOURCE_RELEASE",61,"robot_a",resources=["ROOM_B"]),
-        event("RESOURCE_HOLD",62,reason="복도 대기"),event("RESOURCE_HOLD",63,reason="복도 대기"),
+        event("CARD_OPEN",56,card={"card_id":"K-1","kind":"BLOCKED","robots":["robot_a"],
+            "title":"경로 막힘","reason":"Robot B과 너무 가까움 → 정지","created_at":56,
+            "options":[{"id":"self_first","label":"이 로봇 먼저 보내기"}]}),
+        event("CARD_CLOSED",57,card_id="K-1",reason="selected",choice="self_first",by="책임자"),
+        event("RESOURCE_RELEASE",61,"robot_a",resources=["DOOR_B"]),
+        event("PLAN_WAIT",62,"robot_a","M-0055",reason="교차로: 약품 운송 로봇이 지나간 뒤"),
+        event("PLAN_WAIT",62.5,"robot_a","M-0055",reason="교차로: 약품 운송 로봇이 지나간 뒤"),
+        event("PLAN_WAIT",63,"robot_b","M-0056",reason="교차로: 침상형 이송 로봇이 지나간 뒤"),
         event("PAUSE",64,reason="수동 정지",by="책임자")])
     store.save(jobs, events)
     app = create_app(Feed(),{"names":{"A":"A 구역"}},None,None,db_path=path)
@@ -83,12 +84,12 @@ def test_38_events_cards_period_kpi_and_csv(journal):
     rows = list(csv.reader(StringIO(export.data.decode("utf-8-sig"))))
     assert export.mimetype == "text/csv" and len(rows) == 56 and rows[1][1:] == ["CONFIRM_STEP","robot_a","M-0001","간호사","확인 완료"]
     card, = client.get("/api/cards?from=56&to=56").get_json()["items"]
-    assert (card["title"],card["by"],card["choice_label"],card["close_reason"]) == ("교착 해소","책임자","침상형 이송 로봇 양보","selected")
+    assert (card["title"],card["by"],card["choice_label"],card["close_reason"]) == ("경로 막힘","책임자","이 로봇 먼저 보내기","selected")
     assert client.get("/api/cards?to=55").get_json()["items"] == []
-    assert client.get("/api/kpi?from=55&to=64").get_json() == {
-        "hold_count":2,"deadlock_count":1,"deadlock_resolve_s_avg":5.0,"pause_count":1}
-    assert client.get("/api/kpi?from=57").get_json()["deadlock_resolve_s_avg"] is None
-    assert client.get("/api/kpi?to=60").get_json()["deadlock_resolve_s_avg"] is None
+    # A wait counts once per leg (two PLAN_WAIT of the same leg are one), every PAUSE counts (core.store.Metrics).
+    assert client.get("/api/kpi?from=55&to=64").get_json() == {"hold_count":2,"pause_count":1}
+    assert client.get("/api/kpi?from=63").get_json() == {"hold_count":1,"pause_count":1}
+    assert client.get("/api/kpi?to=60").get_json() == {"hold_count":0,"pause_count":0}
 
 
 def test_38_read_only_and_missing_file(journal, tmp_path):

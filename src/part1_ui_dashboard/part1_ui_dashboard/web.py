@@ -34,6 +34,22 @@ class Photos:
             return self._latest.get((robot, kind))
 
 
+def merge_repeat(events, event):
+    """BED_MONITOR_WARN with a warning text already in the live record: one line with its count (D-51, the 11/21
+    record had the same webcam warning 1,328 times). The SSE stream still carries every event."""
+    if event["type"] != "BED_MONITOR_WARN":
+        return False
+    reason = event["detail"].get("reason")
+    for old in reversed(events):
+        if old["type"] == event["type"] and old["detail"].get("reason") == reason:
+            events.remove(old)
+            detail = {**event["detail"], "repeat": old["detail"].get("repeat", 1) + event["detail"].get("repeat", 1),
+                      "first_ts": old["detail"].get("first_ts", old["ts"])}
+            events.append({**event, "detail": detail})
+            return True
+    return False
+
+
 class Feed:
     def __init__(self, limit=50):
         self.changed = Condition()
@@ -64,7 +80,8 @@ class Feed:
                     return
                 self.cards[data["card_id"]] = data
             elif kind == "event":
-                self.events.append(data)
+                if not merge_repeat(self.events, data):
+                    self.events.append(data)
                 if data["type"] == "CARD_CLOSED":
                     card_id = data["detail"].get("card_id")
                     self.cards.pop(card_id, None)
@@ -117,8 +134,10 @@ def create_app(feed, geometry, publish, trigger, *, meta=None, image=None, dev_t
     app = Flask(__name__, static_folder="static")
     app.register_blueprint(history_api(db_path, geometry.get("names", {}), geometry.get("robot_names")))
     robots = tuple(geometry.get("robot_names", schemas.ROBOT_IDS))
+    seg_resources = tuple(geometry.get("segment_labels", ()))
+    allowed_resources = tuple(dict.fromkeys((*schemas.RESOURCES, *seg_resources))) if seg_resources else None
     routes = {"mission": ("/ui/mission_req", ui_api.mission, "req_id"),
-              "command": ("/ui/operator_cmd", lambda form: ui_api.command(form, robots=robots), "cmd_id"),
+              "command": ("/ui/operator_cmd", lambda form: ui_api.command(form, robots=robots, resources=allowed_resources), "cmd_id"),
               "decision": ("/ui/decision", ui_api.decision, "card_id")}
 
     @app.get("/")

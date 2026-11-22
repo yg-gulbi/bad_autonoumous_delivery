@@ -14,7 +14,8 @@ from werkzeug.serving import make_server
 import yaml
 
 from part3_fleet_manager.core import schemas
-from part3_fleet_manager.core.config import read_config_yaml, zone_display_name
+from part3_fleet_manager.core.config import config_from_dict, read_config_yaml, zone_display_name
+from part3_fleet_manager.core.segments import SegmentMap
 from . import ui_api
 from .web import Feed, Photos, create_app
 
@@ -48,7 +49,24 @@ class UIServer(Node):
         self.testing = self.dev_tools and self.demo and self.mode != "live"
         self.names = {z: zone_display_name(z, data.get("name")) for z, data in cfg["zones"].items()}
         self.robot_names = {robot: unit["label"] for robot, unit in cfg["robots"].items()}
-        self.track = None
+        # The segment map is drawn only when fleet.yaml has one (LEGACY copies without traffic.segments still start).
+        fleet_cfg = config_from_dict(cfg)
+        seg_map = SegmentMap(fleet_cfg) if fleet_cfg.traffic.segments and fleet_cfg.traffic.links else None
+        self.segment_labels = {name: seg.label for name, seg in seg_map.segments.items()} if seg_map else {}
+        self.segments = {} if seg_map is None else {
+            name: {
+                "kind": seg.kind,
+                "label": seg.label,
+                "shape": "polygon" if seg.spec.polygon else ("circle" if seg.spec.circle else "region"),
+                "is_slot": seg.is_slot,
+                "polygon": [list(p) for p in seg.spec.polygon] if seg.spec.polygon else None,
+                "center": [seg.spec.circle[0], seg.spec.circle[1]] if seg.spec.circle else None,
+                "radius": seg.spec.circle[2] if seg.spec.circle else None,
+            }
+            for name, seg in seg_map.segments.items()
+            if not seg.is_shared
+        }
+
         map_path = Path(self.map_yaml).expanduser()
         if not map_path.is_absolute():
             roots = [Path.cwd(), *Path.cwd().parents, *Path(fleet_path).resolve().parents, *Path(__file__).resolve().parents]
@@ -59,8 +77,9 @@ class UIServer(Node):
                                                options.get("map_deskew", "auto"),
                                                options.get("map_padding_m", .25), plan)
         self.geometry.update(names=self.names, robot_names=self.robot_names,
+                             segments=self.segments, segment_labels=self.segment_labels,
                              event_labels={t: text.format(robot="", zone="정류장", resource="구간", kind="임무").strip(" ·")
-                                           for t, text in ui_api.EVENTS.items()}, event_types=sorted(ui_api.EVENTS), states=ui_api.STATES, kinds=ui_api.KINDS, rules=ui_api.RULES,
+                                           for t, text in ui_api.EVENTS.items()}, event_types=sorted(ui_api.EVENTS), states=ui_api.STATES, kinds=ui_api.KINDS,
                              dev_tools=self.testing, mode=self.mode, demo=self.demo, ack_timeout_s=options["ack_timeout_s"])
         self.outputs = {topic: self.create_publisher(String, topic, 10)
                         for topic in ("/ui/mission_req", "/ui/operator_cmd", "/ui/decision")}
@@ -98,13 +117,9 @@ class UIServer(Node):
                     data["fake_bed_mode"] = self.bed_mode
                 data["demo"] = self.detected_demo
                 data["summary"] = ui_api.summary(data)
-                self.track, checks = ui_api.resume_checks(data, self.track)
-                data["resume_track"], data["resume_checks"] = self.track, checks
-                if checks and all(checks):
-                    self.track = None
             elif kind == "event":
                 card = self.feed.cards.get(data["detail"].get("card_id"))
-                data = ui_api.present_event(data, self.names, self.robot_names, card)
+                data = ui_api.present_event(data, self.names, self.robot_names, card, self.segment_labels)
             self.feed.receive(kind, data)
         except ValueError as exc:
             self.get_logger().warning(str(exc), throttle_duration_sec=2.0)

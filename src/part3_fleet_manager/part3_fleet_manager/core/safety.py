@@ -34,16 +34,34 @@ class BedMonitor:
         self.policy, self.targets = policy, targets
         self.record, self.decisions = record, decisions
         self.samples = deque()
-        self.state, self.warning = "NEVER", None
+        self.enabled = policy.enabled
+        self.state, self.warning = ("NEVER" if self.enabled else "OFF"), None
         self.since = self.first_rx = self.last_rx = self.recovery_start = None
         self.rate_ready = None
         self.outage = self.bypass = False
         self.card_id = None
 
     def blocked(self, now):
+        if not self.enabled:
+            return False
         overdue = (self.policy.require_at_start if self.last_rx is None
                    else now - self.last_rx >= self.policy.lost_s)
         return not self.bypass and (self.outage or overdue)
+
+    def switch(self, enabled, now):
+        """Monitoring on or off (D-51). Off: the webcam samples are still counted, but no WARN, LOST or BACK is
+        recorded, no card opens and nothing is blocked. On again: judged afresh from the next tick, as at start."""
+        self.enabled = enabled
+        self.outage = self.bypass = False
+        self.recovery_start = None
+        if self.card_id is not None:
+            self.decisions.close(self.card_id, now, "resolved")
+            self.card_id = None
+        if enabled:
+            # since=None: the next tick decides as at start (NEVER -> LOST card with require_at_start, a gap -> LOST).
+            self.state, self.warning, self.since = ("NEVER" if self.last_rx is None else "OK"), None, None
+        else:
+            self.state, self.warning, self.since = "OFF", None, now
 
     def transition(self, state, now, warning=None):
         if (state, warning) == (self.state, self.warning) and self.since is not None:
@@ -65,6 +83,8 @@ class BedMonitor:
 
     def tick(self, now):
         self.trim(now)
+        if not self.enabled:
+            return
         if self.last_rx is None:
             if self.transition("NEVER", now):
                 if self.policy.require_at_start:
@@ -90,6 +110,8 @@ class BedMonitor:
             self.rate_ready = stamp + self.window
         self.last_rx = stamp
         self.samples.append(stamp)
+        if not self.enabled:
+            return
         if self.outage:
             self.transition("LOST", stamp)
             if self.recovery_start is None:
@@ -125,6 +147,7 @@ class BedMonitor:
     def snapshot(self, now):
         return {"state": self.state, "since": now if self.since is None else self.since, "last_rx": self.last_rx,
                 "rate_hz": round(self.rate(now), 1), "bypass": self.bypass, "warning": self.warning,
+                "enabled": self.enabled,
                 "require_at_start": self.policy.require_at_start, "targets": list(self.targets),
                 "card": self.decisions.cards.get(self.card_id)}
 
@@ -149,7 +172,7 @@ class Safety:
             self.record("PAUSE", now, reason, robot=robot, cause=cause, by=by)
 
     def protect(self, robot, now):
-        if robot in self.targets:
+        if robot in self.targets and self.monitor.enabled:
             if self.bed_exit:
                 self.pause(robot, "BED_EXIT", now)
             if self.monitor.blocked(now):
@@ -165,9 +188,26 @@ class Safety:
         self.exit_signal = self.exit_signal.after_sample(value, stamp, self.monitor.policy)
         if self.bed_exit != previous:
             self.since = stamp
-            self.record("BED_EXIT" if value else "BED_EXIT_CLEAR", stamp, "침상 이탈" if value else "침상 정상")
+            if self.monitor.enabled:      # off: the value is kept for later, but it is not an alarm (D-51)
+                self.record("BED_EXIT" if value else "BED_EXIT_CLEAR", stamp, "침상 이탈" if value else "침상 정상")
         for robot in active:
             self.protect(robot, stamp)
+
+    def set_monitor(self, enabled, now, *, by=None):
+        """BED_MONITOR_SET (D-51). Turning it off closes the webcam card but releases no stop: a robot stopped
+        for a bed exit or a webcam loss stays stopped until the operator resumes it (now allowed). Turning it on
+        again judges the webcam and the bed as at start; a bed exit at that moment stops the targets."""
+        if enabled == self.monitor.enabled:
+            return
+        self.monitor.switch(enabled, now)
+        if enabled:
+            self.record("BED_MONITOR_ENABLED", now, "침상 감시를 켰습니다.", by=by, targets=list(self.targets))
+            if self.bed_exit:
+                self.since = now
+                self.record("BED_EXIT", now, "침상 이탈")
+        else:
+            self.record("BED_MONITOR_DISABLED", now, "침상 감시를 껐습니다. 침상 이탈과 감시 끊김으로 로봇을 세우지 않습니다.",
+                        by=by, targets=list(self.targets))
 
     def hazards(self, robot, detections, now, poses):
         """Consume normalized hazard names or mappings from the transport adapter."""
@@ -204,6 +244,8 @@ class Safety:
             self.record("RESUME", now, "운영자 재개", robot=robot, by=by)
 
     def denial(self, robots, now, bed_value):
+        if not self.monitor.enabled:
+            return None
         if self.monitor.blocked(now) and any(r in self.targets for r in robots):
             return MONITOR_DENIED
         return EXIT_DENIED if bed_value else None

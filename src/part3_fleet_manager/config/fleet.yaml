@@ -23,6 +23,7 @@ robot_link:
   link_timeout_s: 3.0           # STATE가 1 Hz라서 3초
   control_retry_s: 1.5          # PAUSE 뒤 이 시간이 지나도 STATE가 MOVING이면 PAUSE를 다시 보냄 (STATE 1 Hz, D-32)
   control_retries: 3            # 다시 보낸 횟수가 이 값을 넘으면 "정지 미확인" 카드 (D-32)
+  command_grace_s: 5.0          # MOVE·RESUME 뒤 첫 STATE까지는 끊김 판정을 link_timeout_s + 이 값으로 (PART 04 wait_for_server 최대 5초, D-53)
 
 zones:                          # PART 04 goal_manager.py SLOTS와 같은 값. x, y = 1번 자리, slot2 = 2번 자리 (D-30)
   A: {x: -2.383, y:  1.027, slot2: {x: -2.458, y:  0.282}, slot2_blocks_exit: true, name: "응급실"}   # 1번 안쪽, 2번 입구 쪽
@@ -33,13 +34,8 @@ zones:                          # PART 04 goal_manager.py SLOTS와 같은 값. x
   F: {x: -1.400, y: -5.400, slot2: {x: -1.350, y: -4.700}, slot2_blocks_exit: true, name: "조제실"}
 
 corridor:
-  mode: DIRECTIONAL
-  follow_gap_m: 1.0              # 복도 축 간격이 이 값 이하면 뒤 로봇 정지
-  follow_resume_m: 1.4           # 이 간격 이상으로 벌어져야 후행 재개
-  yield_enabled: true
-  yield_trigger_m: 1.2
-  yield_release_m: 0.5
-  yield_timeout_s: 10.0
+  follow_gap_m: 1.0              # 같은 길·같은 방향 뒤따르기: 앞 로봇이 달리는 동안 지킬 간격 (D-59)
+  follow_resume_m: 1.4           # 정지선에서 기다리던 뒤 로봇은 이 간격이 생겨야 다시 출발 (D-59)
   include_boundary: true        # 통로 경계의 위치도 통로로 판정
   polygon: [[-1.89, -0.51], [-1.00, -0.58], [-1.26, -4.23], [-2.16, -4.17]]   # [TL, TR, BR, BL]. 단계 3D-2: 맵의 통로 벽 안쪽 면에 맞춤 (폭 0.90 m)
   # 이전 값(손으로 잡음, 벽보다 약 1.3° 틀어짐): [[-1.79, -0.50], [-0.95, -0.60], [-1.24, -4.25], [-2.19, -4.15]]
@@ -50,20 +46,11 @@ corridor:
     ROOM_E: {x: -1.08, y: -2.25}
   crossroad: {x: -1.500, y: -2.180}   # PART 04 goal_manager.CROSSROAD. B·E 방을 드나들 때 먼저 서는 점
   crossroad_clear_m: 0.6         # 교차로 중심에서 이 거리 안이면 교차로를 쓰는 중
-  room_mode: DOOR                # DOOR(문·교차로 한 대씩, 방 안 두 대) | ROOM(방 하나에 한 대, 4J 이전)
 
 resources:
-  zone_arrival_clear_m: 2.0      # 출입 순서를 확인하는 각 자리 중심 반경
-  zone_occupied_m: 0.6           # 목적지 중심에서 다른 로봇까지의 점유 반경
-  clear_margin_m: 0.20
-  clear_hold_s: 1.0
-  decision_window_s: 1.0
-  aging_s: 0                    # 0 = 끔
-
-deadlock:
-  confirm_s: 2.0
-  card_timeout_s: 20
-  yield_zones: {ROOM_B: D, ROOM_E: F}
+  zone_occupied_m: 0.6           # 자리 중심에서 이 거리 안이면 그 자리에 선 것으로 본다
+  clear_margin_m: 0.20           # 칸을 지나간 로봇이 칸 밖으로 이만큼 벗어나고
+  clear_hold_s: 1.0              # 이 시간 동안 유지되면 칸을 놓는다
 
 stall:
   window_s: 5.0
@@ -101,15 +88,71 @@ safety:
     recover_s: 2.0
     min_rate_hz: 10.0
     require_at_start: true
+    enabled: true                # false = 침상 감시 꺼짐: 침상 이탈·감시 끊김으로 로봇을 세우거나 경보를 띄우지 않음 (화면 스위치, 실행 인자 bed_monitor_enabled:=, D-51)
   bed_exit_pause_targets: [robot_a]   # 팀 확정 필요: [robot_a] 또는 [robot_a, robot_b]
 
 mission:
   return_home: true
   return_interruptible: true
-  return_level: 1               # 완료한 임무의 응급도를 홈 복귀에 상속하지 않음
-  manual_level: 1               # GO_ZONE에는 UI가 level을 보내지 않음
+  return_level: 1               # 완료한 임무의 응급도를 홈 복귀에 상속하지 않음 (취소 뒤에도 홈 복귀, D-46)
+  manual_level: 1               # level 없이 온 GO_ZONE의 응급도 (화면의 빠른 보내기는 1~3을 고른다)
   retry_after_return: false     # 이전 구역으로 되돌아간 뒤 원래 구간은 운영자가 재시도
   confirm_at_stops: true
+
+traffic:                        # 단계 4O 교통 판단: 두 로봇을 함께 계획하고 그 순서를 지킨다 (D-43). LEGACY는 4O 정리에서 없앰
+  stop_margin_m: 0.8            # 정지선. 다음 지점 영역까지 이 거리 안이면 멈출 수 없는 것으로 보고 지나가게 한다
+  segments:
+    HALL_TOP:        {kind: shared,  region: TOP,    label: "위쪽 홀"}
+    HALL_BOTTOM:     {kind: shared,  region: BOTTOM, label: "아래쪽 홀"}
+    ROOM_B:          {kind: shared,  region: ROOM_B, label: "102호 병실(B)"}
+    ROOM_E:          {kind: shared,  region: ROOM_E, label: "101호 병실(E)"}
+    CORRIDOR_TOP:    {kind: one_way, label: "복도 위쪽",   polygon: [[-1.89, -0.51], [-1.00, -0.58], [-1.074, -1.618], [-1.965, -1.533]]}
+    CROSSROAD:       {kind: single,  label: "교차로",      circle: {x: -1.500, y: -2.180, r: 0.6}}
+    CORRIDOR_BOTTOM: {kind: one_way, label: "복도 아래쪽", polygon: [[-2.054, -2.730], [-1.159, -2.815], [-1.26, -4.23], [-2.16, -4.17]]}
+    DOOR_B:          {kind: single,  room: ROOM_B, label: "102호 병실(B) 문", polygon: [[-1.965, -1.533], [-2.054, -2.730], [-2.253, -2.711], [-2.164, -1.514]]}
+    DOOR_E:          {kind: single,  room: ROOM_E, label: "101호 병실(E) 문", polygon: [[-1.074, -1.618], [-0.875, -1.637], [-0.960, -2.834], [-1.159, -2.815]]}
+    A1:              {kind: single,  zone: A, slot: 1, label: "응급실(A) 1번 자리",        circle: {x: -2.383, y:  1.027, r: 0.6}}
+    A2:              {kind: single,  zone: A, slot: 2, label: "응급실(A) 2번 자리",        circle: {x: -2.458, y:  0.282, r: 0.6}}
+    B1:              {kind: single,  zone: B, slot: 1, label: "102호 병실(B) 1번 자리",    circle: {x: -2.500, y: -1.250, r: 0.6}}
+    B2:              {kind: single,  zone: B, slot: 2, label: "102호 병실(B) 2번 자리",    circle: {x: -2.600, y: -2.800, r: 0.6}}
+    C1:              {kind: single,  zone: C, slot: 1, label: "수술실(C) 1번 자리",        circle: {x: -2.758, y: -5.123, r: 0.6}}
+    C2:              {kind: single,  zone: C, slot: 2, label: "수술실(C) 2번 자리",        circle: {x: -2.738, y: -4.573, r: 0.6}}
+    D1:              {kind: single,  zone: D, slot: 1, label: "간호 스테이션(D) 1번 자리", circle: {x: -1.000, y:  0.800, r: 0.6}}
+    D2:              {kind: single,  zone: D, slot: 2, label: "간호 스테이션(D) 2번 자리", circle: {x: -0.750, y: -0.150, r: 0.6}}
+    E1:              {kind: single,  zone: E, slot: 1, label: "101호 병실(E) 1번 자리",    circle: {x: -0.400, y: -1.400, r: 0.6}}
+    E2:              {kind: single,  zone: E, slot: 2, label: "101호 병실(E) 2번 자리",    circle: {x: -0.500, y: -2.950, r: 0.6}}
+    F1:              {kind: single,  zone: F, slot: 1, label: "조제실(F) 1번 자리",        circle: {x: -1.400, y: -5.400, r: 0.6}}
+    F2:              {kind: single,  zone: F, slot: 2, label: "조제실(F) 2번 자리",        circle: {x: -1.350, y: -4.700, r: 0.6}}
+  links:                        # 칸 사이 연결. 구역 자리 연결은 적지 않는다: zones.<구역>.slot2_blocks_exit에서 만든다 (D-60)
+    - [HALL_TOP, CORRIDOR_TOP]  #   true  = 홀 → 2번 → 1번 (A·C·F),  false = 홀 → 1번, 홀 → 2번 (B·D·E). 홀 = 그 구역 영역의 shared 칸
+    - [CORRIDOR_TOP, CROSSROAD]
+    - [CROSSROAD, CORRIDOR_BOTTOM]
+    - [CORRIDOR_BOTTOM, HALL_BOTTOM]
+    - [CROSSROAD, DOOR_B]
+    - [DOOR_B, ROOM_B]
+    - [CROSSROAD, DOOR_E]
+    - [DOOR_E, ROOM_E]
+  graph:                        # PLAN 지점 그래프 (D-44). 자리 12개는 위 칸 지도의 자리 칸에서 가져온다
+    corridor: [CORRIDOR_TOP, CORRIDOR_BOTTOM]   # 복도 칸: 이 두 칸을 cell_m 길이로 자동으로 나눈다
+    cell_m: 0.5
+    plan_speed_mps: null        # null = mock.speed_mps. 실제 주행 속도를 재면 바꾼다
+    plan_step_s: 0.5            # 탐색 시간 간격
+    level_weights: {1: 1, 2: 3, 3: 9}   # 비용 = Σ 가중치 × 도착 시각
+    idle_weight: 0.5            # 임무 없는 로봇(목표 = 지금 서 있는 자리)
+    replan_delay_s: 5.0         # 계획보다 이만큼 늦으면 다시 계획
+    plan_budget_ms: 200         # 보통 계획 시간 목표
+    plan_limit_ms: 200          # 두 대 함께 계획(JOINT)의 시간 한도. 넘으면 Level 순 계획으로 대신하고 PLAN_UPDATE에 남긴다 (10 Hz tick 안에서 돈다)
+    aside_candidates: 4         # 계획 시작 때 비켜설 자리 후보: 지금 위치에서 경로가 짧은 자리 4곳 (목표 구역 제외, 주행 중이면 지금 방향으로 갈 수 있는 자리 중)
+    move_start_s: 1.0           # 새 MOVE(또는 CANCEL 뒤 MOVE)부터 실제로 움직일 때까지. STATE 1 Hz 기준
+    points:
+      HALL_TOP:    {kind: hall,      segment: HALL_TOP,    x: -1.37, y: -0.55, label: "위쪽 홀 입구"}
+      HALL_BOTTOM: {kind: hall,      segment: HALL_BOTTOM, x: -1.72, y: -4.20, label: "아래쪽 홀 입구"}
+      CROSSROAD:   {kind: crossroad, segment: CROSSROAD}
+      DOOR_B:      {kind: door,      segment: DOOR_B}
+      DOOR_E:      {kind: door,      segment: DOOR_E}
+      ROOM_B:      {kind: room,      segment: ROOM_B, x: -2.45, y: -2.05, label: "102호 병실(B) 방 안"}
+      ROOM_E:      {kind: room,      segment: ROOM_E, x: -0.55, y: -2.20, label: "101호 병실(E) 방 안"}
+      DOCK_B:      {kind: dock,      robot: robot_b, label: "약품 운송 로봇 도크"}
 
 publish:
   fleet_state_hz: 5.0

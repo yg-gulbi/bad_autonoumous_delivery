@@ -22,8 +22,14 @@ COMMAND_FIELDS = {
     "PAUSE_ROBOT": ("robot",),
     "RESUME_ROBOT": ("robot",),
     "GO_ZONE": ("robot", "zone"),
+    "SET_LEVEL": ("mission_id",),
     "RESOURCE_CLEAR_CONFIRM": ("resource",),
+    "BED_MONITOR_SET": (),
 }
+# Commands with an integer "level" (1~3): True = required, False = optional (GO_ZONE: mission.manual_level).
+COMMAND_LEVEL = {"GO_ZONE": False, "SET_LEVEL": True}
+# Commands with a required true/false field.
+COMMAND_FLAGS = {"BED_MONITOR_SET": "enabled"}
 
 
 class SchemaError(ValueError):
@@ -141,7 +147,7 @@ def parse_mission_req(text: str) -> dict:
     return data
 
 
-def parse_operator_cmd(text: str, *, robots=None) -> dict:
+def parse_operator_cmd(text: str, *, robots=None, resources=None) -> dict:
     data, ref = _read(text, "cmd_id")
     _texts(data, ("cmd_id", "by", "cmd"), ref)
     command = data["cmd"]
@@ -151,11 +157,16 @@ def parse_operator_cmd(text: str, *, robots=None) -> dict:
     if robots is None and "robot" in fields:
         robots = ROBOT_IDS
     choices_by_field = {
-        "robot": robots, "zone": ZONE_REGIONS, "result": ("OK", "MISMATCH"), "resource": RESOURCES,
+        "robot": robots, "zone": ZONE_REGIONS, "result": ("OK", "MISMATCH"),
+        "resource": RESOURCES if resources is None else resources,
     }
     for field in fields:
         if field in choices_by_field:
             _choice(data[field], choices_by_field[field], field, ref)
+    if command in COMMAND_LEVEL and (COMMAND_LEVEL[command] or "level" in data):
+        _level(data, ref=ref)
+    if command in COMMAND_FLAGS and type(data.get(COMMAND_FLAGS[command])) is not bool:
+        raise SchemaError(f"{COMMAND_FLAGS[command]}: true 또는 false가 필요합니다", ref)
     return data
 
 
@@ -244,7 +255,7 @@ def parse_fleet_state(text: str) -> dict:
         path = f"resources.{name}."
         _fields(resource, {
             "state": str, "capacity": int, "holders": list, "holder": (str, NULL),
-            "blocked": bool, "queue": list, "give_way": (dict, NULL),
+            "blocked": bool, "queue": list,
         }, path=path)
         if "queue_detail" in resource:
             _fields(resource, {"queue_detail": list, "reason": (str, NULL), "decided_at": (*NUMBER, NULL)}, path=path)
@@ -272,22 +283,10 @@ def parse_fleet_state(text: str) -> dict:
                     raise SchemaError(f"{path}holder_detail.direction: 복도 방향값을 확인하세요")
             if [claim["robot"] for claim in claims] != holders:
                 raise SchemaError(f"{path}holder_detail: 보유 목록과 일치해야 합니다")
-        if resource.get("follow_stop") is not None:
-            _fields(resource, {"follow_stop": dict}, path=path)
-            pair = resource["follow_stop"]
-            _fields(pair, {"front": str, "rear": str, "since": NUMBER}, path=path+"follow_stop.")
-            if name != "CORRIDOR" or pair["front"] == pair["rear"]:
-                raise SchemaError(f"{path}follow_stop: 복도를 공유하는 앞뒤 로봇이 필요합니다")
         if resource["holder"] != next(iter(holders), None):
             raise SchemaError(f"{path}holder: 첫 번째 보유 로봇과 일치해야 합니다")
         if resource["state"] != "UNKNOWN" and (resource["state"] == "FREE") != (not holders):
             raise SchemaError(f"{path}state: 점유 상태와 보유 목록이 일치해야 합니다")
-        give_way = resource["give_way"]
-        if give_way is not None:
-            _fields(give_way, {"yielding": str, "to": str, "since": NUMBER}, path=f"{path}give_way.")
-            if (resource["capacity"] != 2 or give_way["yielding"] == give_way["to"]
-                    or {give_way["yielding"], give_way["to"]} != set(holders)):
-                raise SchemaError(f"{path}give_way: 복도를 공유하는 두 로봇이 필요합니다")
         _choice(resource["state"], ("FREE", "GRANTED", "OCCUPIED", "UNKNOWN"), f"{path}state")
         for i, entry in enumerate(resource["queue"]):
             entry_path = f"{path}queue[{i}]."
@@ -317,12 +316,6 @@ def parse_fleet_state(text: str) -> dict:
         for j, stop in enumerate(mission["stops"]):
             _choice(stop, ZONE_REGIONS, f"{path}stops[{j}]")
 
-    decision = data.get("last_decision")
-    if decision is not None:
-        if not isinstance(decision, dict):
-            raise SchemaError("last_decision: 판단 이벤트가 필요합니다")
-        _fields(decision, {"type": str, "ts": NUMBER, "robot": (str,NULL), "detail": dict})
-        _decision_detail(decision["detail"])
     if any(not isinstance(card, str) for card in data["open_cards"]):
         raise SchemaError("open_cards: 카드 ID 목록이 필요합니다")
     _fields(data["bed_exit"], {"value": (bool, NULL), "since": (*NUMBER, NULL)}, path="bed_exit.")
@@ -332,10 +325,44 @@ def parse_fleet_state(text: str) -> dict:
             raise SchemaError("bed_exit.monitor: 감시 상태 객체가 필요합니다")
         _fields(monitor, {"state": str, "last_rx": (*NUMBER, NULL), "rate_hz": NUMBER,
                           "since": NUMBER, "bypass": bool}, path="bed_exit.monitor.")
-        _choice(monitor["state"], ("NEVER", "OK", "WARN", "LOST"), "bed_exit.monitor.state", None)
+        _choice(monitor["state"], ("NEVER", "OK", "WARN", "LOST", "OFF"), "bed_exit.monitor.state", None)
+        if "enabled" in monitor:
+            _fields(monitor, {"enabled": bool}, path="bed_exit.monitor.")
+    if "traffic" in data:
+        traffic = data["traffic"]
+        if not isinstance(traffic, dict):
+            raise SchemaError("traffic: 객체가 필요합니다")
+        _fields(traffic, {"mode": str, "segments": dict, "stop_line_waits": dict}, path="traffic.")
+        _choice(traffic["mode"], ("PLAN",), "traffic.mode")
+        for seg_name, seg in traffic["segments"].items():
+            sp = f"traffic.segments.{seg_name}."
+            if not isinstance(seg, dict):
+                raise SchemaError(f"traffic.segments.{seg_name}: 객체가 필요합니다")
+            _fields(seg, {"kind": str, "label": str, "state": str, "direction": int, "holders": list}, path=sp)
+            _choice(seg["kind"], ("shared", "one_way", "single"), sp + "kind")
+            _choice(seg["state"], ("FREE", "GRANTED", "OCCUPIED", "UNKNOWN"), sp + "state")
+            if seg["direction"] not in (-1, 0, 1):
+                raise SchemaError(f"{sp}direction: 방향값을 확인하세요")
+            for holder in seg["holders"]:
+                if not isinstance(holder, dict):
+                    raise SchemaError(f"{sp}holders: 객체가 필요합니다")
+                _fields(holder, {"robot": str, "state": str, "direction": int}, path=sp + "holders.")
+                _choice(holder["state"], ("GRANTED", "OCCUPIED", "UNKNOWN"), sp + "holders.state")
+                if holder["direction"] not in (-1, 0, 1):
+                    raise SchemaError(f"{sp}holders.direction: 방향값을 확인하세요")
+        for robot_id, wait in traffic["stop_line_waits"].items():
+            wp = f"traffic.stop_line_waits.{robot_id}."
+            if not isinstance(wait, dict):
+                raise SchemaError(f"traffic.stop_line_waits.{robot_id}: 객체가 필요합니다")
+            _fields(wait, {"segment": str, "by": str, "since": NUMBER, "paused": bool, "reason": str}, path=wp)
+        for robot_id, plan in traffic.get("plans", {}).items():
+            pp = f"traffic.plans.{robot_id}."
+            if not isinstance(plan, dict):
+                raise SchemaError(f"traffic.plans.{robot_id}: 객체가 필요합니다")
+            _fields(plan, {"points": list, "route": list, "wait": (str, NULL), "aside": bool}, path=pp)
+
     _fields(data["kpi"], {
-        "hold_count": int, "deadlock_count": int, "deadlock_resolve_s_avg": (*NUMBER, NULL),
-        "pause_count": int,
+        "hold_count": int, "pause_count": int,
     }, path="kpi.")
     return data
 
@@ -361,19 +388,8 @@ def parse_decision_req(text: str) -> dict:
     return data
 
 
-def _decision_detail(detail):
-    _fields(detail, {"rule": str, "state_before": str, "contenders": list, "reason": str})
-    for contender in detail["contenders"]:
-        if not isinstance(contender, dict):
-            raise SchemaError("contenders: 경쟁 로봇 정보가 필요합니다")
-        _fields(contender, {"robot": str, "level": int, "mission_id": (str,NULL), "type": (str,NULL),
-                            "requested_at": NUMBER})
-
-
 def parse_event(text: str) -> dict:
     data, _ = _read(text)
     _texts(data, ("type",), None)
     _fields(data, {"ts": NUMBER, "robot": (str, NULL), "mission_id": (str, NULL), "detail": dict})
-    if data["type"] in ("RESOURCE_GRANT", "RESOURCE_HOLD", "CORRIDOR_YIELD_START", "CORRIDOR_FOLLOW_STOP") and "rule" in data["detail"]:
-        _decision_detail(data["detail"])
     return data

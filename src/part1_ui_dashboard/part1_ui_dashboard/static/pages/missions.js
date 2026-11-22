@@ -21,6 +21,7 @@ initializers.missions = () => {
 };
 actions.mtab = t => { missionFilter.tab = t; missionFilter.page = 1; selected = null; render(); };
 actions.mpage = p => { missionFilter.page = Number(p); render(); };
+actions["set-level"] = (id, b) => command("SET_LEVEL", { mission_id: id, level: Number($("set-level-value")?.value || 1) }, b);
 function missionList(rows) {
     return historyTable(["임무 / 종류","대상","경로","응급도","로봇 / 상태","요청자","접수 시각"], rows.map(m =>
         `<tr data-act="inspect" data-id="${h(m.mission_id)}"><td>${btn(m.mission_id,"inspect",m.mission_id,"table-link")}<small>${h(cfg.kinds[m.type])}</small></td>` +
@@ -63,6 +64,10 @@ renderers.missions = () => {
         (active && r.state === "WAIT_CONFIRM" ? confirmBox(r,m.robot,live) : "") +
         '<div class="buttons">' + (active && r.state === "FAULT" ? btn("다시 시도","retry",m.robot) : "") +
         (active || live?.status === "QUEUED" ? btn("임무 취소","cancel",m.mission_id,"danger") : "") + "</div>" +
+        // 4O: Level change of a waiting or running mission; the plan is made again with it.
+        ((active || live?.status === "QUEUED")
+            ? `<div class="buttons level-change"><select id="set-level-value" aria-label="${h(m.mission_id)} 응급도">${levelOptions(live.level)}</select>` +
+              btn("응급도 변경","set-level",m.mission_id) + "</div>" : "") +
         "<h3>정류장</h3>" + (stored ? stopTable(stored.stops) : recordNotice(result)) + "<h3>작업 기록</h3>" +
         (stored ? historyTable(["시각","이벤트","누가","문장"], stored.events.map(e =>
             "<tr>" + cells([stampText(e.ts),e.title,e.by,e.detail.reason]) + "</tr>")) : recordNotice(result)));

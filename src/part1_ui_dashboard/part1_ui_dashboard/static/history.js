@@ -41,7 +41,7 @@ function historyChanged(event) {
     const lifecycle = ["MISSION_CREATED","MISSION_ASSIGNED","LEG_START","ARRIVE","CONFIRM_STEP",
                        "MISSION_DONE","MISSION_CANCELED","CARD_CLOSED"].includes(event.type);
     for (const [slot, entry] of historySlots) {
-        if (slot === "events" || (slot === "kpi" && ["PAUSE","RESOURCE_HOLD","DEADLOCK_DETECTED","CARD_CLOSED","RESOURCE_RELEASE"].includes(event.type))
+        if (slot === "events" || (slot === "kpi" && ["PAUSE","PLAN_WAIT","ZONE_OCCUPIED_HOLD"].includes(event.type))
             || (slot === "cards" && ["CARD_OPEN","CARD_CLOSED"].includes(event.type))
             || (slot === "detail" && (event.mission_id === selected || lifecycle))
             || (lifecycle && ["missions","patients","supply"].includes(slot)))

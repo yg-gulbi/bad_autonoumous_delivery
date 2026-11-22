@@ -4,6 +4,7 @@ const palette = {};
 function loadPalette() {
     const style = getComputedStyle(document.documentElement);
     for (const key of ["wall","white","ink","muted","line","lane","arrow","route","stopped","ring","danger","risk-bg","panel","label-bg","clear",
+                       "seg-a","seg-a-stroke","seg-b","seg-b-stroke","seg-both","seg-both-stroke","seg-unknown","seg-free-stroke",
                        "map-label-font","map-letter-font","map-caption-font","map-warning-font"]) {
         palette[key] = style.getPropertyValue("--" + key).trim();
     }
@@ -51,7 +52,8 @@ function zoomAt(factor, x, y) {
 actions.zoom = factor => zoomAt(Number(factor), $("map").clientWidth / 2, $("map").clientHeight / 2);
 actions["map-go"] = async (value, button) => {
     const [robot, zone] = value.split(":");
-    if ((await command("GO_ZONE", {robot, zone}, button))?.ok) closeModal();
+    const level = Number($("map-go-level")?.value || 1);
+    if ((await command("GO_ZONE", {robot, zone, level}, button))?.ok) closeModal();
 };
 
 function selectMapPoint(x, y) {
@@ -63,7 +65,8 @@ function selectMapPoint(x, y) {
     } else if (hit?.z) {
         const buttons = Object.entries(S?.robots || {}).map(([id, r]) =>
             btn(r.label, "map-go", id + ":" + hit.z, "", r.state !== "IDLE"));
-        openModal("zone", dialogHead(zs(hit.z, hit.slot)) + "<p>이 구역으로 보내기</p>" + buttons.join(" "));
+        openModal("zone", dialogHead(zs(hit.z, hit.slot)) + "<p>이 구역으로 보내기</p>" +
+            `<label>응급도 <select id="map-go-level">${levelOptions(1)}</select></label>` + buttons.join(" "));
     }
 }
 
@@ -164,31 +167,70 @@ function paint() {
         ctx.fillStyle = palette["white"];
         ctx.fill();
     }
-    const corridor = S?.resources.CORRIDOR;
     const corners = cfg.polygon.map(p => screen(...p));
     path(corners);
     ctx.closePath();
     ctx.fillStyle = palette.lane;
     ctx.fill();
-    const headings = new Set((corridor?.holder_detail || []).map(claim => claim.direction));
-    if (headings.size === 1 && !headings.has(0)) {
-        const [heading] = headings;
-        const ends = [[0,1],[2,3]].map(([a,b]) => corners[a].map((v,i) => (v + corners[b][i])/2));
-        if (heading < 0) ends.reverse();
-        const dx = ends[1][0]-ends[0][0], dy = ends[1][1]-ends[0][1];
-        ctx.save();
-        ctx.strokeStyle = palette.arrow;
-        ctx.lineWidth = 4;
-        for (const fraction of [.2,.4,.6,.8]) {
+    if (cfg.segments) {
+        const mapSegOrder = ["CORRIDOR_TOP", "CORRIDOR_BOTTOM", "DOOR_B", "DOOR_E", "CROSSROAD"];
+        for (const segKey of mapSegOrder) {
+            const spec = cfg.segments[segKey];
+            if (!spec) continue;
+            const st = S?.traffic?.segments?.[segKey];
+            const unique = [...new Set((st?.holders || []).map(x => x.robot))];
+            const unknown = st?.state === "UNKNOWN" || st?.blocked;
+            const fill = unknown ? palette["seg-unknown"]
+                : unique.length > 1 ? palette["seg-both"]
+                : unique[0] === "robot_b" ? palette["seg-b"]
+                : unique[0] ? palette["seg-a"] : null;
+            const stroke = unknown ? palette["danger"]
+                : unique.length > 1 ? palette["seg-both-stroke"]
+                : unique[0] === "robot_b" ? palette["seg-b-stroke"]
+                : unique[0] ? palette["seg-a-stroke"] : palette["seg-free-stroke"];
+            const grantedOnly = !unknown && st?.state === "GRANTED";
             ctx.save();
-            ctx.translate(ends[0][0]+dx*fraction,ends[0][1]+dy*fraction);
-            ctx.rotate(Math.atan2(dy,dx));
-            ctx.translate(0,heading * Math.hypot(corners[0][0]-corners[1][0], corners[0][1]-corners[1][1])/4);
-            path([[-8,-8],[0,0],[-8,8]]);
+            if (spec.shape === "polygon" && spec.polygon) {
+                path(spec.polygon.map(p => screen(...p)));
+                ctx.closePath();
+            } else if (spec.shape === "circle" && spec.center) {
+                const [sx, sy] = screen(spec.center[0], spec.center[1]);
+                const [rx, ry] = screen(spec.center[0] + spec.radius, spec.center[1]);
+                ctx.beginPath();
+                ctx.arc(sx, sy, Math.hypot(rx - sx, ry - sy), 0, Math.PI * 2);
+            } else {
+                ctx.restore();
+                continue;
+            }
+            if (fill) {
+                ctx.globalAlpha = grantedOnly ? 0.65 : 1;
+                ctx.fillStyle = fill;
+                ctx.fill();
+            }
+            ctx.globalAlpha = 1;
+            ctx.strokeStyle = stroke;
+            ctx.lineWidth = fill ? (grantedOnly ? 2 : 2.5) : 1;
+            ctx.setLineDash(fill ? (grantedOnly ? [5, 4] : []) : [3, 3]);
             ctx.stroke();
+            if (spec.kind === "one_way" && spec.polygon && st?.direction) {
+                const pts = spec.polygon.map(p => screen(...p));
+                const ends = [[0, 1], [2, 3]].map(([a, b]) => [(pts[a][0] + pts[b][0]) / 2, (pts[a][1] + pts[b][1]) / 2]);
+                if (st.direction < 0) ends.reverse();
+                const dx = ends[1][0] - ends[0][0], dy = ends[1][1] - ends[0][1];
+                ctx.setLineDash([]);
+                ctx.strokeStyle = stroke;
+                ctx.lineWidth = 3;
+                for (const frac of [.35, .68]) {
+                    ctx.save();
+                    ctx.translate(ends[0][0] + dx * frac, ends[0][1] + dy * frac);
+                    ctx.rotate(Math.atan2(dy, dx));
+                    path([[-7, -6], [0, 0], [-7, 6]]);
+                    ctx.stroke();
+                    ctx.restore();
+                }
+            }
             ctx.restore();
         }
-        ctx.restore();
     }
     if (raster && (overlay || !plan)) {
         ctx.save();
@@ -214,6 +256,20 @@ function paint() {
     }
     const routes = [];
     const units = Object.entries(S?.robots || {});
+    {
+        // D-45: the joint plan's way for each robot, including a move aside, as a thin line.
+        for (const [id, plan] of Object.entries(S?.traffic?.plans || {})) {
+            if (!plan.route?.length || plan.route.length < 2) continue;
+            path(plan.route.map(p => screen(...p)));
+            ctx.lineJoin = "round";
+            ctx.lineWidth = 1;
+            ctx.setLineDash([]);
+            ctx.globalAlpha = 0.55;
+            ctx.strokeStyle = id === "robot_b" ? palette["seg-b-stroke"] : palette["seg-a-stroke"];
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+        }
+    }
     for (const [id, r] of units) {
         if (!r.route?.length) continue;
         const points = r.route.map(p => screen(...p));
@@ -362,6 +418,7 @@ function paint() {
     ctx.font = palette["map-caption-font"];
     const slot = place(candidates,ctx.measureText(caption).width/2,8,true);
     if (slot) {
+        const corridor = S?.resources.CORRIDOR;
         ctx.fillStyle = corridor?.blocked || corridor?.state === "UNKNOWN" ? palette["danger"] : palette["muted"];
         ctx.fillText(caption,slot.x,slot.y);
     }

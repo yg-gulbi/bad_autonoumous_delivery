@@ -10,7 +10,7 @@ from rclpy.node import Node
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 
-from .core.config import CORRIDOR_MODES, load_config
+from .core.config import load_config
 from .core.fleet_core import FleetCore
 from .core.schemas import dumps
 from .robot_link import RobotLink
@@ -29,16 +29,17 @@ class FleetManagerNode(Node):
         mode = self.declare_parameter("assignment_mode", config.assignment.mode).value
         if mode not in ("IDLE_BEST_BATTERY", "ROLE"):
             raise ValueError("assignment_mode must be IDLE_BEST_BATTERY or ROLE")
-        corridor_mode = self.declare_parameter("corridor_mode", config.corridor.mode).value
-        if corridor_mode not in CORRIDOR_MODES:
-            raise ValueError(f"corridor_mode must be one of {CORRIDOR_MODES}")
-        config = replace(config, corridor=replace(config.corridor, mode=corridor_mode))
         monitor = config.safety.bed_monitor
         required = self.declare_parameter("bed_monitor_require_at_start", monitor.require_at_start).value
+        enabled = self.declare_parameter("bed_monitor_enabled", monitor.enabled).value
+        if type(enabled) is not bool:
+            raise ValueError("bed_monitor_enabled must be true or false")
         config = replace(config, assignment=replace(config.assignment, mode=mode),
-                         safety=replace(config.safety, bed_monitor=replace(monitor, require_at_start=required)))
+                         safety=replace(config.safety, bed_monitor=replace(monitor, require_at_start=required,
+                                                                           enabled=enabled)))
+        self.get_logger().info("침상 감시 · " + ("켜짐" if enabled else "꺼짐"))
         db_path = self.declare_parameter("db_path", "").value
-        self.core = FleetCore(replace(config, db_path=db_path) if db_path else config)
+        self.core = FleetCore(replace(config, db_path=db_path) if db_path else config, plan_thread=True)
         self.links = {r: RobotLink(self, r, unit.ns, config.robot_link, self.core.enqueue, self.now, config.obstacle,
                                    use_hazard_topic=config.safety.use_hazard_topic)
                       for r, unit in config.robots.items()}
@@ -84,6 +85,7 @@ class FleetManagerNode(Node):
             self.get_logger().error(out.storage_error, throttle_duration_sec=1.0)
 
     def destroy_node(self):
+        self.core.traffic.close()
         self.core.store.close()
         return super().destroy_node()
 

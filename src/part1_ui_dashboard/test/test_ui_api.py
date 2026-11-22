@@ -56,8 +56,8 @@ def test_command_contract(cmd, fields):
 
 
 def test_decision_uses_open_card_reference():
-    data = api.decision({"card_id": "K-1", "choice": "yield_a", "operator": "간호사"})
-    assert schemas.parse_decision(schemas.dumps(data)) == {"v": 1, "card_id": "K-1", "choice": "yield_a", "by": "간호사"}
+    data = api.decision({"card_id": "K-1", "choice": "self_first", "operator": "간호사"})
+    assert schemas.parse_decision(schemas.dumps(data)) == {"v": 1, "card_id": "K-1", "choice": "self_first", "by": "간호사"}
 
 
 def test_32_public_event_and_state_titles_are_complete():
@@ -133,17 +133,13 @@ def test_34_delivery_patient_and_call_forms():
     assert api.mission({"type":"CALL","destination":"A","level":2})["type"] == "CALL"
 
 
-def test_summary_and_resume_evidence():
-    road = {"blocked":False,"holders":["robot_b"],"give_way":None,"queue_detail":[{"robot":"robot_a"}],"state":"OCCUPIED"}
+def test_summary():
+    road = {"blocked":False,"holders":["robot_b"],"queue_detail":[{"robot":"robot_a"}],"state":"OCCUPIED"}
     state = {"resources":{"CORRIDOR":road}, "robots":{"robot_a":{"link_ok":True,"state":"HOLD"},
             "robot_b":{"link_ok":True,"state":"MOVING"}},"missions":[{"status":"ACTIVE","level":3,"type":"CALL","mission_id":"M-1"}]}
     summary=api.summary(state)
     assert (summary["online"],summary["active"],summary["urgent"],summary["waiting"]) == (2,1,["M-1"],["robot_a"])
-    track, flags=api.resume_checks(state)
-    assert flags == [False]*4
-    road.update(holders=["robot_a"],queue_detail=[],state="GRANTED")
-    state["robots"]["robot_a"]["state"]="MOVING"
-    assert api.resume_checks(state,track)[1]==[True]*4
+    assert not hasattr(api, "resume_checks") and "GIVE_WAY" not in api.STATES      # LEGACY views gone (4O 정리)
 
 
 def test_cleaned_grid_keeps_door_and_exterior_unknown():

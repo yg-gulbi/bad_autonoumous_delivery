@@ -1,4 +1,6 @@
-"""4K: PAUSE confirmation and resend, B·E door clear, arrival from STATE, no automatic NONE retry. Fake clock."""
+"""4K: PAUSE confirmation and resend, B·E door clear, arrival from STATE, no automatic NONE retry. Fake clock.
+
+The plan sends robot_a's MOVE in the first tick, to C2 (the entrance slot of C: slot2_blocks_exit)."""
 from dataclasses import replace
 import json
 
@@ -29,8 +31,8 @@ def types(out):
 def moving(sim):
     """A goes D -> C (patient pickup) and is MOVING inside the corridor at t=2."""
     sim.patient(pickup="C", dest="A")
-    sim.tick(0)
-    assert commands(sim.tick(1))[A].startswith("MOVE C 2")
+    assert commands(sim.tick(0))[A].startswith("MOVE C2 2")
+    sim.tick(1)
     sim.event(A, "MISSION_ACCEPTED")
     sim.frames[A]["pose"] = sim.pose(IN_CORRIDOR)
     sim.tick(2)
@@ -161,35 +163,41 @@ def test_64_card_closes_when_the_stop_is_no_longer_needed(sim):
 
 # ---------------------------------------------------------------- 2. B·E door clear
 
-@pytest.mark.parametrize("zone,resource", [("B", "ROOM_B"), ("E", "ROOM_E")])
-def test_65_door_unknown_is_cleared_by_operator_confirm(sim, zone, resource):
+@pytest.mark.parametrize("zone", ["B", "E"])
+def test_65_unknown_segments_are_cleared_by_operator_confirm(sim, zone):
+    """robot_a loses the link in the corridor on its way to room B or E: the segments it held go UNKNOWN; the
+    operator's RESOURCE_CLEAR_CONFIRM is taken for an UNKNOWN segment and refused for one that is not. (While the
+    robot is offline with a MOVE it may still drive, the plan holds the rest of that way again, D-46.)"""
     sim.patient(pickup=zone, dest="A")
-    sim.tick(0)
-    assert commands(sim.tick(1))[A].startswith(f"MOVE {zone}")
+    assert commands(sim.tick(0))[A].startswith(f"MOVE {zone}")
+    sim.tick(1)
     sim.event(A, "MISSION_ACCEPTED")
     sim.frames[A]["pose"] = sim.pose(IN_CORRIDOR)
     sim.tick(2)
     del sim.frames[A]  # the robot's STATE stops
     for t in (3, 4, 5.5):
         sim.tick(t)
-    rooms = sim.core.resources.snapshot()
-    assert rooms[resource]["state"] == "UNKNOWN" and rooms["CORRIDOR"]["state"] == "UNKNOWN"
-    sim.cmd("RESOURCE_CLEAR_CONFIRM", resource=resource)
+    board = sim.core.resources.segments
+    unknown = [n for n, seg in board.items() if seg.uncertain]
+    assert "CROSSROAD" in unknown and sim.core.resources.snapshot()["CORRIDOR"]["state"] == "UNKNOWN"
+    name = unknown[-1]
+    sim.cmd("RESOURCE_CLEAR_CONFIRM", resource=name)
     out = sim.tick(6)
     ack, = out.acks
     assert ack["ok"], ack
     confirm, = [e for e in out.events if e["type"] == "RESOURCE_CLEAR_CONFIRM"]
-    assert confirm["detail"]["resources"] == [resource] and confirm["detail"]["by"] == "nurse"
-    rooms = sim.core.resources.snapshot()
-    assert rooms[resource]["state"] == "FREE" and rooms["CORRIDOR"]["state"] == "UNKNOWN"
+    assert confirm["detail"]["resources"] == [name] and confirm["detail"]["by"] == "nurse"
+    sim.cmd("RESOURCE_CLEAR_CONFIRM", resource="A1")          # not UNKNOWN: refused
+    ack, = sim.tick(6.5).acks
+    assert not ack["ok"] and ack["code"] == "E-409"
 
 
 # ---------------------------------------------------------------- 3. arrival from STATE
 
 def accepted(sim):
     sim.patient(pickup="C", dest="A")
-    sim.tick(0)
-    assert commands(sim.tick(1))[A].startswith("MOVE C 2")
+    assert commands(sim.tick(0))[A].startswith("MOVE C2 2")
+    sim.tick(1)
     sim.event(A, "MISSION_ACCEPTED")
     sim.tick(2)
     assert sim.state(A) == "MOVING"
@@ -198,7 +206,7 @@ def accepted(sim):
 def complete_without_arrived(sim, **changes):
     """The STATUS ARRIVED is lost; only the 1 Hz STATE says COMPLETE."""
     frame = sim.frames[A]
-    frame.update(state="COMPLETE", percent=100, pose=sim.pose("C"))
+    frame.update(state="COMPLETE", percent=100, pose=sim.pose(sim.cfg.slot_point("C", 2)))
     frame.update(changes)
 
 
@@ -211,10 +219,10 @@ def test_66_complete_state_alone_reaches_wait_confirm_in_one_tick(sim):
     assert "ARRIVED_FROM_STATE" in types(out) and "ARRIVE" in types(out)
     recovered, = [e for e in out.events if e["type"] == "ARRIVED_FROM_STATE"]
     assert recovered["robot"] == A and recovered["detail"]["destination"] == "C"
-    assert recovered["detail"]["part4_mission_id"] == remote and recovered["detail"]["slot"] == 1
+    assert recovered["detail"]["part4_mission_id"] == remote and recovered["detail"]["slot"] == 2
     assert recovered["detail"]["reason"] == "도착 알림이 빠져 로봇 상태 보고(완료)로 도착을 확인했습니다."
     arrive, = [e for e in out.events if e["type"] == "ARRIVE"]
-    assert arrive["detail"]["destination"] == "C" and arrive["detail"]["slot"] == 1
+    assert arrive["detail"]["destination"] == "C" and arrive["detail"]["slot"] == 2
     assert sim.core.mission.robots[A].job.stop_log[0]["status"] == "ARRIVED"
 
 
@@ -228,15 +236,14 @@ def test_66_late_arrived_after_recovery_is_ignored(sim):
     assert not {"ARRIVE", "ARRIVED_FROM_STATE", "WARNING"} & set(types(out))
     assert sim.state(A) == "WAIT_CONFIRM"
     sim.confirm(A, "p")
-    sim.tick(4)
-    out = sim.tick(5)  # after the 1 s corridor decision window
+    out = sim.tick(4)
     assert commands(out)[A].startswith("MOVE A")  # the next leg goes out normally
 
 
 @pytest.mark.parametrize("changes", [
     {"mission_id": "other-mission"},
     {"destination": "B"},
-    {"slot": 2},
+    {"slot": 1},
 ], ids=["other-mission", "other-destination", "other-slot"])
 def test_66_complete_for_another_mission_or_destination_is_ignored(sim, changes):
     accepted(sim)

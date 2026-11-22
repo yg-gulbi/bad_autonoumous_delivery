@@ -57,9 +57,11 @@ PROBE = r"""
       remember({ref, ok: true, message: "접수했습니다", mission_id: null});
       return {ok: true, json: async () => ({ref})};
     };
-    const resource = state => ({state, capacity: 1, holders: [], queue: [], blocked: false, give_way: null});
-    S = {stamp: 10, robots: {}, missions: [], resume_track: null, resume_checks: [],
-         resources: {CORRIDOR: resource("UNKNOWN"), ROOM_B: resource("UNKNOWN"), ROOM_E: resource("UNKNOWN")}};
+    const resource = state => ({state, capacity: 1, holders: [], queue: [], blocked: false});
+    const seg = (kind, label) => ({kind, label, state: "UNKNOWN", direction: 0, holders: [{robot: "robot_a", state: "UNKNOWN", direction: 0}]});
+    S = {stamp: 10, robots: {}, missions: [], resources: {CORRIDOR: resource("UNKNOWN"), ROOM_B: resource("UNKNOWN"), ROOM_E: resource("UNKNOWN")},
+         traffic: {mode: "PLAN", stop_line_waits: {}, plans: {}, segments: {CROSSROAD: seg("single", "교차로"),
+                   DOOR_B: seg("single", "102호 병실(B) 문"), DOOR_E: seg("single", "101호 병실(E) 문")}}};
     const panel = document.createElement("div");
     panel.innerHTML = roadPanel();
     out.buttons = [...panel.querySelectorAll('[data-act="clear"]')].map(b => [b.dataset.id, b.textContent]);
@@ -85,7 +87,7 @@ PROBE = r"""
     for (const [key, state, causes] of [["manual_moving", "MOVING", ["MANUAL"]], ["manual_stopping", "STOPPING_PAUSE", ["MANUAL"]],
         ["manual_paused", "PAUSED", ["MANUAL"]], ["manual_idle", "IDLE", ["MANUAL"]],
         ["exit_moving", "MOVING", ["BED_EXIT"]], ["exit_paused", "PAUSED", ["BED_EXIT"]], ["bump_moving", "MOVING", ["BUMP"]]]) {
-      S = {stamp: 10, missions: [], resume_track: null, resume_checks: [], resources: free,
+      S = {stamp: 10, missions: [], resources: free,
            bed_exit: {value: false, since: null, monitor: {state: "OK", rate_hz: 30}},
            robots: {robot_a: unit(state, causes), robot_b: idle}};
       const block = document.createElement("div");
@@ -145,11 +147,11 @@ def test_64_stop_wording_waits_for_the_robot_state(browser):
     assert browser["stop"]["mixed"] == ["침상형 이송 로봇 정지 확인 · 약품 운송 로봇 정지 요청 중(확인 전)", "amber-text"]
 
 
-def test_65_each_unknown_resource_has_its_own_clear_button(browser):
-    assert browser["buttons"] == [["CORRIDOR", "현장 확인 후 복도 비움"],
-                                  ["ROOM_B", "현장 확인 후 102호 병실(B) 출입 비움"],
-                                  ["ROOM_E", "현장 확인 후 101호 병실(E) 출입 비움"]]
-    for resource, label in (("CORRIDOR", "복도"), ("ROOM_B", "102호 병실(B) 출입"), ("ROOM_E", "101호 병실(E) 출입")):
+def test_65_each_unknown_segment_has_its_own_clear_button(browser):
+    assert browser["buttons"] == [["CROSSROAD", "현장 확인 후 교차로 비움"],
+                                  ["DOOR_B", "현장 확인 후 102호 병실(B) 문 비움"],
+                                  ["DOOR_E", "현장 확인 후 101호 병실(E) 문 비움"]]
+    for resource, label in (("CROSSROAD", "교차로"), ("DOOR_B", "102호 병실(B) 문"), ("DOOR_E", "101호 병실(E) 문")):
         sent = browser["clear"][resource]
         assert sent["url"] == "/api/command"
         assert sent["body"] == {"cmd": "RESOURCE_CLEAR_CONFIRM", "resource": resource, "operator": "시험자"}

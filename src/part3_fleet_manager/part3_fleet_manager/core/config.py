@@ -1,20 +1,21 @@
 """Load and validate the fleet.yaml settings in BRIEF section 8."""
 
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from math import cos, dist, isfinite, radians, sin
 from os import PathLike
 from os.path import expanduser
 
 import yaml
+from shapely.geometry import Polygon
 
 from . import geometry
 from .schemas import MISSION_TYPES
 
 
-CORRIDOR_MODES = ("DIRECTIONAL", "SHARED_YIELD", "EXCLUSIVE")
-ROOM_MODES = ("DOOR", "ROOM")
 OBSTACLE_MODES = ("report", "inspect")
+SEGMENT_KINDS = ("shared", "one_way", "single")
+POINT_KINDS = ("hall", "crossroad", "door", "room", "dock")
 
 
 def zone_display_name(zone, name):
@@ -62,6 +63,9 @@ class RobotLinkCfg:
     start_timeout_s: float = 120.0
     control_retry_s: float = 1.5   # 4K: resend PAUSE if STATE is still MOVING after this long
     control_retries: int = 3       # 4K: more resends than this opens the STOP_UNCONFIRMED card
+    # 4O: after a MOVE/DOCK/RESUME, PART 04 may hold its STATE up to this long while it starts Nav2
+    # (wait_for_server). Until the next STATE the link counts as lost after link_timeout_s + command_grace_s.
+    command_grace_s: float = 5.0
 
 
 @dataclass(frozen=True)
@@ -69,21 +73,10 @@ class CorridorCfg:
     polygon: tuple[geometry.Point, ...]
     mouths: Mapping[str, geometry.Point]
     include_boundary: bool
-    mode: str = "DIRECTIONAL"
-    yield_enabled: bool = True
-    yield_trigger_m: float = 1.2
-    yield_release_m: float = 0.5
-    yield_timeout_s: float = 10.0
+    crossroad: geometry.Point            # PART 04 stops here first on the way into or out of room B·E
     follow_gap_m: float = 1.0
     follow_resume_m: float = 1.4
-    crossroad: geometry.Point | None = None
     crossroad_clear_m: float = 0.6
-    room_mode: str = "ROOM"
-
-    @property
-    def doors(self) -> bool:
-        """B·E rooms hold two robots; only their doors and the shared crossroad are single file."""
-        return self.room_mode == "DOOR" and self.crossroad is not None
 
     def region_of(self, point: geometry.Point) -> str:
         return geometry.region_of(point, self.polygon, include_boundary=self.include_boundary)
@@ -93,17 +86,7 @@ class CorridorCfg:
 class ResourcesCfg:
     clear_margin_m: float
     clear_hold_s: float
-    decision_window_s: float
-    aging_s: float
     zone_occupied_m: float = 0.6
-    zone_arrival_clear_m: float = 2.0
-
-
-@dataclass(frozen=True)
-class DeadlockCfg:
-    confirm_s: float
-    card_timeout_s: float
-    yield_zones: Mapping[str, str]
 
 
 @dataclass(frozen=True)
@@ -141,6 +124,7 @@ class BedMonitorCfg:
     min_rate_hz: float = 10.0
     require_at_start: bool = True
     exit_clear_hold_s: float = 1.0
+    enabled: bool = True          # off: bed exit and webcam loss neither stop robots nor raise alarms (D-51)
 
 
 @dataclass(frozen=True)
@@ -163,6 +147,55 @@ class MissionCfg:
     return_home: bool = True
     return_interruptible: bool = True
     return_level: int = 1
+
+
+@dataclass(frozen=True)
+class SegmentSpec:
+    name: str
+    kind: str
+    label: str
+    polygon: tuple[geometry.Point, ...] = ()
+    circle: tuple[float, float, float] | None = None
+    region: str | None = None
+    zone: str | None = None
+    slot: int | None = None
+    room: str | None = None
+
+
+@dataclass(frozen=True)
+class GraphPointSpec:
+    """One PLAN graph point besides the zone slots (which come from the slot segments)."""
+    name: str
+    kind: str
+    label: str
+    segment: str | None = None       # region for "inside" judgement, reused from traffic.segments
+    anchor: geometry.Point | None = None
+    robot: str | None = None         # dock owner
+
+
+@dataclass(frozen=True)
+class GraphCfg:
+    """Stage 4O PLAN: point graph, timing and cost settings (traffic.graph)."""
+    cell_m: float = 0.5
+    plan_speed_mps: float | None = None   # None = mock.speed_mps
+    plan_step_s: float = 0.5
+    level_weights: Mapping[int, float] = field(default_factory=lambda: {1: 1.0, 2: 3.0, 3: 9.0})
+    idle_weight: float = 0.5
+    replan_delay_s: float = 5.0
+    plan_budget_ms: float = 200.0
+    plan_limit_ms: float = 200.0           # joint search; over it -> Level order (inside the 10 Hz tick)
+    aside_candidates: int = 4             # slots nearest to the robot offered as a move aside at plan start
+    move_start_s: float = 1.0             # from a new MOVE (or CANCEL then MOVE) until the robot drives
+    corridor: tuple[str, ...] = ()
+    points: Mapping[str, GraphPointSpec] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class TrafficCfg:
+    stop_margin_m: float = 0.8
+    segments: Mapping[str, SegmentSpec] = field(default_factory=dict)
+    links: tuple[tuple[str, str], ...] = ()
+    graph: GraphCfg = field(default_factory=GraphCfg)
 
 
 @dataclass(frozen=True)
@@ -196,7 +229,6 @@ class FleetConfig:
     zones: Mapping[str, geometry.Point]
     corridor: CorridorCfg
     resources: ResourcesCfg
-    deadlock: DeadlockCfg
     stall: StallCfg
     safety: SafetyCfg
     mission: MissionCfg
@@ -209,10 +241,11 @@ class FleetConfig:
     slots: Mapping[str, tuple[geometry.Point, ...]] = field(default_factory=dict)
 
     exit_blocked_zones: frozenset[str] = frozenset()
+    traffic: TrafficCfg = field(default_factory=TrafficCfg)
 
     def slot_point(self, zone: str, slot: int | None = 1) -> geometry.Point:
-        """Slot 1 is the zone point; slot 2 exists only where fleet.yaml gives slot2."""
-        points = self.slots.get(zone) or (self.zones[zone],)
+        """Slot 1 is the zone point, slot 2 is zones.<z>.slot2."""
+        points = self.slots[zone]
         return points[slot - 1] if slot and slot <= len(points) else points[0]
 
     def exit_clearance(self, zone):
@@ -225,7 +258,7 @@ class FleetConfig:
         threshold = self.safety.slot_stop_m + 0.10
         warnings = []
         for zone in self.zones:
-            if self.slot_count(zone) < 2 or zone in self.exit_blocked_zones:
+            if zone in self.exit_blocked_zones:
                 continue
             gap = self.exit_clearance(zone)
             if gap < threshold:
@@ -234,7 +267,7 @@ class FleetConfig:
         return warnings
 
     def slot_count(self, zone: str) -> int:
-        return len(self.slots.get(zone) or (self.zones[zone],))
+        return len(self.slots[zone])
 
 
 def _mapping(value, path: str, keys=()) -> Mapping:
@@ -316,29 +349,16 @@ def _load_corridor(data: Mapping) -> CorridorCfg:
     points = {region: _point(mouths[region], f"corridor.mouths.{region}") for region in regions}
     if points[geometry.TOP] == points[geometry.BOTTOM]:
         raise ConfigError("corridor.mouths: TOP과 BOTTOM은 서로 달라야 합니다")
-    # A fleet file written before shared corridors inherits the section 8 policy.
-    keys = ("mode", "yield_enabled", "yield_trigger_m", "yield_release_m", "yield_timeout_s")
-    policy = {key: data.get(key, getattr(CorridorCfg, key)) for key in keys}
-    crossroad = None
-    if data.get("crossroad") is not None:
-        crossroad = _point(data["crossroad"], "corridor.crossroad")
-        if geometry.region_of(crossroad, vertices, include_boundary=include_boundary) != geometry.CORRIDOR:
-            raise ConfigError("corridor.crossroad: 복도 안에 있어야 합니다")
-    # A file written before 4J keeps one robot per side room.
-    room_mode = _text(data.get("room_mode", "DOOR" if crossroad else "ROOM"), "corridor.room_mode", ROOM_MODES)
-    if room_mode == "DOOR" and crossroad is None:
-        raise ConfigError("corridor.room_mode: DOOR에는 corridor.crossroad가 필요합니다")
+    crossroad = _point(_mapping(data, "corridor", ("crossroad",))["crossroad"], "corridor.crossroad")
+    if geometry.region_of(crossroad, vertices, include_boundary=include_boundary) != geometry.CORRIDOR:
+        raise ConfigError("corridor.crossroad: 복도 안에 있어야 합니다")
     return CorridorCfg(
         crossroad=crossroad,
         crossroad_clear_m=_number(data.get("crossroad_clear_m", CorridorCfg.crossroad_clear_m),
                                   "corridor.crossroad_clear_m", positive=True),
-        room_mode=room_mode,
         **_distance_limits(data, "corridor", "follow_gap_m", "follow_resume_m", CorridorCfg),
         polygon=tuple(vertices),
         mouths=points,
-        mode=_text(policy["mode"], "corridor.mode", CORRIDOR_MODES),
-        yield_enabled=_value(policy, "yield_enabled", "corridor", bool),
-        **_numbers(policy, "corridor", ("yield_trigger_m", "yield_release_m", "yield_timeout_s"), positive=True),
         include_boundary=include_boundary,
     )
 
@@ -368,17 +388,205 @@ def _load_robot_link(data: Mapping) -> RobotLinkCfg:
         control_retries=retries,
         request_id=_text(data.get("request_id"), "robot_link.request_id", ("auto", "always", "never")),
         start_timeout_s=_number(data.get("start_timeout_s", 120.0), "robot_link.start_timeout_s", positive=True),
+        command_grace_s=_number(data.get("command_grace_s", RobotLinkCfg.command_grace_s),
+                                "robot_link.command_grace_s", minimum=0),
         **topics,
         **_numbers(data, "robot_link", ("accept_timeout_s", "link_timeout_s"), positive=True),
     )
 
 
+def _load_traffic(data: Mapping | None, zones: Mapping) -> TrafficCfg:
+    raw = _mapping(data, "traffic", ("segments", "links", "graph"))
+    stop_margin = _number(raw.get("stop_margin_m", TrafficCfg.stop_margin_m), "traffic.stop_margin_m", positive=True)
+    seg_map = _mapping(raw["segments"], "traffic.segments")
+    segments = {}
+    for name, spec_raw in seg_map.items():
+        _text(name, "traffic.segments.<id>")
+        path = f"traffic.segments.{name}"
+        spec = _mapping(spec_raw, path)
+        kind = _text(spec.get("kind"), f"{path}.kind", SEGMENT_KINDS)
+        label = _text(spec.get("label", name), f"{path}.label")
+        polygon = ()
+        if spec.get("polygon") is not None:
+            pts_raw = _value(spec, "polygon", path, list)
+            if len(pts_raw) < 3:
+                raise ConfigError(f"{path}.polygon: 꼭짓점이 3개 이상 필요합니다")
+            pts = []
+            for i, pair in enumerate(pts_raw):
+                p_path = f"{path}.polygon[{i}]"
+                if not isinstance(pair, list) or len(pair) != 2:
+                    raise ConfigError(f"{p_path}: [x, y] 좌표가 필요합니다")
+                pts.append((_number(pair[0], f"{p_path}.x"), _number(pair[1], f"{p_path}.y")))
+            poly = Polygon(pts)
+            if not poly.is_valid or poly.area <= 0:
+                raise ConfigError(f"{path}.polygon: 유효한 다각형이 필요합니다")
+            polygon = tuple(pts)
+        circle = None
+        if spec.get("circle") is not None:
+            c = _mapping(spec["circle"], f"{path}.circle")
+            circle = (
+                _number(c.get("x"), f"{path}.circle.x"),
+                _number(c.get("y"), f"{path}.circle.y"),
+                _number(c.get("r"), f"{path}.circle.r", positive=True),
+            )
+        if polygon and circle:
+            raise ConfigError(f"{path}: polygon과 circle 중 하나만 지정하세요")
+        if kind != "shared" and not polygon and circle is None:
+            raise ConfigError(f"{path}: {kind} 칸에는 polygon 또는 circle이 필요합니다")
+        region = _text(spec["region"], f"{path}.region", geometry.REGIONS) if spec.get("region") is not None else None
+        zone = _text(spec["zone"], f"{path}.zone", zones) if spec.get("zone") is not None else None
+        slot = None
+        if spec.get("slot") is not None:
+            slot = _value(spec, "slot", path, int)
+            if slot not in (1, 2):
+                raise ConfigError(f"{path}.slot: 1 또는 2가 필요합니다")
+        room = _text(spec["room"], f"{path}.room", geometry.ROOMS) if spec.get("room") is not None else None
+        segments[name] = SegmentSpec(
+            name=name, kind=kind, label=label, polygon=polygon, circle=circle,
+            region=region, zone=zone, slot=slot, room=room,
+        )
+    raw_links = raw["links"]
+    if not isinstance(raw_links, list):
+        raise ConfigError("traffic.links: 목록이 필요합니다")
+    links = []
+    for i, pair in enumerate(raw_links):
+        l_path = f"traffic.links[{i}]"
+        if not isinstance(pair, list) or len(pair) != 2:
+            raise ConfigError(f"{l_path}: [칸1, 칸2] 쌍이 필요합니다")
+        a = _text(pair[0], f"{l_path}[0]")
+        b = _text(pair[1], f"{l_path}[1]")
+        if a == b:
+            raise ConfigError(f"{l_path}: 같은 칸을 연결할 수 없습니다")
+        if a not in segments or b not in segments:
+            raise ConfigError(f"{l_path}: 정의되지 않은 칸이 포함됐습니다 ({a}, {b})")
+        links.append((a, b))
+    graph = _load_graph(raw["graph"], segments)
+    return TrafficCfg(stop_margin_m=stop_margin, segments=segments, links=tuple(links), graph=graph)
+
+
+def _load_graph(data: Mapping, segments: Mapping) -> GraphCfg:
+    raw = _mapping(data, "traffic.graph")
+    numbers = {}
+    for key in ("cell_m", "plan_step_s", "idle_weight", "replan_delay_s", "plan_budget_ms", "plan_limit_ms",
+                "move_start_s"):
+        if raw.get(key) is not None:
+            numbers[key] = _number(raw[key], f"traffic.graph.{key}", positive=True)
+    speed = raw.get("plan_speed_mps")
+    if speed is not None:
+        speed = _number(speed, "traffic.graph.plan_speed_mps", positive=True)
+    weights = dict(GraphCfg().level_weights)
+    if raw.get("level_weights") is not None:
+        for level, value in _mapping(raw["level_weights"], "traffic.graph.level_weights").items():
+            if type(level) is not int or not 1 <= level <= 3:
+                raise ConfigError("traffic.graph.level_weights: 키는 Level 1~3 정수입니다")
+            weights[level] = _number(value, f"traffic.graph.level_weights.{level}", positive=True)
+    if raw.get("aside_candidates") is not None:
+        numbers["aside_candidates"] = _value(raw, "aside_candidates", "traffic.graph", int)
+        if numbers["aside_candidates"] < 0:
+            raise ConfigError("traffic.graph.aside_candidates: 0 이상 정수가 필요합니다")
+    corridor = tuple(raw.get("corridor") or ())
+    for name in corridor:
+        spec = segments.get(name)
+        if spec is None or spec.kind != "one_way" or not spec.polygon:
+            raise ConfigError(f"traffic.graph.corridor: {name}은 다각형 one_way 칸이어야 합니다")
+    points = {}
+    for name, spec_raw in _mapping(raw.get("points") or {}, "traffic.graph.points").items():
+        path = f"traffic.graph.points.{name}"
+        spec = _mapping(spec_raw, path)
+        kind = _text(spec.get("kind"), f"{path}.kind", POINT_KINDS)
+        segment = spec.get("segment")
+        if segment is not None and segment not in segments:
+            raise ConfigError(f"{path}.segment: 칸 지도에 없는 칸입니다 ({segment})")
+        if kind != "dock" and segment is None:
+            raise ConfigError(f"{path}.segment: 영역으로 쓸 칸이 필요합니다")
+        anchor = _point(spec, path) if spec.get("x") is not None else None
+        robot = _text(spec["robot"], f"{path}.robot") if spec.get("robot") is not None else None
+        if kind == "dock" and robot is None:
+            raise ConfigError(f"{path}.robot: 도크 주인 로봇이 필요합니다")
+        label = _text(spec.get("label") or (segments[segment].label if segment else name), f"{path}.label")
+        points[name] = GraphPointSpec(name=name, kind=kind, label=label, segment=segment, anchor=anchor, robot=robot)
+    return GraphCfg(plan_speed_mps=speed, level_weights=weights, corridor=corridor, points=points, **numbers)
+
+
+def _with_slot_links(traffic: TrafficCfg, slots: Mapping, exit_blocked: set) -> TrafficCfg:
+    """Slot links of the segment map from zones.<z>.slot2_blocks_exit (4O follow-up 5, D-60): true = hall -> slot 2
+    -> slot 1 (slot 2 is in the way out of slot 1), false = hall -> slot 1 and hall -> slot 2. The hall is the
+    shared segment of the zone's region. traffic.links holds the other links; a slot link written there anyway must
+    be one of these."""
+    specs = traffic.segments
+    made = []
+    for zone in slots:
+        region = geometry.ZONE_REGIONS[zone]
+        hall = next((n for n, s in specs.items() if s.kind == "shared" and s.region == region), None)
+        slot = {s.slot: n for n, s in specs.items() if s.zone == zone and s.slot is not None}
+        if hall is None or 1 not in slot or 2 not in slot:
+            continue                                     # _check_segment_map names what is missing
+        if zone in exit_blocked:
+            made += [(hall, slot[2]), (slot[2], slot[1])]
+        else:
+            made += [(hall, slot[1]), (hall, slot[2])]
+    made_set = {frozenset(pair) for pair in made}
+    slot_names = {n for n, s in specs.items() if s.zone is not None and s.slot is not None}
+    kept = []
+    for a, b in traffic.links:
+        if {a, b} & slot_names:
+            if frozenset((a, b)) not in made_set:
+                raise ConfigError(f"traffic.links: {a}–{b} 연결이 zones.*.slot2_blocks_exit와 맞지 않습니다 "
+                                  "(자리 연결은 slot2_blocks_exit에서 만듭니다)")
+            continue
+        if (a, b) not in kept and (b, a) not in kept:
+            kept.append((a, b))
+    return replace(traffic, links=tuple(kept) + tuple(made))
+
+
+def _check_segment_map(traffic: TrafficCfg, slots: Mapping) -> None:
+    """The plan reads its map only from fleet.yaml: every region and every zone slot needs a segment (4O)."""
+    if not traffic.segments or not traffic.links:
+        raise ConfigError("traffic.segments·traffic.links: 둘 다 필요합니다")
+    specs = traffic.segments.values()
+    for region in (geometry.TOP, geometry.BOTTOM, *geometry.ROOMS):
+        if not any(s.kind == "shared" and s.region == region for s in specs):
+            raise ConfigError(f"traffic.segments: {region} 영역의 shared 칸이 필요합니다")
+    for zone, points in slots.items():
+        for slot in range(1, len(points) + 1):
+            if not any(s.zone == zone and s.slot == slot for s in specs):
+                raise ConfigError(f"traffic.segments: {zone} 구역 {slot}번 자리 칸이 필요합니다")
+    linked = {name for pair in traffic.links for name in pair}
+    for name in traffic.segments:
+        if name not in linked:
+            raise ConfigError(f"traffic.links: {name} 칸이 어디에도 연결되지 않았습니다")
+    if not traffic.graph.corridor:
+        raise ConfigError("traffic.graph.corridor: 나눌 복도 칸이 필요합니다")
+
+
+# Settings of the LEGACY traffic judgement, gone with it in the 4O 정리 (tag 4o-dual-mode keeps them). A file
+# that still has one is refused, so an old fleet.yaml is not read as if it meant something.
+REMOVED_KEYS = {
+    "traffic": ("mode",),
+    "corridor": ("mode", "yield_enabled", "yield_trigger_m", "yield_release_m", "yield_timeout_s", "room_mode"),
+    "resources": ("decision_window_s", "aging_s", "zone_arrival_clear_m"),
+    "mission": ("return_after_cancel",),
+}
+REMOVED_SECTIONS = ("deadlock",)     # wait-for cycle cards (LEGACY's last safety net; never opened under PLAN)
+
+
+def _reject_removed(root: Mapping) -> None:
+    for section in REMOVED_SECTIONS:
+        if section in root:
+            raise ConfigError(f"{section}: 없어진 설정입니다 (교통 판단은 PLAN 하나, 4O 정리)")
+    for section, keys in REMOVED_KEYS.items():
+        for key in keys:
+            if isinstance(root.get(section), Mapping) and key in root[section]:
+                raise ConfigError(f"{section}.{key}: 없어진 설정입니다 (교통 판단은 PLAN 하나, 4O 정리)")
+
+
 def config_from_dict(data: Mapping) -> FleetConfig:
     """Validate a decoded YAML mapping and its cross-references."""
     sections = ("robots", "type_to_robot", "robot_link", "zones", "corridor", "resources",
-                "deadlock", "stall", "safety", "mission", "publish", "db")
+                "stall", "safety", "mission", "publish", "db")
     root = _mapping(data, "fleet", sections)
     cfg = {key: _mapping(root[key], key) for key in sections}
+    _reject_removed(root)
     corridor = _load_corridor(cfg["corridor"])
 
     zone_data = _mapping(cfg["zones"], "zones", geometry.ZONE_REGIONS)
@@ -386,9 +594,8 @@ def config_from_dict(data: Mapping) -> FleetConfig:
     exit_blocked_zones = set()
     for zone, expected_region in geometry.ZONE_REGIONS.items():
         point = _point(zone_data[zone], f"zones.{zone}")
-        points = [point]
-        if zone_data[zone].get("slot2") is not None:
-            points.append(_point(zone_data[zone]["slot2"], f"zones.{zone}.slot2"))
+        _mapping(zone_data[zone], f"zones.{zone}", ("slot2", "slot2_blocks_exit"))
+        points = [point, _point(zone_data[zone]["slot2"], f"zones.{zone}.slot2")]
         for index, xy in enumerate(points, 1):
             region = corridor.region_of(xy)
             if region != expected_region:
@@ -396,12 +603,7 @@ def config_from_dict(data: Mapping) -> FleetConfig:
                 raise ConfigError(f"{where}: {expected_region}에 속해야 합니다 (현재 {region})")
         zones[zone] = point
         slots[zone] = tuple(points)
-        blocks_exit = zone_data[zone].get("slot2_blocks_exit", len(points) == 2 and zone in {"A", "C", "F"})
-        if type(blocks_exit) is not bool:
-            raise ConfigError(f"zones.{zone}.slot2_blocks_exit: bool 값이 필요합니다")
-        if blocks_exit:
-            if len(points) != 2:
-                raise ConfigError(f"zones.{zone}.slot2_blocks_exit: 2번 자리 좌표가 필요합니다")
+        if _value(zone_data[zone], "slot2_blocks_exit", f"zones.{zone}", bool):
             exit_blocked_zones.add(zone)
 
     robots = {}
@@ -438,13 +640,6 @@ def config_from_dict(data: Mapping) -> FleetConfig:
         for mission_type in MISSION_TYPES
     }
 
-    yield_zones = _mapping(cfg["deadlock"].get("yield_zones"), "deadlock.yield_zones")
-    halls = [zone for zone, region in geometry.ZONE_REGIONS.items() if region in (geometry.TOP, geometry.BOTTOM)]
-    yield_zones = {
-        room: _text(yield_zones.get(room), f"deadlock.yield_zones.{room}", halls)
-        for room in geometry.ROOMS
-    }
-
     stall = StallCfg(**_numbers(cfg["stall"], "stall", ("window_s", "move_m", "short_s", "long_s"),
                                 positive=True))
     if stall.short_s >= stall.long_s:
@@ -455,7 +650,8 @@ def config_from_dict(data: Mapping) -> FleetConfig:
     monitor = BedMonitorCfg(**_numbers(policy, "safety.bed_monitor", ("warn_s", "lost_s", "recover_s", "min_rate_hz"),
                                        positive=True),
                             exit_clear_hold_s=_number(policy["exit_clear_hold_s"], "safety.bed_monitor.exit_clear_hold_s", minimum=0),
-                            require_at_start=_value(policy, "require_at_start", "safety.bed_monitor", bool))
+                            require_at_start=_value(policy, "require_at_start", "safety.bed_monitor", bool),
+                            enabled=_value(policy, "enabled", "safety.bed_monitor", bool))
     if monitor.warn_s >= monitor.lost_s:
         raise ConfigError("safety.bed_monitor.lost_s: warn_s보다 커야 합니다")
     manual_level = cfg["mission"].get("manual_level", MissionCfg.manual_level)
@@ -473,6 +669,8 @@ def config_from_dict(data: Mapping) -> FleetConfig:
     return_level = _value(mission, "return_level", "mission", int)
     if not 1 <= return_level <= 3:
         raise ConfigError("mission.return_level: 1~3 정수가 필요합니다")
+    traffic = _with_slot_links(_load_traffic(root.get("traffic"), zones), slots, exit_blocked_zones)
+    _check_segment_map(traffic, slots)
     values = {**asdict(ObstacleCfg()), **_mapping(root.get("obstacle", {}), "obstacle")}
     threshold = _number(values["min_confidence"], "obstacle.min_confidence", minimum=0)
     if threshold > 1:
@@ -505,15 +703,9 @@ def config_from_dict(data: Mapping) -> FleetConfig:
         slots=slots, exit_blocked_zones=frozenset(exit_blocked_zones),
         corridor=corridor,
         resources=ResourcesCfg(
-            zone_arrival_clear_m=_number(cfg["resources"].get("zone_arrival_clear_m", ResourcesCfg.zone_arrival_clear_m),
-                                         "resources.zone_arrival_clear_m", positive=True),
             zone_occupied_m=_number(cfg["resources"].get("zone_occupied_m", ResourcesCfg.zone_occupied_m),
                                    "resources.zone_occupied_m", positive=True),
-            **_numbers(cfg["resources"], "resources", ("clear_margin_m", "clear_hold_s", "decision_window_s", "aging_s")),
-        ),
-        deadlock=DeadlockCfg(
-            **_numbers(cfg["deadlock"], "deadlock", ("confirm_s", "card_timeout_s"), positive=True),
-            yield_zones=yield_zones,
+            **_numbers(cfg["resources"], "resources", ("clear_margin_m", "clear_hold_s")),
         ),
         stall=stall,
         safety=SafetyCfg(
@@ -538,6 +730,7 @@ def config_from_dict(data: Mapping) -> FleetConfig:
         publish=PublishCfg(finished_mission_limit=limit, **_numbers(cfg["publish"], "publish", ("fleet_state_hz", "tick_hz"),
                                       positive=True)),
         db_path=expanduser(_text(cfg["db"].get("path"), "db.path")),
+        traffic=traffic,
     )
 
 
