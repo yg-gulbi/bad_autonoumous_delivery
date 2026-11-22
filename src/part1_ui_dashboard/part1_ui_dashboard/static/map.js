@@ -177,7 +177,7 @@ function paint() {
         for (const segKey of mapSegOrder) {
             const spec = cfg.segments[segKey];
             if (!spec) continue;
-            const st = S.traffic.segments?.[segKey];
+            const st = S?.traffic?.segments?.[segKey];
             const unique = [...new Set((st?.holders || []).map(x => x.robot))];
             const unknown = st?.state === "UNKNOWN" || st?.blocked;
             const fill = unknown ? palette["seg-unknown"]
