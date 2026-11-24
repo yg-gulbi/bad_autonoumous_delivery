@@ -41,5 +41,6 @@ setup(
     entry_points={'console_scripts': [
         'bed_exit = part5_bed_exit.bed_exit_node:main',
         'label_roi = part5_bed_exit.roi_labeler:main',
+        'demo_trigger = part5_bed_exit.demo_trigger_node:main',
     ]},
 )
